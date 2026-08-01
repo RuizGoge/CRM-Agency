@@ -1,0 +1,85 @@
+/* Minimal reset. Everything opinionated lives in the token layers. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+* {
+  margin: 0;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  font-size: 100%; /* 16px root — the whole type scale is rem off this */
+}
+
+body {
+  min-height: 100dvh;
+  font-family: var(--font-family-sans);
+  font-size: var(--type-base);
+  line-height: 1.45;
+  color: var(--color-text-primary);
+  background: var(--color-canvas);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Mobile is the contact surface: 16px body prevents iOS zoom-on-focus, and
+   every form control is 16px at EVERY breakpoint for the same reason. */
+@media (max-width: 767px) {
+  body {
+    font-size: var(--type-md);
+  }
+}
+
+input,
+select,
+textarea,
+button {
+  font: inherit;
+  color: inherit;
+}
+
+input,
+select,
+textarea {
+  font-size: var(--type-md);
+}
+
+img,
+picture,
+svg,
+video {
+  display: block;
+  max-width: 100%;
+}
+
+button {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+a {
+  color: var(--color-text-link);
+}
+
+/* Focus is never removed — only replaced. WCAG 2.1 AA is a gate, not a goal. */
+:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* Every money figure, without exception. */
+.money {
+  font-variant-numeric: var(--type-money-variant);
+  font-weight: var(--type-money-weight);
+  letter-spacing: var(--type-money-tracking);
+}

@@ -1,0 +1,25 @@
+node_modules/
+build/
+.react-router/
+.env
+.env.*
+!.env.example
+
+# Test output
+playwright-report/
+test-results/
+coverage/
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Logs
+*.log
+npm-debug.log*
+
+# Claude Code session scratch (handoffs and settings ARE tracked)
+.claude/settings.local.json

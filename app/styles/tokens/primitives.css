@@ -1,0 +1,109 @@
+/* =============================================================================
+ * TIER 1 — canonical primitive palette
+ * Source of truth: docs/04b-design-system.md §2.
+ *
+ * THIS IS THE ONLY FILE IN THE CODEBASE THAT MAY CONTAIN A HEX LITERAL.
+ * Components read the semantic layer (theme.css) and never these tokens.
+ *
+ * The ramp rule that makes the semantic layer mechanical instead of hand-tuned:
+ * the 600 step of every hue is safe as small text on white (>= 4.5:1), and the
+ * 400/500 step is safe as a non-text indicator (>= 3:1).
+ * ========================================================================== */
+
+:root {
+  /* --- Neutral: surfaces, text, borders ---------------------------------- */
+  --p-n-0: #ffffff; /* base surface, card face, sheet, modal */
+  --p-n-25: #fbfcfd; /* zebra row in My Book and the Earnings ledger */
+  --p-n-50: #f6f8fa; /* app canvas, board background */
+  --p-n-100: #edf0f4; /* kanban column background, skeleton base */
+  --p-n-200: #dde3ea; /* hairline dividers, "no signal" rail */
+  --p-n-300: #c3ccd6; /* decorative borders ONLY — never a meaningful boundary */
+  --p-n-400: #868fa0; /* 3.26 — meaningful borders, input outlines */
+  --p-n-500: #657282; /* 4.90 — tertiary text */
+  --p-n-600: #4e5a6b; /* 7.00 — secondary text */
+  --p-n-700: #3a4351; /* 9.99 — body text on any tint */
+  --p-n-800: #262d37; /* inverse surface: tooltip, call-state banner */
+  --p-n-900: #161b22; /* 17.30 — primary text, EVERY money total */
+  --p-n-1000: #0b0e13; /* shadow/scrim alpha anchor */
+
+  /* --- Blue: primary action, focus, information -------------------------- */
+  --p-b-50: #eef4ff;
+  --p-b-100: #dae6ff;
+  --p-b-200: #b9d0ff; /* drop-target fill */
+  --p-b-300: #8ab0ff; /* link on inverse surface (undo toast) */
+  --p-b-400: #5a8df7;
+  --p-b-500: #2f6be0; /* 4.88 — FOCUS RING, route progress bar */
+  --p-b-600: #1b54bf; /* 6.85 — primary button fill, links, fresh rail */
+  --p-b-700: #14429a;
+  --p-b-800: #0f3175;
+
+  /* --- Green: success and Earnings money --------------------------------- */
+  --p-g-50: #e9f8ef;
+  --p-g-100: #cff0dd;
+  --p-g-200: #a2e0be;
+  --p-g-300: #6bc998;
+  --p-g-400: #1e9a63; /* 3.59 — non-text success dot, confetti particle */
+  --p-g-500: #128a56;
+  --p-g-600: #0b6e44; /* 6.31 — EARNINGS FIGURES, `Save win` fill */
+  --p-g-700: #085636;
+  --p-g-800: #06412a;
+
+  /* --- Amber: going cold, outside calling hours, override active ---------- */
+  --p-a-50: #fff6e5;
+  --p-a-100: #ffe9bf;
+  --p-a-200: #fcd48a;
+  --p-a-300: #f0b44b;
+  --p-a-400: #d8930f; /* 2.59 — FILL ONLY. Never a border, never text. */
+  --p-a-500: #a96e00; /* 4.27 — non-text stroke, the going-cold rail */
+  --p-a-600: #855600; /* 6.31 — ALL amber text and icons */
+  --p-a-700: #663f00;
+
+  /* --- Red: hard block, do-not-contact, destructive, overdue -------------- */
+  --p-r-50: #fef0f0;
+  --p-r-100: #fddcdc;
+  --p-r-200: #f9bdbd;
+  --p-r-300: #f08c8c;
+  --p-r-400: #e15555; /* 3.73 — non-text danger stroke, blocked rail */
+  --p-r-500: #c62f2f; /* destructive button fill */
+  --p-r-600: #a31e1e; /* 7.60 — ALL red text and icons */
+  --p-r-700: #7f1717;
+
+  /* --- Violet: celebration ONLY ------------------------------------------ *
+   * Appears in exactly one place in the product: the Closed-Won celebration.
+   * Deliberately unused elsewhere so it can never read as a persistent state. */
+  --p-v-50: #f3eeff;
+  --p-v-100: #e5daff;
+  --p-v-200: #cbb6ff;
+  --p-v-300: #a886f5;
+  --p-v-400: #8455e8;
+  --p-v-500: #6b34d6;
+  --p-v-600: #5526b0; /* 9.17 — celebration heading */
+  --p-v-700: #401c87;
+
+  /* --- Stage identity: lower-chroma than every semantic hue above --------- *
+   * So a column header can never be misread as a compliance verdict or an
+   * Earnings figure. Stage hue NEVER encodes stage_type. */
+  --p-stage-1-tint: #edf1f5;
+  --p-stage-1-stroke: #7c879a; /* Slate  */
+  --p-stage-2-tint: #e2ecfb;
+  --p-stage-2-stroke: #3c6fb5; /* Blue   */
+  --p-stage-3-tint: #ddf0ee;
+  --p-stage-3-stroke: #2a7f78; /* Teal   */
+  --p-stage-4-tint: #e3f1e4;
+  --p-stage-4-stroke: #3f7d4a; /* Green  */
+  --p-stage-5-tint: #eef0dc;
+  --p-stage-5-stroke: #6e7326; /* Olive  */
+  --p-stage-6-tint: #faecd6;
+  --p-stage-6-stroke: #8e6314; /* Amber  */
+  --p-stage-7-tint: #fce7db;
+  --p-stage-7-stroke: #9c532a; /* Orange */
+  --p-stage-8-tint: #f0e6f7;
+  --p-stage-8-stroke: #7a4a9e; /* Plum   */
+
+  /* --- Podium metals: ring and icon only, ranks 1-3 ---------------------- *
+   * 3.85:1 clears the 3:1 non-text threshold and fails the 4.5:1 text
+   * threshold — which is exactly why the rank numeral is always --p-n-900. */
+  --p-medal-gold: #a87a0b; /* 3.85 */
+  --p-medal-silver: #7c879a; /* 3.63 */
+  --p-medal-bronze: #9a5f35; /* 5.17 */
+}

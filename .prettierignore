@@ -1,0 +1,8 @@
+build/
+.react-router/
+node_modules/
+app/db/migrations/
+package-lock.json
+docs/
+CONTEXT.md
+PROMPT-MAESTRO-Levantamiento-CRM-Leads.md

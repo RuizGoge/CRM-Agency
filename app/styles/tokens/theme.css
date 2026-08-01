@@ -1,0 +1,178 @@
+/* =============================================================================
+ * TIER 2 — the semantic layer
+ * Source of truth: docs/04b-design-system.md §3 and §4.
+ *
+ * COMPONENTS READ ONLY THIS LAYER. A component that references a --p-* token
+ * fails the build (CI rule: no --p- outside app/styles/tokens/).
+ *
+ * v1 ships light only. The dark block is declared and deliberately empty: the
+ * contract exists so a future theme is a values change, never a refactor.
+ * ========================================================================== */
+
+:root {
+  /* --- Surface & structure ---------------------------------------------- */
+  --color-canvas: var(--p-n-50);
+  --color-surface-1: var(--p-n-0);
+  --color-surface-2: var(--p-n-25);
+  --color-surface-3: var(--p-n-100);
+  --color-surface-inverse: var(--p-n-800);
+  --color-overlay: rgb(11 14 19 / 0.48);
+  --color-border-subtle: var(--p-n-200);
+  --color-border-default: var(--p-n-300);
+  --color-border-strong: var(--p-n-400);
+  --color-border-focus: var(--p-b-500);
+
+  /* --- Text -------------------------------------------------------------- *
+   * There is deliberately NO --color-text-disabled. Disabled labels use
+   * --color-action-disabled-fg, measured against the disabled fill rather than
+   * against white: a disabled `Text` button under the 10DLC banner carries
+   * compliance meaning, and a seller must be able to read why their tool is off. */
+  --color-text-primary: var(--p-n-900);
+  --color-text-secondary: var(--p-n-600);
+  --color-text-tertiary: var(--p-n-500);
+  --color-text-on-tint: var(--p-n-700);
+  --color-text-inverse: var(--p-n-0);
+  --color-text-link: var(--p-b-600);
+
+  /* --- Interactive ------------------------------------------------------- */
+  --color-action-primary-bg: var(--p-b-600);
+  --color-action-primary-fg: var(--p-n-0);
+  --color-action-primary-hover: var(--p-b-700);
+  --color-action-primary-active: var(--p-b-800);
+
+  /* `Save win` and `Log the sale` ONLY. The button that writes to a public
+   * board must not look like every other blue button in a 10-minute demo. */
+  --color-action-money-bg: var(--p-g-600);
+  --color-action-money-fg: var(--p-n-0);
+  --color-action-money-hover: var(--p-g-700);
+  --color-action-money-active: var(--p-g-800);
+
+  --color-action-secondary-bg: var(--p-n-0);
+  --color-action-secondary-fg: var(--p-n-700);
+  --color-action-secondary-border: var(--p-n-400);
+
+  --color-action-ghost-fg: var(--p-n-600);
+  --color-action-ghost-hover-bg: var(--p-n-100);
+
+  --color-action-destructive-bg: var(--p-r-500);
+  --color-action-destructive-fg: var(--p-n-0);
+
+  --color-action-disabled-bg: var(--p-n-100);
+  --color-action-disabled-fg: var(--p-n-600);
+  --color-action-disabled-border: var(--p-n-300);
+
+  --color-selected-bg: var(--p-b-50);
+
+  /* --- Feedback: one meaning each, and only one -------------------------- */
+  --color-success-fill: var(--p-g-50);
+  --color-success-text: var(--p-g-600);
+  --color-success-stroke: var(--p-g-400);
+
+  --color-caution-fill: var(--p-a-50);
+  --color-caution-text: var(--p-a-600);
+  --color-caution-stroke: var(--p-a-500);
+
+  --color-danger-fill: var(--p-r-50);
+  --color-danger-text: var(--p-r-600);
+  --color-danger-stroke: var(--p-r-400);
+
+  --color-info-fill: var(--p-b-50);
+  --color-info-text: var(--p-b-700);
+  --color-info-stroke: var(--p-b-500);
+
+  --color-neutral-state-fill: var(--p-n-100);
+  --color-neutral-state-text: var(--p-n-600);
+  --color-neutral-state-stroke: var(--p-n-400);
+
+  /* --- Type scale: root 16px, all values in rem -------------------------- *
+   * 12px is the floor. Nothing renders below --type-xs except --type-micro,
+   * which is uppercase, 600-weight and never a sentence. */
+  --type-micro: 0.6875rem;
+  --type-xs: 0.75rem;
+  --type-sm: 0.8125rem;
+  --type-base: 0.875rem;
+  --type-md: 1rem;
+  --type-lg: 1.125rem;
+  --type-xl: 1.375rem;
+  --type-2xl: 1.75rem;
+  --type-3xl: 2.25rem;
+  --type-4xl: 3rem;
+
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  /* System stacks only. No web font, ever, in v1: the seller's device has
+   * already rendered these before first paint — a straight subtraction from
+   * LCP — and every stack supports tabular-nums, the one feature the
+   * leaderboard depends on. */
+  --font-family-sans:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+    'Noto Sans', sans-serif;
+  --font-family-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+
+  /* THE MONEY TYPE STYLE — applies to every dollar figure without exception.
+   * Tabular digits because the leaderboard re-polls every five seconds: with
+   * proportional digits `$1,180 -> $1,380` changes the string width and every
+   * row jitters on a surface a room is watching. */
+  --type-money-variant: tabular-nums;
+  --type-money-weight: var(--font-weight-semibold);
+  --type-money-tracking: -0.005em;
+
+  /* --- Spacing: 4px base ------------------------------------------------- */
+  --space-0: 0;
+  --space-05: 0.125rem;
+  --space-1: 0.25rem;
+  --space-15: 0.375rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem; /* card padding (desktop) */
+  --space-4: 1rem; /* card padding (mobile), sheet padding */
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+  --space-16: 4rem;
+
+  /* --- Sizes and targets ------------------------------------------------- *
+   * 44px on mobile is not a preference. Mobile is the contact surface and the
+   * primary target is a dial that costs money to get wrong: a mis-tap on a card
+   * face is a wrong call to a real person's phone. */
+  --size-target-min: 44px;
+  --size-target-desktop: 32px;
+  --size-control-sm: 28px;
+  --size-control-md: 36px;
+  --size-control-lg: 44px;
+  --size-icon-sm: 14px;
+  --size-icon-md: 16px;
+  --size-icon-lg: 20px;
+  --size-avatar-sm: 24px;
+  --size-avatar-md: 32px;
+  --size-avatar-lg: 56px;
+  --size-row-h: 48px;
+  --size-tap-row-h: 56px;
+  --size-row-stack-h: 72px;
+  --size-sheet-max-w: 520px;
+  --size-drawer-w: 480px;
+  --size-popover-max-w: 320px;
+
+  /* The fixed kanban card height (R2). Re-validated against a real 500-card
+   * render in Sprint 0 — see docs/05-architecture.md Part V. */
+  --size-card-h: 120px;
+  --size-card-h-mobile: 156px;
+
+  /* --- Radii ------------------------------------------------------------- */
+  --radius-none: 0;
+  --radius-xs: 3px;
+  --radius-sm: 5px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 999px;
+}
+
+/* Declared, deliberately empty. v1 hard-codes light and ships no toggle. */
+[data-theme='dark'] {
+  /* Intentionally empty — see docs/04b-design-system.md §0.2. */
+}

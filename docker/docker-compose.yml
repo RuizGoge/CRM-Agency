@@ -1,0 +1,30 @@
+# Local development database. Phase 5 rung 0: cost USD 0, no provider, no terms
+# of service, no limits. Same major version as production, so the local
+# environment is the same shape rather than an approximation of it.
+name: crm-leads-dev
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: crm-leads-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: crm
+      POSTGRES_PASSWORD: crm
+      POSTGRES_DB: crm_dev
+      # Deterministic collation: ORDER BY on seller names must not differ
+      # between a developer machine and production.
+      LANG: C.UTF-8
+      POSTGRES_INITDB_ARGS: '--locale-provider=icu --icu-locale=en-US'
+    ports:
+      - '5432:5432'
+    volumes:
+      - crm-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U crm -d crm_dev']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  crm-pgdata:
