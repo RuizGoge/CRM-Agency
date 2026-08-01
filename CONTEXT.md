@@ -4,7 +4,7 @@
 
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
-- **Fase actual:** **Fase 7 COMPLETA — GATE 7 presentado.** GATE 6 **aprobado** ("ok", 2026-07-31). GATE 5 **aprobado** ("ok todo continuemos", 2026-07-31).
+- **Fase actual:** ✅ **LEVANTAMIENTO COMPLETO. Fases 0–7 cerradas y aprobadas.** GATE 7 **aprobado** ("ok fase 7", 2026-07-31). GATE 6 **aprobado** ("ok", 2026-07-31). GATE 5 **aprobado** ("ok todo continuemos", 2026-07-31).
 
 ### 🤖 Fase 7 — Agentes, skills y comandos (COMPLETA)
 Entregable: `docs/07-agents-skills.md` + artefactos en `.claude/`.
@@ -228,11 +228,46 @@ Propuesta de etapas para el vertical Seguros (US), a refinar:
 - **D6 · Campos `carrier`, `policy_number`, `draft_date` capturados desde el día 1, pero SIN flujo de chargeback/persistencia/conciliación.** Campos, no maquinaria.
 
 ## Next Steps
-1. **⏸️ ESPERAR EL "OK FASE 5" DE JORGE.** El gate está presentado. Si responde con correcciones, aplicarlas y volver a presentar.
-2. **Con su OK → Fase 6 (Sonnet · esfuerzo medio):** scaffold del repo con el stack firmado (estructura por módulos del dominio, no por tipo técnico), tooling completo, `.env.example`, git inicializado con primer commit limpio, **`CLAUDE.md`** (la constitución del proyecto), `README.md`, y `CONTEXT.md` impecable. Criterio de éxito: el comando de desarrollo levanta una pantalla que ya usa los design tokens de la Fase 4 y todos los comandos de calidad corren en verde.
-3. **ANTES de crear ningún recurso: la puerta 0 del Sprint 0** — verificar que el proveedor de hosting ofrece región EE.UU. en el plan a contratar. Si falla, la decisión de stack se da vuelta hacia Rails/DigitalOcean y hay que re-firmar.
-4. **10DLC: arrancar YA**, en paralelo. Semanas de trámite, puede ser rechazado. **Bloqueado esperando que Jorge decida quién firma el registro** (la entidad de la agencia del cliente o la nuestra).
-5. **Decisiones abiertas que Jorge confirma en el GATE 5** (ninguna bloquea la escritura; van con mi recomendación): propiedad del registro 10DLC (agencia del cliente vs nuestra); grabación de llamadas si el aviso no se dispara en el two-legged → *reco: desactivar a nivel de cuenta*; retención de payloads crudos → *reco: 60 días*; atajos de una tecla → *reco: apagados por defecto los primeros 30 días*; Sentry Team USD 26 pre-aprobado para activar el día del primer incidente; confirmar que sin email no hay reset de contraseña autogestionado; y si habrá una 2ª persona con acceso en 12 meses (dispara +USD 51 de saltos de plan).
+
+### ✅ LEVANTAMIENTO COMPLETO — Fases 0 a 7 cerradas y aprobadas (2026-07-31)
+El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
+
+### 🔴 SPRINT 0 — va ANTES del Sprint 1, y bloquea
+Ninguna UI dependiente de llamadas/SMS se planifica como si Aloware fuera plomería resuelta.
+
+| # | Puerta | Por qué bloquea |
+|---|---|---|
+| **0** | **Verificar región EE.UU. en el plan de hosting a contratar** | **Puede DAR VUELTA la decisión de stack** hacia Rails/DigitalOcean. Va antes de crear ningún recurso y antes de escribir una línea. |
+| 1 | El silo de punta a punta: contexto fijado como primera sentencia en CADA unidad de trabajo (request, job, relay, importador, webhook, export) | Si no pasa, no se firma nada más |
+| 2 | El puente de codegen de eventos: JSON Schema → tipos TS + enum PG + CHECK | Agregar un campo sin regenerar debe ROMPER el build |
+| 3 | Tormenta de reintentos: 20.000 webhooks en 60 s contra el proceso de ingesta | Decide si el bulkhead alcanza |
+| 4 | SSE detrás del proxy del proveedor | No está documentado; si no sobrevive, hay que identificar el reemplazo AHORA |
+| 5 | Bundle y primer paint MEDIDOS | **Fija los dos presupuestos que hoy están sin número** (E6/R7) |
+| 6 | Drag a 60 fps con 500 tarjetas reales | También revalida la altura de tarjeta 120/156 |
+| 8 | El camino del dinero probado ANTES de escribir una pantalla | Round-trip exacto, transacción del gate, rechazo del UPDATE por privilegio |
+| 9 | Simulacro de restauración cronometrado | El ledger es irreconstruible |
+| 11 | **Aloware contra la cuenta real** | Firma de webhooks, reintentos, orden, vocabulario de disposiciones, aviso de grabación, forma real de la ráfaga |
+
+**En paralelo y con reloj externo: el registro 10DLC.** Semanas de trámite, puede ser rechazado. **Bloqueado esperando que Jorge decida quién firma** (la entidad de la agencia del cliente o la nuestra).
+
+### 🟢 SPRINT 1 — orden de construcción por dependencias (nunca por tiempo)
+
+| # | Historia | Skill / agente | Modelo · esfuerzo |
+|---|---|---|---|
+| 1 | Fundaciones de datos: `tenant`, `app_user`, el arnés de RLS, el loop de endurecimiento y los gates de esquema en CI | `db-migration` + `db-guardian` | Opus · alto |
+| 2 | Auth, sesión y el contexto de scope por unidad de trabajo | `security-auditor` | Opus · alto |
+| 3 | **La espina dorsal del dinero:** `earnings_ledger`, triggers append-only, revokes, los definers, `leaderboard_read` | `db-migration` + `db-guardian` + `story-to-test` | **Opus · máximo** |
+| 4 | Contactos + intake (con dedupe) | `new-module` | Sonnet · medio |
+| 5 | Pipeline kanban: etapas, `stage_type`, **ambos gates** | `new-module` + `ux-reviewer` | Opus · alto |
+| 6 | Calendario + recordatorios (worker) | `new-module` | Sonnet · medio |
+| 7 | Leaderboard público + celebración | `new-component` + `ux-reviewer` | Sonnet · alto |
+| 8 | My Day + notificaciones | `new-module` | Sonnet · medio |
+| 9 | Integración Aloware (**bloqueada por la Puerta 11**) | `new-endpoint` + `security-auditor` | Opus · alto |
+| 10 | Datos demo sembrados | `demo-data` | Sonnet · medio |
+
+**Por qué ese orden:** el dinero va tercero, antes que cualquier pantalla, porque el ledger es el único artefacto que el producto no puede reconstruir. Y va después de auth porque necesita el contexto de scope para probar el silo.
+
+### Decisiones abiertas que Jorge confirma cuando quiera (ninguna bloquea la escritura; van con mi recomendación): propiedad del registro 10DLC (agencia del cliente vs nuestra); grabación de llamadas si el aviso no se dispara en el two-legged → *reco: desactivar a nivel de cuenta*; retención de payloads crudos → *reco: 60 días*; atajos de una tecla → *reco: apagados por defecto los primeros 30 días*; Sentry Team USD 26 pre-aprobado para activar el día del primer incidente; confirmar que sin email no hay reset de contraseña autogestionado; y si habrá una 2ª persona con acceso en 12 meses (dispara +USD 51 de saltos de plan).
 4. **Sprint 0 — primer ítem, antes de crear ningún recurso:** verificar región EE.UU. en el plan de hosting a contratar. Si falla, la decisión de stack se da vuelta hacia Rails/DigitalOcean.
 5. **10DLC: arrancar YA**, en paralelo, no después. Semanas de trámite y puede ser rechazado.
 6. **Insumos que Fase 5 hereda y NO puede ignorar:**
