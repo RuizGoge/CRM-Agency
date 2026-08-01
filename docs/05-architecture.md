@@ -14,7 +14,7 @@ This corpus is large and was written by many hands. When two texts disagree, the
 
 | Rank | Source | Scope |
 |---|---|---|
-| **1** | **§0.2 Errata E1–E8** (this document) | Supersedes everything, including Part I. These are the conditions the gate pass was granted on. |
+| **1** | **§0.2 Errata E1–E9** (this document) | Supersedes everything, including Part I. E1–E8 are the conditions the gate pass was granted on; **E9 was added 2026-08-01** by the R8 verification pass and carries the same rank. |
 | **2** | **Part I — Phase 5 Rulings P1–P8** | Normative. Wins over any Phase-5 section and any Phase 2–4 text. |
 | **3** | **`04-ux-flows.md` Part I — Rulings R1–R7** | Normative from Phase 4. Where R1–R7 and P1–P8 collide, the collision is named and resolved in Part I explicitly. |
 | **4** | The architecture sections (Parts II–VII of this document) | |
@@ -31,7 +31,7 @@ The corollary, discovered by the closure auditor and named **NEW-7**, is sharper
 
 ---
 
-## §0.2 · Errata E1–E8 (normative, rank 1)
+## §0.2 · Errata E1–E9 (normative, rank 1)
 
 The Gate-5 pass was granted **conditional on these being incorporated verbatim. If they are treated as optional, the pass is void.** Each is decidable now — none requires a measurement, a vendor answer, or a reopened decision.
 
@@ -85,6 +85,14 @@ One table blesses `perf.P12_initial_js_gzip` as *"correct as written"* while the
 
 > **Ruling.** It is §0.3 below, with a number, a class and a closing gate per line.
 
+### E9 · The capability probe's evidence is deleted by the vault, and production stops booting
+
+*Added 2026-08-01 by the R8 verification pass, which read §7.7.6 untruncated for the first time. See [`sprint-0/r8-truncated-closure-verification.md`](sprint-0/r8-truncated-closure-verification.md).*
+
+§7.7.6 replaces a forgeable free-text `evidence_ref` with a foreign key to `ref.capability_probe`, plus a boot assertion requiring — for every `tier='mvp_required'` capability **in production** — that the probe's `response_digest` equal `raw_payload_vault.body_sha256` for its `raw_payload_id`. The diagnosis is right and the mechanism is sound in isolation. But `raw_payload_vault.purge_after` is `NOT NULL`, written at INSERT, and **drives partition drop** (§1870; `05b-data-model.md` §752) on a window of 30–90 days. Between one and three months after the Gate 2 spike the probe bodies are gone, the assertion cannot be satisfied by any value, and **the process exits non-zero on every start.** The assertion is production-scoped, so development and CI stay green through the entire interval. Two individually correct mechanisms, specified in different sections; neither is wrong alone.
+
+> **Ruling.** Probe evidence and consumer payloads move to **separate clocks**, because they exist for opposite reasons: the vault's short window is CCPA minimisation of consumer PII, while a probe is operational evidence that must outlive the thing it certifies. `ref.capability_probe` gains its own `response_body bytea NOT NULL` and **drops `raw_payload_id` entirely**; the boot assertion compares `response_digest` against `sha256(response_body)` **in the same row**, so it depends on no other table's retention. Capability probes are captured against **synthetic subjects only** — never a real consumer — so nothing PII-bearing acquires a permanent clock. `/admin/integration-health` renders `observed_at` and `http_status` unchanged. The anti-forgery property is preserved exactly: a fabricated verification still has no probe row, no stored body and no matching digest, and the process still exits non-zero.
+
 ---
 
 ## §0.3 · Declared residual risk (normative, rank 1)
@@ -105,6 +113,7 @@ One table blesses `perf.P12_initial_js_gzip` as *"correct as written"* while the
 | **R10** | `ref.sealed_signature` seals result types, **not bodies**. E4 is the known instance; there may be others. | Structural | Sprint 0: extend the seal to a normalised body digest for the seven registered functions. |
 | **R11** | Schema-gate ids (S1…S21) are still allocated by prose. | Low severity | Fold into `ref.protected_assertion` or an equivalent primary key. |
 | **R12** | Making the composite celebration alert unacknowledgeable for 24 h manufactures noise on the one screen that replaces the reviewer, because `too_late` claims are routine under background-tab timer throttling. | Specified · low severity | Only `too_early` is unacknowledgeable; `too_late` is a counter. |
+| **R13** | `raw_payload_vault` purges by **partition drop**, while `dead_letter` holds `FK (tenant_id, raw_payload_id)` into it (`05b` §758). A partition drop under an inbound foreign key either fails outright or requires the referencing rows to go first, and neither is specified. **E9** removes the capability probe's reference; `dead_letter`'s remains. | Structural · **unreconciled** | Sprint 0, alongside G1's platform probe: rule whether `dead_letter` detaches to a stored digest, the FK becomes `ON DELETE SET NULL`, or the vault purges by `DELETE` rather than partition drop — trading "no purge job anyone can forget" for referential safety. |
 
 ---
 

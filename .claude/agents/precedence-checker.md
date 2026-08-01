@@ -9,7 +9,7 @@ You exist because of a specific, demonstrated failure mode: this project's speci
 
 ## The precedence chain — the only order that matters
 
-1. `docs/05-architecture.md` **§0.2 — errata E1–E8** (supersedes everything, including Part I)
+1. `docs/05-architecture.md` **§0.2 — errata E1–E9** (supersedes everything, including Part I)
 2. `docs/05-architecture.md` **Part I — rulings P1–P8**
 3. `docs/04-ux-flows.md` **Part I — rulings R1–R7**
 4. The Phase-5 architecture parts

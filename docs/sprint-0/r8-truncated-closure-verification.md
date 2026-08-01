@@ -12,7 +12,7 @@
 |---|---|---|
 | §7.7.1 | Id-less list endpoints are silo-testable | ✅ **Closed** — two qualifications below |
 | §7.7.2 | `defineEndpoint()` is a build fact, not a convention | ✅ **Closed** — one unspecified input |
-| §7.7.6 | `provider_capability` cannot be talked into `verified` | ❌ **NOT CLOSED — the closure is self-defeating and takes production down with it** |
+| §7.7.6 | `provider_capability` cannot be talked into `verified` | ❌ **NOT CLOSED as written** → closed by **errata E9**, signed 2026-08-01 |
 | §10.5 | The 49-name coverage gate is satisfiable and honest | ✅ **Closed** — one stale command |
 | §10.16 | `sms_enabled=false` is a tested axis | ✅ **Closed** — one doc drift |
 
@@ -40,7 +40,13 @@ The Aloware capability probes are captured during Sprint 0 G2. Between 30 and 90
 
 **Second-order collision.** The retention mechanism is *partition drop*. `dead_letter` already declares `FK (tenant_id, raw_payload_id) REFERENCES raw_payload_vault` (`05b-data-model.md` §758), and §7.7.6 adds a second referencing table. Dropping a partition that inbound foreign keys still reference either fails outright or requires the references to be gone first. **The vault's purge design and its two FK dependants have not been reconciled** — this is broader than §7.7.6 and is flagged here because this pass is where it surfaced.
 
-### Proposed direction — not adopted, needs Jorge's OK
+### Resolution — adopted as errata E9 (2026-08-01)
+
+**Option 1 below was signed and is now [`05-architecture.md` §0.2 E9](../05-architecture.md), precedence rank 1.** `ref.capability_probe` gains its own `response_body bytea NOT NULL` and drops `raw_payload_id`; the boot assertion compares `response_digest` against `sha256(response_body)` in the same row, depending on no other table's retention. Probes are captured against synthetic subjects only. The anti-forgery property is preserved exactly.
+
+The `dead_letter` half of the FK/partition-drop collision is **not** resolved by E9 and is now declared as residual risk **R13**, closing in Sprint 0 alongside G1.
+
+### The three options as evaluated
 
 The root confusion is that **probe evidence and consumer payloads are on the same clock for no reason.** The vault's short window exists for CCPA minimisation of *consumer PII*. A capability probe is a record of what the provider's API answered — it is operational evidence, and it needs to outlive the thing it certifies.
 
@@ -90,5 +96,7 @@ The published budget — committed 1,680 of 2,000, reserve 320 (16 %) — is con
 ## What this pass changes
 
 - **R8 is discharged for four of five items.** §7.7.1, §7.7.2, §10.5 and §10.16 may now be called closed, subject to the four small corrections listed above being carried when each is implemented.
-- **§7.7.6 may not be called closed.** It carries a production-outage defect that no gate in the ladder would catch, because the assertion it breaks is production-scoped and time-delayed.
-- **One new cross-cutting item:** `raw_payload_vault` purges by partition drop while at least two tables hold foreign keys into it. That reconciliation is owed regardless of how §7.7.6 is resolved.
+- **§7.7.6 could not be called closed as written.** It carried a production-outage defect that no gate in the ladder would catch, because the assertion it breaks is production-scoped and time-delayed. **Closed by errata E9**, which puts probe evidence and consumer PII on separate clocks.
+- **One new cross-cutting item, declared as residual risk R13:** `raw_payload_vault` purges by partition drop while `dead_letter` still holds a foreign key into it. E9 removes the probe's reference; the `dead_letter` side is owed and closes in Sprint 0 alongside G1.
+
+**R8 is now fully discharged.** The one item that failed produced an errata at precedence rank 1 and a numbered residual risk, which is the outcome the residual register exists to produce.
