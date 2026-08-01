@@ -1,6 +1,8 @@
 # CONTEXT.md — Living Project Memory
 
-> Si el contexto de la conversación se perdiera, `CLAUDE.md` (aún no existe) + este archivo + `docs/` deben bastar para retomar el proyecto sin pérdida.
+> **La regla de oro:** si el contexto de la conversación se perdiera por completo, [`CLAUDE.md`](CLAUDE.md) + este archivo + [`docs/`](docs/) deben bastar para retomar el proyecto sin pérdida. Ya se puso a prueba una vez, cuando un lote de agentes falló a mitad de fase y el trabajo se recuperó desde el registro.
+>
+> **Antes de construir cualquier cosa, leé la cadena de precedencia más abajo.** El corpus son ~1,9 MB escritos en siete fases y doce afirmaciones aprobadas fueron tachadas después. Leer el texto viejo es el fallo de diseño más probable de este proyecto.
 
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
