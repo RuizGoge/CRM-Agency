@@ -6,6 +6,16 @@
 
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
+
+### 🔴 SPRINT 0 EN CURSO — G0 a medio camino (2026-08-01)
+Evidencia completa: [`docs/sprint-0/g0-us-region.md`](docs/sprint-0/g0-us-region.md).
+
+- **G0 · mitad de documentación: ✅ PASA.** Render ofrece 5 regiones — Oregon, **Ohio**, **Virginia**, Frankfurt, Singapore. El `region` del blueprint spec acepta las cinco **tanto para servicios (web/worker) como para bases de datos**, sin calificador de plan. **Ninguna página documenta restricción de región por plan, tier ni workspace.**
+- **G0 · mitad del formulario de creación: ⏳ PENDIENTE, ES DE JORGE.** Requiere cuenta de Render. Es la mitad que decide el gate: todo lo anterior es *ausencia de restricción documentada*, no *permiso documentado* — exactamente la clase de evidencia que produjo la contradicción entre las dos auditorías. Guion de 6 pasos en el doc de evidencia.
+- **⚠️ Dos reglas operativas NUEVAS, ninguna estaba en el corpus, ambas son puertas de una sola dirección:** (1) **la región no se puede cambiar después de crear** un servicio o una base; (2) **servicios en regiones distintas no hablan por red privada** → los 3 procesos y el Postgres van todos en la MISMA región (Ohio o Virginia).
+- **G0-hour · números de costo: ✅ el modelo de la arquitectura era correcto.** Confirmados contra fuente primaria: storage **$0.30/GB/mes sin asignación incluida**, egress Hobby **5 GB + $0.15/GB**, y **PITR de 3 días en Hobby** (§9.4.2 ya lo decía). **La línea innegociable sobrevive:** los backups son propiedad de la *instancia* pagada, no del *workspace* Pro. ⚠️ Sin verificar: los precios de instancia ($7 Starter / $19 Basic-1gb) — render.com/pricing arma sus tablas en el cliente; se leen del dashboard en el paso 3/5.
+- **Consecuencia para G9:** la ventana real de recuperación son **3 días de PITR**, no 7. Una corrupción del ledger descubierta al día 4 solo se recupera del dump horario a R2.
+
 - **Fase actual:** ✅ **LEVANTAMIENTO COMPLETO. Fases 0–7 cerradas y aprobadas.** GATE 7 **aprobado** ("ok fase 7", 2026-07-31). GATE 6 **aprobado** ("ok", 2026-07-31). GATE 5 **aprobado** ("ok todo continuemos", 2026-07-31).
 
 ### 🤖 Fase 7 — Agentes, skills y comandos (COMPLETA)
@@ -269,7 +279,7 @@ Ninguna UI dependiente de llamadas/SMS se planifica como si Aloware fuera plomer
 
 **Por qué ese orden:** el dinero va tercero, antes que cualquier pantalla, porque el ledger es el único artefacto que el producto no puede reconstruir. Y va después de auth porque necesita el contexto de scope para probar el silo.
 
-### Decisiones abiertas que Jorge confirma cuando quiera (ninguna bloquea la escritura; van con mi recomendación): propiedad del registro 10DLC (agencia del cliente vs nuestra); grabación de llamadas si el aviso no se dispara en el two-legged → *reco: desactivar a nivel de cuenta*; retención de payloads crudos → *reco: 60 días*; atajos de una tecla → *reco: apagados por defecto los primeros 30 días*; Sentry Team USD 26 pre-aprobado para activar el día del primer incidente; confirmar que sin email no hay reset de contraseña autogestionado; y si habrá una 2ª persona con acceso en 12 meses (dispara +USD 51 de saltos de plan).
+### Decisiones abiertas que Jorge confirma cuando quiera (ninguna bloquea la escritura; van con mi recomendación): propiedad del registro 10DLC (agencia del cliente vs nuestra); grabación de llamadas si el aviso no se dispara en el two-legged → *reco: desactivar a nivel de cuenta*; retención de payloads crudos → *reco: 60 días*; atajos de una tecla → *reco: apagados por defecto los primeros 30 días*; Sentry Team USD 26 pre-aprobado para activar el día del primer incidente; confirmar que sin email no hay reset de contraseña autogestionado; y si habrá una 2ª persona con acceso en 12 meses (**+USD 25/mes planos** — corregido en G0 desde el "+USD 51" que decía antes; Render reemplazó sus planes de workspace el 2026-04-23 y Pro dejó de cobrar por asiento. La prohibición de §9.4.5 no cambia, solo su aritmética).
 4. **Sprint 0 — primer ítem, antes de crear ningún recurso:** verificar región EE.UU. en el plan de hosting a contratar. Si falla, la decisión de stack se da vuelta hacia Rails/DigitalOcean.
 5. **10DLC: arrancar YA**, en paralelo, no después. Semanas de trámite y puede ser rechazado.
 6. **Insumos que Fase 5 hereda y NO puede ignorar:**
