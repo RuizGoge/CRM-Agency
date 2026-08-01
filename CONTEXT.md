@@ -7,13 +7,15 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
-### 🔴 SPRINT 0 EN CURSO — G0 a medio camino (2026-08-01)
+### 🟢 SPRINT 0 EN CURSO — G0 ✅ **APROBADO** (2026-08-01)
 Evidencia completa: [`docs/sprint-0/g0-us-region.md`](docs/sprint-0/g0-us-region.md).
 
-- **G0 · mitad de documentación: ✅ PASA.** Render ofrece 5 regiones — Oregon, **Ohio**, **Virginia**, Frankfurt, Singapore. El `region` del blueprint spec acepta las cinco **tanto para servicios (web/worker) como para bases de datos**, sin calificador de plan. **Ninguna página documenta restricción de región por plan, tier ni workspace.**
-- **G0 · mitad del formulario de creación: ⏳ PENDIENTE, ES DE JORGE.** Requiere cuenta de Render. Es la mitad que decide el gate: todo lo anterior es *ausencia de restricción documentada*, no *permiso documentado* — exactamente la clase de evidencia que produjo la contradicción entre las dos auditorías. Guion de 6 pasos en el doc de evidencia.
+- **G0 · ✅ PASA, las dos mitades. LA DECISIÓN DE STACK QUEDA CONFIRMADA — B2 sigue en pie y ya no es condicional por región.**
+- **Mitad documental:** Render ofrece 5 regiones — Oregon, **Ohio**, **Virginia**, Frankfurt, Singapore. El `region` del blueprint spec acepta las cinco tanto para servicios como para bases de datos, sin calificador de plan.
+- **Mitad del formulario (la que decidía):** ejecutada contra el dashboard real, workspace **Hobby**, **sin crear ningún recurso**. **Los tres formularios ofrecen Ohio y Virginia**: Web Service (default Ohio), Background Worker (default Virginia), Postgres (default Oregon). La contradicción entre las dos auditorías queda resuelta a favor de la que decía que sí.
+- **Tres hallazgos que el gate no pedía y valen:** **PostgreSQL 18 está en el selector de versión** (el stack lo exige y nadie lo había verificado, solo asumido) · **los Background Workers no tienen tier Free**, arrancan en Starter (confirma el modelo de costos) · el texto de ayuda del propio campo Region dice *"Your services in the same region can communicate over a private network"* — la regla de misma-región, en palabras de Render, en el formulario donde se cometería el error.
 - **⚠️ Dos reglas operativas NUEVAS, ninguna estaba en el corpus, ambas son puertas de una sola dirección:** (1) **la región no se puede cambiar después de crear** un servicio o una base; (2) **servicios en regiones distintas no hablan por red privada** → los 3 procesos y el Postgres van todos en la MISMA región (Ohio o Virginia).
-- **G0-hour · números de costo: ✅ el modelo de la arquitectura era correcto.** Confirmados contra fuente primaria: storage **$0.30/GB/mes sin asignación incluida**, egress Hobby **5 GB + $0.15/GB**, y **PITR de 3 días en Hobby** (§9.4.2 ya lo decía). **La línea innegociable sobrevive:** los backups son propiedad de la *instancia* pagada, no del *workspace* Pro. ⚠️ Sin verificar: los precios de instancia ($7 Starter / $19 Basic-1gb) — render.com/pricing arma sus tablas en el cliente; se leen del dashboard en el paso 3/5.
+- **G0-hour · números de costo: ✅ el modelo de la arquitectura era correcto en TODAS las líneas.** Confirmados: storage **$0.30/GB/mes sin asignación incluida** (leído en vivo: 15 GB → $4,50/mes), egress Hobby **5 GB + $0.15/GB**, **PITR de 3 días en Hobby** (§9.4.2 ya lo decía), **Starter $7 a 0,5 vCPU** y **Basic-1gb $19**. **La línea innegociable sobrevive:** los backups son propiedad de la *instancia* pagada, no del *workspace* Pro. Dos confirmaciones colaterales: **Starter es 0,5 vCPU y no un núcleo** (la corrección que G6 ya cargaba) y **el salto Starter→Standard es exactamente +$18**, la válvula de escape que G6 había presupuestado. Y el campo Storage dice *"you can't decrease it"* — la frase que convierte el archivo en R2 en mecanismo de presupuesto y no en optimización.
 - **Consecuencia para G9:** la ventana real de recuperación son **3 días de PITR**, no 7. Una corrupción del ledger descubierta al día 4 solo se recupera del dump horario a R2.
 
 ### 🔬 R8 DESCARGADO — 2026-08-01
@@ -125,7 +127,7 @@ Los tres que más importan: **(1)** el cambio de transporte — SSE lleva **exac
 
 **Consecuencia de diseño exigida por Jorge:** la separación en tres procesos es **configuración de despliegue, no supuesto arquitectónico** — debe poder desplegarse plegado en uno y separarse después sin rediseño ni migración.
 
-**⚠️ RIESGO ABIERTO QUE PUEDE DAR VUELTA LA DECISIÓN:** falta verificar que **Render ofrece región EE.UU. en el plan a contratar** (las dos auditorías se contradicen). Si no lo ofrece, B2 cae por la puerta de región y **gana automáticamente Rails sobre DigitalOcean**. Es el **primer ítem del Sprint 0**, antes de crear ningún recurso.
+**✅ RIESGO CERRADO (2026-08-01):** se verificó que **Render ofrece Ohio y Virginia en los tres tipos de recurso, en el plan Hobby a contratar** — formulario de creación real, sin crear nada. B2 **no cae** por la puerta de región y Rails/DigitalOcean queda archivado como segundo. Detalle en [`docs/sprint-0/g0-us-region.md`](docs/sprint-0/g0-us-region.md).
 
 **Hallazgo legal relevante:** el tier Hobby de **Vercel prohíbe explícitamente el uso comercial** ("any Deployment ... for the purpose of financial gain of anyone involved in any part of the production of the project, including a paid employee or consultant writing the code"). Por eso el desarrollo gratis se resuelve en local, no en un tier gratuito de hosting.
 
@@ -268,7 +270,7 @@ Ninguna UI dependiente de llamadas/SMS se planifica como si Aloware fuera plomer
 
 | # | Puerta | Por qué bloquea |
 |---|---|---|
-| **0** | **Verificar región EE.UU. en el plan de hosting a contratar** | **Puede DAR VUELTA la decisión de stack** hacia Rails/DigitalOcean. Va antes de crear ningún recurso y antes de escribir una línea. |
+| ~~**0**~~ | ~~Verificar región EE.UU. en el plan de hosting a contratar~~ | ✅ **APROBADO 2026-08-01.** Ohio y Virginia disponibles en Web Service, Background Worker y Postgres sobre workspace Hobby. La decisión de stack queda confirmada. |
 | 1 | El silo de punta a punta: contexto fijado como primera sentencia en CADA unidad de trabajo (request, job, relay, importador, webhook, export) | Si no pasa, no se firma nada más |
 | 2 | El puente de codegen de eventos: JSON Schema → tipos TS + enum PG + CHECK | Agregar un campo sin regenerar debe ROMPER el build |
 | 3 | Tormenta de reintentos: 20.000 webhooks en 60 s contra el proceso de ingesta | Decide si el bulkhead alcanza |
@@ -279,7 +281,7 @@ Ninguna UI dependiente de llamadas/SMS se planifica como si Aloware fuera plomer
 | 9 | Simulacro de restauración cronometrado | El ledger es irreconstruible |
 | 11 | **Aloware contra la cuenta real** | Firma de webhooks, reintentos, orden, vocabulario de disposiciones, aviso de grabación, forma real de la ráfaga |
 
-**En paralelo y con reloj externo: el registro 10DLC.** Semanas de trámite, puede ser rechazado. **Bloqueado esperando que Jorge decida quién firma** (la entidad de la agencia del cliente o la nuestra).
+**En paralelo y con reloj externo: el registro 10DLC.** Semanas de trámite, puede ser rechazado. **APARCADO por decisión de Jorge (2026-08-01):** "por ahora dejemos eso para después". Sigue sin decidirse quién firma (reco: la entidad de la agencia del cliente). **Consecuencia asumida:** el reloj externo no arranca, así que la fecha en que el SMS se puede encender se corre junto con esta decisión. El producto lanza en `sms_enabled = false` de todos modos, así que esto no bloquea la construcción — solo la fecha del SMS.
 
 ### 🟢 SPRINT 1 — orden de construcción por dependencias (nunca por tiempo)
 

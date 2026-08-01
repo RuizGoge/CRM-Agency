@@ -1,7 +1,7 @@
 # G0 · US region on the plan we will actually buy
 
-> **Status: HALF PASS — documentation half verified, create-form half pending the owner.**
-> Date of verification: 2026-08-01. Sources are Render's own current documentation.
+> **Status: ✅ PASS — both halves verified 2026-08-01.**
+> The documentation half is confirmed against Render's own current docs; the create-form half was executed against the real dashboard on a Hobby workspace. **The signed stack decision (B2) stands.**
 
 ## The assertion under test
 
@@ -25,9 +25,25 @@ The gate deliberately demands two independent confirmations. This document close
 
 **Why this is a pass and not a proof.** The blueprint specification is the strongest evidence available on paper, because it is the infrastructure-as-code contract and it enumerates the region enum *per resource type* — services and databases both take all five values, with no plan qualifier. But every statement above is the **absence** of a stated restriction, not the presence of a stated permission. Absence of a documented restriction is exactly the evidence class that produced the contradiction between the two Phase-5 audits in the first place. That is why the gate demands the create form, and why this document does not mark G0 green.
 
-## Half 2 — the create form · **PENDING, owner action**
+## Half 2 — the create form · ✅ **PASS**
 
-This requires a Render account. Creating accounts and entering credentials is outside what I do; this is Jorge's to execute. It is ten minutes of clicking and it is the half that actually decides the gate.
+Executed 2026-08-01 against the real Render dashboard, workspace **`My Workspace` on the free (Hobby) plan**, with **no resource created**. Jorge signed in; the three create forms were opened and their selectors read.
+
+| Create form | Region dropdown | Default offered | Verdict |
+|---|---|---|---|
+| **Web Service** | Ohio (US East) · Oregon (US West) · Frankfurt · Singapore · **Virginia (US East)** | Ohio | ✅ |
+| **Background Worker** | **Virginia (US East)** · Oregon · Frankfurt · **Ohio (US East)** · Singapore | Virginia | ✅ |
+| **Postgres** | Oregon · Frankfurt · **Ohio (US East)** · Singapore · **Virginia (US East)** | Oregon | ✅ |
+
+**All three resource types offer both Ohio and Virginia on the plan we intend to buy.** The gate's assertion is satisfied and the stack decision is not disturbed.
+
+Three facts observed in passing that the gate did not ask for and that matter anyway:
+
+- **PostgreSQL 18 is offered in the version selector** — the signed stack requires it, and nothing in the corpus had verified it was available rather than assumed.
+- **Background Workers have no Free instance type.** The selector starts at Starter. Confirms the docs and the cost model; there is no cheaper rung hiding here.
+- The Region field's own helper text states it plainly: *"Your services in the same region can communicate over a private network."* That is the same-region rule of §"Two operational rules" below, in Render's own words on the form where the mistake would be made.
+
+### The original instruction, retained for the record
 
 **Do this before creating any billable resource.** A free-tier probe is enough to read the region selector.
 
@@ -47,7 +63,7 @@ Both are new — neither appears anywhere in the Phase-5 corpus, and both are on
 - **Region cannot be changed after creation.** *"Render doesn't currently support changing the region for an existing service or database."* Picking wrong means destroying and recreating — and for the database, that is the artifact with no recompute path.
 - **All four resources must be in the SAME region.** *"services in different regions can't communicate directly over a private network."* A web service in Oregon talking to a Postgres in Ohio would traverse the public internet, carrying ledger rows and lead PII. Pick one region — Ohio or Virginia — and create everything in it.
 
-## Half 3 — the Gate 0-hour cost numbers · **PASS, with one number still unread**
+## Half 3 — the Gate 0-hour cost numbers · ✅ **PASS, every number now read**
 
 The gate ladder hands two pricing facts to "Gate 0-hour" because §9.4.4's self-rising line depends on them. Both are now checked against the primary source, and **the architecture's cost model was right**:
 
@@ -57,9 +73,10 @@ The gate ladder hands two pricing facts to "Gate 0-hour" because §9.4.4's self-
 | Storage included in the instance price | **None.** Compute and storage are billed separately. §9.4.4 already charges all 20 GB with no free allotment. | ✅ confirmed — the model did not assume an allotment |
 | Hobby egress: 5 GB included, $0.15/GB over | 5 GB outbound/month, $0.15/GB additional | ✅ confirmed |
 | Postgres backups survive on a Hobby workspace | PITR **3 days on Hobby**, 7 days on Pro+; logical backups retained 7 days *regardless of workspace plan*; neither available on Free instance types | ✅ confirmed — §9.4.2 already wrote "3-day PITR on Hobby" |
-| Starter $7.00/mo, Basic-1gb $19.00/mo | **Not verified.** render.com/pricing renders its tables client-side; the figures are absent from the served HTML. Secondary sources suggest Basic-1gb ≈ $20. | ⚠️ read off the dashboard in step 3/5 above |
+| Starter $7.00/mo, Basic-1gb $19.00/mo | **Both exact.** Starter = $7/mo at 512 MB / **0.5 CPU**. Basic-1gb = $19/mo at 1 GB / 0.5 CPU. (Also read: Basic-256mb $6, Basic-4gb $75, Standard $25.) | ✅ confirmed on the form |
+| Postgres storage cannot be reduced once grown | The Storage field states it: *"You can increase storage later, but **you can't decrease it**."* Priced live on the form: **15 GB → $4.50/month**, which is $0.30/GB exactly. Specify 1 GB or any multiple of 5 GB. | ✅ confirmed — this is the sentence that makes the R2 archive tier a budget mechanism rather than an optimisation (§9.2.4) |
 
-A $1/month delta on Basic-1gb is immaterial against the $100 ceiling, but the number should be *read*, not inferred — that is what steps 3 and 5 are for.
+**The cost model was right on every line.** Two figures were previously unread because render.com/pricing builds its tables client-side; both are now read off the create form and both match what §9.4 assumed. Two collateral confirmations worth keeping: **Starter is 0.5 vCPU, not a core** — the correction G6 already carried for its folded-topology saturation arithmetic — and **the step from Starter to Standard is exactly +$18** ($25 − $7), which is the escape hatch G6 priced in advance.
 
 **The non-negotiable line holds.** Backups are a property of the paid *instance*, not of the Pro *workspace*. A Hobby workspace with a paid Basic Postgres gets 3-day PITR plus exportable logical backups. The `earnings_ledger` is protected on the rung we intend to buy.
 
