@@ -488,40 +488,69 @@ Propuesta de etapas para el vertical Seguros (US), a refinar:
 ### ✅ LEVANTAMIENTO COMPLETO — Fases 0 a 7 cerradas y aprobadas (2026-07-31)
 El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 
-### 🔴 SPRINT 0 — va ANTES del Sprint 1, y bloquea
-Ninguna UI dependiente de llamadas/SMS se planifica como si Aloware fuera plomería resuelta.
+> ⚠️ **Esta sección se reescribió el 2026-08-02.** La versión anterior listaba los diez ítems del Sprint 1 como si ninguno estuviera hecho, mientras el detalle de arriba decía lo contrario. Una sesión nueva habría leído el plan viejo — el fallo exacto contra el que advierte la cadena de precedencia.
 
-| # | Puerta | Por qué bloquea |
+### 🟢 SPRINT 1 — estado real
+
+| # | Historia | Estado |
 |---|---|---|
-| ~~**0**~~ | ~~Verificar región EE.UU. en el plan de hosting a contratar~~ | ✅ **APROBADO 2026-08-01.** Ohio y Virginia disponibles en Web Service, Background Worker y Postgres sobre workspace Hobby. La decisión de stack queda confirmada. |
-| 1 | El silo de punta a punta: contexto fijado como primera sentencia en CADA unidad de trabajo (request, job, relay, importador, webhook, export) | Si no pasa, no se firma nada más |
-| 2 | El puente de codegen de eventos: JSON Schema → tipos TS + enum PG + CHECK | Agregar un campo sin regenerar debe ROMPER el build |
-| 3 | Tormenta de reintentos: 20.000 webhooks en 60 s contra el proceso de ingesta | Decide si el bulkhead alcanza |
-| 4 | SSE detrás del proxy del proveedor | No está documentado; si no sobrevive, hay que identificar el reemplazo AHORA |
-| 5 | Bundle y primer paint MEDIDOS | **Fija los dos presupuestos que hoy están sin número** (E6/R7) |
-| 6 | Drag a 60 fps con 500 tarjetas reales | También revalida la altura de tarjeta 120/156 |
-| 8 | El camino del dinero probado ANTES de escribir una pantalla | Round-trip exacto, transacción del gate, rechazo del UPDATE por privilegio |
-| 9 | Simulacro de restauración cronometrado | El ledger es irreconstruible |
-| 11 | **Aloware contra la cuenta real** | Firma de webhooks, reintentos, orden, vocabulario de disposiciones, aviso de grabación, forma real de la ráfaga |
+| 1 | Fundaciones de datos + arnés de RLS | ✅ `harden()` genera políticas; 12 tests |
+| 2 | Auth, sesión y contexto de scope | ✅ `begin_request` + better-auth |
+| 3 | Espina dorsal del dinero | ✅ ledger, `ledger_append`, `annualize`, `leaderboard_read` |
+| 4 | Contactos + dedupe | ✅ fixture de colisión con canario a nivel de bytes |
+| 5 | Pipeline + ambos gates | ✅ gates como CHECK; `stage_move` atómico |
+| 6 | Calendario + recordatorios | 🟡 capa de dominio completa; **falta cablear pg-boss** |
+| 7 | Leaderboard público | 🟡 tablero sí; **falta la celebración** |
+| 8 | My Day | ✅ |
+| 9 | Aloware | 🔴 **bloqueado por la Puerta 11** — necesita la cuenta real |
+| 10 | Datos demo | 🟡 `scripts/seed.ts` siembra por el camino real; **faltan las aserciones DEMO-01..10** |
 
-**En paralelo y con reloj externo: el registro 10DLC.** Semanas de trámite, puede ser rechazado. **APARCADO por decisión de Jorge (2026-08-01):** "por ahora dejemos eso para después". Sigue sin decidirse quién firma (reco: la entidad de la agencia del cliente). **Consecuencia asumida:** el reloj externo no arranca, así que la fecha en que el SMS se puede encender se corre junto con esta decisión. El producto lanza en `sms_enabled = false` de todos modos, así que esto no bloquea la construcción — solo la fecha del SMS.
+**Extra, no planificado:** shell de navegación, CI en GitHub Actions, aserción de arranque G4(a).
 
-### 🟢 SPRINT 1 — orden de construcción por dependencias (nunca por tiempo)
+### 🔴 SPRINT 0 — estado real de la escalera
 
-| # | Historia | Skill / agente | Modelo · esfuerzo |
-|---|---|---|---|
-| 1 | Fundaciones de datos: `tenant`, `app_user`, el arnés de RLS, el loop de endurecimiento y los gates de esquema en CI | `db-migration` + `db-guardian` | Opus · alto |
-| 2 | Auth, sesión y el contexto de scope por unidad de trabajo | `security-auditor` | Opus · alto |
-| 3 | **La espina dorsal del dinero:** `earnings_ledger`, triggers append-only, revokes, los definers, `leaderboard_read` | `db-migration` + `db-guardian` + `story-to-test` | **Opus · máximo** |
-| 4 | Contactos + intake (con dedupe) | `new-module` | Sonnet · medio |
-| 5 | Pipeline kanban: etapas, `stage_type`, **ambos gates** | `new-module` + `ux-reviewer` | Opus · alto |
-| 6 | Calendario + recordatorios (worker) | `new-module` | Sonnet · medio |
-| 7 | Leaderboard público + celebración | `new-component` + `ux-reviewer` | Sonnet · alto |
-| 8 | My Day + notificaciones | `new-module` | Sonnet · medio |
-| 9 | Integración Aloware (**bloqueada por la Puerta 11**) | `new-endpoint` + `security-auditor` | Opus · alto |
-| 10 | Datos demo sembrados | `demo-data` | Sonnet · medio |
+| # | Puerta | Estado |
+|---|---|---|
+| 0 | Región EE.UU. en el plan a contratar | ✅ **APROBADO** — Ohio y Virginia en los tres tipos de recurso, workspace Hobby |
+| 1 | Sonda de plataforma | 🟡 **G1e cerrado** (`btree_gin`/uuid existe, probado con planner). Faltan `max_connections` real, PgBouncer en modo transacción, y si concede `CREATE EVENT TRIGGER` — **todo requiere la instancia de Render** |
+| 2 | Aloware contra la cuenta real | 🔴 bloqueado, es de Jorge |
+| 3 | Camino del dinero | ✅ mayormente — append-only por trigger de sentencia (incluye TRUNCATE), exactly-once, transacción del gate atómica. **Falta:** proceso muerto a mitad del gate sin dejar lock |
+| 4 | Silo de punta a punta | 🟡 **(a) cerrado** (se niega a arrancar si el usuario puede saltear RLS). El resto lo cubre la suite de silo salvo el contexto heredado entre job y request en la misma conexión pooleada |
+| 5 | Equivalencia plegado/separado | ⬜ no empezado |
+| 6 | Tormenta de 20.000 webhooks | ⬜ no empezado |
+| 7 | SSE detrás del proxy | ⬜ no empezado |
+| 8 | pg-boss bajo estrés de versión | ⬜ no empezado |
+| 9 | Simulacro de restauración | ⬜ no empezado |
+| 10 | Los 5000 ms en cuatro representaciones | 🟡 los dos intervalos existen en SQL y TS; **falta el test de deriva** |
+| 11 | Bundle y primer paint medidos | ⬜ **fija los dos presupuestos que hoy no tienen número** (E6/R7) |
+| 12 | Drag a 60 fps con 500 tarjetas | 🟡 move-sheet construida primero (camino universal); **falta el drag** |
+| 13 | Publicar las contradicciones | ✅ `docs/sprint-0/g13-published-contradictions.md` |
 
-**Por qué ese orden:** el dinero va tercero, antes que cualquier pantalla, porque el ledger es el único artefacto que el producto no puede reconstruir. Y va después de auth porque necesita el contexto de scope para probar el silo.
+### ▶️ LO SIGUIENTE, en orden
+
+1. **Undo optimista de 5 s** — *en curso cuando se cortó la sesión.* Hoy el tablero esconde cada venta ~10 s para proteger un undo **que no existe**: el costo se cobra, la contraprestación no.
+2. **axe-core bajo `test:e2e`** — el script existe en `package.json` y **no hay un solo test de Playwright**. WCAG con cero hallazgos serios está declarado como gate.
+3. **Drag ≥1024px con puntero fino** — la move-sheet ya es el camino universal, así que el drag es aditivo y su fallo queda confinado.
+4. **Cablear pg-boss** al `scheduled_job_claim`.
+5. **Celebración** tras la ventana de undo.
+
+### 🧾 DEUDA TÉCNICA DECLARADA (no perder de vista)
+- **E9 está firmada pero NO implementada:** no existe `ref.capability_probe`. Llega con el módulo Aloware.
+- **R13 abierto:** `raw_payload_vault` purga por drop de partición mientras `dead_letter` tiene FK hacia ella.
+- **Tensión de precedencia sin resolver:** `CLAUDE.md` dice que **una sola** ruta `routes/ui/**` puede servir datos de tablero como SSR; hoy leaderboard **y** kanban tienen loader. **Pasar `precedence-checker` antes de decidir.**
+- **`lead_source_id` omitido** en `contact` a propósito; llega con el módulo de intake.
+- **Trigger diferido "un lead nunca existe sin tarjeta"** — pendiente, necesita cruzar `contact` y `opportunity`.
+
+**En paralelo y con reloj externo: el registro 10DLC.** Semanas de trámite, puede ser rechazado. **APARCADO por decisión de Jorge (2026-08-01):** "por ahora dejemos eso para después". Sigue sin decidirse quién firma (reco: la entidad de la agencia del cliente). **Consecuencia asumida:** el reloj externo no arranca, así que la fecha en que el SMS se puede encender se corre junto con esta decisión. El producto lanza SMS-dark de todos modos, así que esto no bloquea la construcción — sólo la fecha del SMS.
+
+### 🖥️ Para retomar en una sesión nueva
+```bash
+npm run db:up      # Docker Postgres 18 — puede necesitar abrir Docker Desktop a mano
+npm run db:migrate
+npm run db:seed    # crea el tenant demo Y fija la contraseña dev de crm_app
+npm run dev        # http://localhost:3000
+```
+Entrar con `renata@demo.test` / `demo-password-1234`. Otros: `priya@`, `marcus@`, `dana@`, `tomas@` (este último con **cero ventas** a propósito: es el caso que probó que el tablero debía incluirlo).
 
 ### Decisiones abiertas que Jorge confirma cuando quiera (ninguna bloquea la escritura; van con mi recomendación): propiedad del registro 10DLC (agencia del cliente vs nuestra); grabación de llamadas si el aviso no se dispara en el two-legged → *reco: desactivar a nivel de cuenta*; retención de payloads crudos → *reco: 60 días*; atajos de una tecla → *reco: apagados por defecto los primeros 30 días*; Sentry Team USD 26 pre-aprobado para activar el día del primer incidente; confirmar que sin email no hay reset de contraseña autogestionado; y si habrá una 2ª persona con acceso en 12 meses (**+USD 25/mes planos** — corregido en G0 desde el "+USD 51" que decía antes; Render reemplazó sus planes de workspace el 2026-04-23 y Pro dejó de cobrar por asiento. La prohibición de §9.4.5 no cambia, solo su aritmética).
 4. **Sprint 0 — primer ítem, antes de crear ningún recurso:** verificar región EE.UU. en el plan de hosting a contratar. Si falla, la decisión de stack se da vuelta hacia Rails/DigitalOcean.
