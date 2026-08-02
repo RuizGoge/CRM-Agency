@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { memo, useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router'
 
 import { format, fromWireString } from '~/lib/money/money'
@@ -55,6 +55,21 @@ export function PipelineColumns({
     apply()
     query.addEventListener('change', apply)
     return () => query.removeEventListener('change', apply)
+  }, [])
+
+  // STABLE IDENTITY, which is what makes the memo on Card do anything at all.
+  // As inline arrows these were new objects on every render, so all 500 cards
+  // failed their prop comparison every time the pointer crossed a column.
+  const handleCardDragStart = useCallback((e: React.DragEvent<HTMLElement>, id: string): void => {
+    // Firefox refuses to start a drag without payload.
+    e.dataTransfer.setData('text/plain', id)
+    e.dataTransfer.effectAllowed = 'move'
+    setDraggingId(id)
+  }, [])
+
+  const handleCardDragEnd = useCallback((): void => {
+    setDraggingId(null)
+    setOverStageId(null)
   }, [])
 
   function handleDrop(target: BoardColumn): void {
@@ -210,16 +225,8 @@ export function PipelineColumns({
                     draggable={dragEnabled === true}
                     dragging={draggingId === card.id}
                     pending={pendingCardId === card.id}
-                    onDragStart={(e) => {
-                      // Firefox refuses to start a drag without payload.
-                      e.dataTransfer.setData('text/plain', card.id)
-                      e.dataTransfer.effectAllowed = 'move'
-                      setDraggingId(card.id)
-                    }}
-                    onDragEnd={() => {
-                      setDraggingId(null)
-                      setOverStageId(null)
-                    }}
+                    onDragStart={handleCardDragStart}
+                    onDragEnd={handleCardDragEnd}
                   />
                 ))
               )}
@@ -231,7 +238,21 @@ export function PipelineColumns({
   )
 }
 
-function Card({
+/**
+ * MEMOISED, and that is a performance budget rather than a preference.
+ *
+ * `overStageId` changes on every column the pointer crosses, and without this
+ * every one of those re-rendered ALL 500 cards on the `perf-500` fixture.
+ * Sprint-0 Gate 12 measured it: a frame was dropped on every single column
+ * crossing — a max frame of 33.3 ms against a 34 ms budget, which is not
+ * headroom, it is luck, and it reached 50 ms often enough to fail one run in six.
+ *
+ * Memo alone would not have been enough. The handlers were inline arrows created
+ * fresh on each render, so every card's props changed identity every time and a
+ * memo comparison would have returned false for all 500 of them. The callbacks
+ * being stable is half of this fix, not a tidy-up alongside it.
+ */
+const Card = memo(function Card({
   card,
   draggable,
   dragging,
@@ -243,13 +264,19 @@ function Card({
   draggable: boolean
   dragging: boolean
   pending: boolean
-  onDragStart: (e: React.DragEvent<HTMLElement>) => void
+  onDragStart: (e: React.DragEvent<HTMLElement>, id: string) => void
   onDragEnd: () => void
 }): React.JSX.Element {
+  // Created per Card render, which costs nothing: it is not a prop, so it can
+  // never be the reason a memo comparison fails.
+  const handleDragStart = (e: React.DragEvent<HTMLElement>): void => {
+    onDragStart(e, card.id)
+  }
+
   return (
     <article
       draggable={draggable}
-      onDragStart={draggable ? onDragStart : undefined}
+      onDragStart={draggable ? handleDragStart : undefined}
       onDragEnd={draggable ? onDragEnd : undefined}
       style={{
         padding: 'var(--space-3)',
@@ -315,4 +342,4 @@ function Card({
       </Link>
     </article>
   )
-}
+})

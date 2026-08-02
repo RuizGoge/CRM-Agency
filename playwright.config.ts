@@ -33,16 +33,44 @@ export default defineConfig({
     locale: 'en-US',
   },
   projects: [
+    // Both functional profiles ignore the perf spec: it owns its own profile
+    // because its number is only meaningful under the 2x throttle, and running
+    // it unthrottled here would produce a second, easier P6 that passes.
     {
       name: 'desktop-ci',
+      testIgnore: /drag-perf\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 } },
     },
-    { name: 'mobile-ci', use: { ...devices['Pixel 7'] } },
+    { name: 'mobile-ci', testIgnore: /drag-perf\.spec\.ts/, use: { ...devices['Pixel 7'] } },
+    // `dnd-ci` is desktop-ci with a 2x CPU slowdown (04b §3.1), and the slowdown
+    // is the point: it buys headroom so a green build means a comfortable 60 fps
+    // on a seller's five-year-old laptop rather than on an idle CI runner.
+    //
+    // The throttle itself is applied per-test over CDP — Playwright has no
+    // declarative CPU option — so the project exists to SELECT the specs and to
+    // give the profile a name that matches the budget table.
+    {
+      name: 'dnd-ci',
+      testMatch: /drag-perf\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 } },
+    },
   ],
   webServer: {
     command: 'npm run dev',
     url: 'http://localhost:3000',
-    reuseExistingServer: !process.env['CI'],
+    // NEVER reuse, and this cost four seconds a run to buy back a false green
+    // that had already fooled a mutation test twice.
+    //
+    // With `!process.env.CI` this reused whatever was listening on :3000. An
+    // orphaned dev server — and they survive on this machine, which is how one
+    // was found still running a folded job dispatcher — serves the code it was
+    // started with. Two mutations that should have turned the drag gate red
+    // passed against it, and the conclusion very nearly drawn was "the gate has
+    // no teeth" rather than "the mutation never reached the browser".
+    //
+    // A suite that sometimes tests the working tree and sometimes tests
+    // whatever was open is not a suite.
+    reuseExistingServer: false,
     timeout: 120_000,
   },
 })

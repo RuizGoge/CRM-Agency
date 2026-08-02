@@ -58,6 +58,37 @@
       ]
     },
     {
+      "id": "P6",
+      "name": "perf.P6_drag_frames",
+      "title": "Drag at 60 fps, 500-card board",
+      "tier": "e2e",
+      "metric": "raf_frame_ms",
+      "route": "/board",
+      "unit": "ms",
+      "direction": "monotonic_down",
+      "profile": "dnd-ci",
+      "fixture": "perf-500",
+      "value": 20,
+      "max_frame": 34,
+      "max_long_task": 50,
+      "warn": 16.7,
+      "note": [
+        "04b 3.2 P6: rAF deltas during a scripted 1200 ms three-column drag on a",
+        "500-card board. Fails on p95 > 20 ms, OR any frame > 34 ms, OR any long",
+        "task > 50 ms. Three separate failures, not one — a smooth average with a",
+        "single 60 ms stall is a drag that visibly jumps.",
+        "",
+        "Enforced by tests/e2e/drag-perf.spec.ts, not by check-perf-budgets.ts:",
+        "this one needs a browser and a seeded board. The numbers live here so",
+        "there is one place they can be read from and one place they can be",
+        "loosened from.",
+        "",
+        "The profile is dnd-ci — desktop-ci with a 2x CPU slowdown (04b 3.1), so a",
+        "green build means headroom on a seller's five-year-old laptop rather than",
+        "60 fps on a CI runner with nothing else to do."
+      ]
+    },
+    {
       "id": "P20",
       "name": "perf.P20_mobile_tti_pipeline",
       "title": "Mobile time-to-interactive, /pipeline",
