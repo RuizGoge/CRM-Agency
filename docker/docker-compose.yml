@@ -19,7 +19,12 @@ services:
     ports:
       - '5432:5432'
     volumes:
-      - crm-pgdata:/var/lib/postgresql/data
+      # PG 18+ convention: mount the PARENT, not .../data. From 18 the official
+      # image stores the cluster in a major-version-specific subdirectory, and
+      # it REFUSES TO BOOT (restart loop) if a volume is mounted at the old
+      # .../data path. Reverting this to /var/lib/postgresql/data breaks
+      # `npm run db:up` entirely. See docker-library/postgres#1259.
+      - crm-pgdata:/var/lib/postgresql
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U crm -d crm_dev']
       interval: 5s
