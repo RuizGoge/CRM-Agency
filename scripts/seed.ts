@@ -141,8 +141,63 @@ async function main(): Promise<void> {
     console.log(`  ${seller.name}: ${seller.wins.length} closed`)
   }
 
+  await seedMyDay()
+
   console.log(`\nDone. Sign in at /earnings with any of the demo addresses.`)
   console.log(`Password for all of them: ${PASSWORD}`)
+}
+
+/**
+ * One seller's day, covering all four sections including the one that must
+ * never be empty by accident: a meeting whose end time has passed with no
+ * outcome recorded.
+ */
+async function seedMyDay(): Promise<void> {
+  const seller = SELLERS[0]
+  if (!seller) return
+
+  const [contact] = await client<{ id: string }[]>`
+    INSERT INTO app.contact (tenant_id, owner_user_id, full_name, created_via)
+    VALUES (${TENANT}, ${seller.id}, 'Doris Whitfield', 'manual')
+    RETURNING id`
+
+  const [stage] = await client<{ id: string }[]>`
+    SELECT id FROM app.stage
+    WHERE tenant_id = ${TENANT} AND owner_user_id = ${seller.id} AND name = 'New Lead'`
+
+  const [opp] = await client<{ id: string }[]>`
+    INSERT INTO app.opportunity
+      (tenant_id, owner_user_id, contact_id, pipeline_id, stage_id, current_stage_type, created_from)
+    SELECT ${TENANT}, ${seller.id}, ${contact?.id ?? null}, p.id, ${stage?.id ?? null}, 'open', 'manual'
+    FROM app.pipeline p WHERE p.tenant_id = ${TENANT} AND p.owner_user_id = ${seller.id}
+    RETURNING id`
+
+  // Ended ninety minutes ago and still has no outcome — the undismissable row.
+  await client`
+    INSERT INTO app.meeting
+      (tenant_id, owner_user_id, contact_id, opportunity_id, starts_at_utc, duration_minutes,
+       contact_timezone, created_via)
+    VALUES (${TENANT}, ${seller.id}, ${contact?.id ?? null}, ${opp?.id ?? null},
+            clock_timestamp() - interval '2 hours', 30, 'America/New_York', 'wrap_up')`
+
+  // Still ahead of them today.
+  await client`
+    INSERT INTO app.meeting
+      (tenant_id, owner_user_id, contact_id, opportunity_id, starts_at_utc, duration_minutes,
+       contact_timezone, created_via)
+    VALUES (${TENANT}, ${seller.id}, ${contact?.id ?? null}, ${opp?.id ?? null},
+            clock_timestamp() + interval '3 hours', 30, 'America/New_York', 'quick_schedule')`
+
+  await client`
+    INSERT INTO app.activity (tenant_id, owner_user_id, contact_id, opportunity_id, type, title,
+                              due_at, created_by)
+    VALUES
+      (${TENANT}, ${seller.id}, ${contact?.id ?? null}, ${opp?.id ?? null}, 'task',
+       'Call back Doris about the quote', clock_timestamp() - interval '40 minutes', 'human'),
+      (${TENANT}, ${seller.id}, ${contact?.id ?? null}, ${opp?.id ?? null}, 'task',
+       'Send the IUL illustration', clock_timestamp() + interval '4 hours', 'human')`
+
+  console.log(`  ${seller.name}: My Day seeded (2 meetings, 2 callbacks)`)
 }
 
 main()

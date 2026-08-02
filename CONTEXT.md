@@ -49,6 +49,19 @@ Evidencia completa: [`docs/sprint-0/g0-us-region.md`](docs/sprint-0/g0-us-region
 - **Dos aserciones más que agregó la suite:** un supervisor obtiene lectura global **pero la escritura le sigue siendo rechazada** (`USING` pasa, `WITH CHECK` falla — esa asimetría *es* el modelo de autorización, y es lo que hace que el caso del supervisor sea 403 y no un not-found), y el enum `user_role` tiene **exactamente tres etiquetas**, la forma mecánica de "no hay constructor de roles ni matriz de permisos".
 - **También pendiente:** el trigger que rechaza `is_demo=true` en producción (necesita `system_constant`, que aún no existe) y la validación de `display_tz` en `app_user`.
 
+### 🌅 SPRINT 1 · ITEM 8 — My Day (2026-08-02)
+`app/routes/api/my-day.ts`, `app/routes/ui/my-day.tsx`, seed extendido. Cuatro secciones con conteo en el encabezado: **Needs outcome · Today's appointments · Due now · Later today**.
+
+🔴 **LA TRAMPA DE ESTE MÓDULO, evitada a propósito:** la política `owner_scoped` es `owner = current_user **OR app.scope_is_global()**`. Correcto para un tablero que un supervisor debe leer entero — **exactamente equivocado acá**. Un supervisor abriendo My Day habría visto el trabajo de los cincuenta vendedores fusionado en una lista. La Fase 4 lo dice explícito: *"Supervisor sees their own My Day only — global visibility lives on the read-scoped board, never here."* Por eso **cada consulta filtra `owner_user_id = app.current_user_id()` EXPLÍCITAMENTE. La política es el piso, no la respuesta.**
+
+🔴 **Y un defecto que introduje yo, encontrado mirando la pantalla — invisible hoy, roto en septiembre.** El `Clock` formateaba con `toLocaleTimeString` **sin** opción `timeZone`, o sea la zona del navegador. El servidor ya había decidido qué cuenta como "hoy" usando `app_user.display_tz`, así que una cita podía entrar como de hoy y **imprimirse con la hora de mañana**.
+
+Lo que lo hace instructivo: **el navegador estaba en `America/Santiago` (UTC-4) y Nueva York en EDT (UTC-4) — hoy coinciden exactamente**, así que la pantalla se veía bien. Se habría roto cuando Chile pase a horario de verano. **Verificado el arreglo cambiando la zona de la vendedora a Los Angeles: los horarios se corrieron de 10:03 PM a 7:03 PM**, y las secciones cambiaron de contenido de forma coherente porque el filtro del servidor usa la misma zona.
+
+- **Las tres reglas de zona horaria, en un mismo módulo y sin mezclarse:** `display_tz` decide qué es "hoy" y cómo se lee una hora · `business_tz` estampa `period_key` y nada más · la del lead decide la legalidad de una llamada.
+- **"Needs outcome" va primero y no se puede descartar.** Una reunión cuya hora de fin pasó sin resultado registrado es dinero que quizá ya se ganó y no se anotó.
+- Estado vacío global (*"You're clear. Nothing due right now."*) y por sección, error y sin-permiso.
+
 ### 🏆 SPRINT 1 · ITEM 7 — El leaderboard público, LA PRIMERA PANTALLA (2026-08-01)
 Migración **0016**, `app/routes/ui/leaderboard.tsx`, `app/routes/ui/sign-in.tsx`, 3 componentes, `scripts/seed.ts`. **Verificado en pantalla, no en test.**
 
