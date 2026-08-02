@@ -49,6 +49,24 @@ Evidencia completa: [`docs/sprint-0/g0-us-region.md`](docs/sprint-0/g0-us-region
 - **Dos aserciones más que agregó la suite:** un supervisor obtiene lectura global **pero la escritura le sigue siendo rechazada** (`USING` pasa, `WITH CHECK` falla — esa asimetría *es* el modelo de autorización, y es lo que hace que el caso del supervisor sea 403 y no un not-found), y el enum `user_role` tiene **exactamente tres etiquetas**, la forma mecánica de "no hay constructor de roles ni matriz de permisos".
 - **También pendiente:** el trigger que rechaza `is_demo=true` en producción (necesita `system_constant`, que aún no existe) y la validación de `display_tz` en `app_user`.
 
+### 🎯 SPRINT 1 · ITEM 5 — Pipeline y el gate de cierre (2026-08-01) · Opus · alto
+Migraciones **0012–0013**, `app/db/schema/pipeline.ts`, **16 tests**. Total: **86**.
+
+**Los dos gates son CHECK constraints, no middleware.** `current_stage_type <> 'earning' OR premium_annual_cents IS NOT NULL` y `current_stage_type <> 'lost' OR lost_reason_id IS NOT NULL`. Una llamada cruda de API, un import CSV, una automatización o una ruta escrita el año que viene **no pueden producir la fila** — no "son rechazadas", no existen.
+
+**La FK compuesta es el mecanismo central:** `(tenant_id, stage_id, current_stage_type)` referencia `stage(tenant_id, id, stage_type)`. El tipo denormalizado **no puede mentir** sobre la etapa a la que apunta, sin trigger y sin join.
+
+🎯 **Mutación: até el gate al NOMBRE de la etapa —el bug histórico exacto— y el resultado fue mejor que un rojo simple.** Falló **un solo** test (el de renombre), que es justo la forma del bug: parece funcionar hasta que alguien renombra la columna. Y lo que frenó el movimiento fue **la restricción `opportunity_win_gate` de la base**. El gate del servicio quedó evadido; el de la base no. Defensa en profundidad demostrada, no afirmada.
+
+🔴 **Hueco encontrado al diseñar, y un error mío de PostgreSQL corregido:** `opportunity` es `owner_scoped`, así que `crm_app` tenía `UPDATE` — o sea que una tarjeta podía moverse con un `UPDATE` plano, **sin transición y sin fila de ledger**: el tablero y el dinero divergiendo en silencio, sin job de recomputo que los reconcilie. Lo cerré con **columnas protegidas en el registro**, aplicadas por `harden()`. Pero mi primera versión estaba mal: **PostgreSQL no descompone un grant a nivel de tabla**, así que `GRANT UPDATE ON t` + `REVOKE UPDATE (c) ON t` deja `c` escribible. La forma que sí sostiene es **enumerar las columnas permitidas** — y una columna agregada después queda protegida por default.
+
+- **`stage_type` es inmutable por trigger.** Ese único trigger borra una clase entera de catástrofe: si un tipo nunca puede cambiar, un ajuste de tablero de un vendedor **nunca puede mover dinero en un leaderboard público**, y "recomputar al cambiar el flag" contra "no existe job de recomputo" se resuelve a favor del segundo sin ambigüedad.
+- **`CHECK (to_stage_type <> 'earning' OR actor_type = 'human')`** — un import, un webhook, un job de recordatorios o un token de API **físicamente no pueden** escribir una fila que acredite dinero.
+- **Atomicidad probada:** con una prima bajo el piso de $1, el `UPDATE` falla dentro de `stage_move` y **la tarjeta no se movió y no hay transición**. Todo o nada.
+- Idempotencia de sendBeacon por `client_move_key`; salir de una etapa earning **revierte** con delta exactamente opuesto.
+- Cross-silo → **SM404, nunca 403**.
+- ⚠️ **Dos trampas de herramienta que costaron tiempo y quedan anotadas:** Drizzle emite las FK **después** de los índices, así que un target de FK compuesta debe declararse como `unique()` (constraint, va inline en el `CREATE TABLE`) y no como `uniqueIndex()`. Y `Out-File -Encoding utf8` en PowerShell 5.1 escribe **BOM**, que rompe el `_journal.json` de drizzle-kit.
+
 ### 👥 SPRINT 1 · ITEM 4 — Contactos y el fixture de colisión (2026-08-01)
 Migraciones **0010–0011**, `app/db/schema/contacts.ts`, **11 tests**. Total: **70**.
 

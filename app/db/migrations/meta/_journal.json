@@ -85,6 +85,20 @@
       "when": 1785638569105,
       "tag": "0011_contacts_hardening",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1785639410490,
+      "tag": "0012_pipeline",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1785639432036,
+      "tag": "0013_stage_move",
+      "breakpoints": true
     }
   ]
 }
