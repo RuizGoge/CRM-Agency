@@ -1,42 +1,24 @@
 import { sql } from 'drizzle-orm'
 import { drizzle } from 'drizzle-orm/postgres-js'
-import postgres from 'postgres'
+
+import { pool } from './pool'
 
 /**
  * The database access layer.
  *
  * There is exactly one way to reach the database from application code, and it
- * is `withTenant`. The pool below is module-private and never exported: an
- * ESLint rule fails the build if anything outside `app/db/**` imports this
- * file, and `app/db/index.ts` re-exports only the two entry points.
+ * is `withTenant`. The pool lives in `./pool` and an ESLint rule fails the
+ * build if anything outside `app/db/**` imports either file; `app/db/index.ts`
+ * re-exports only the two entry points.
  *
  * The reason is not tidiness. Every unit of work must be a transaction whose
  * FIRST statement establishes session context, because that invariant is the
  * only thing that makes a transaction-mode pooler safe. A query issued outside
  * that envelope runs with no context — which, thanks to the policies, returns
- * zero rows rather than another seller's book, but silently returning nothing
- * is its own bug. Making the pool unreachable removes the choice.
+ * zero rows rather than another seller's book, but a surface that silently
+ * renders nothing is its own defect. Making the pool unreachable removes the
+ * choice.
  */
-
-const url = process.env['DATABASE_URL'] ?? 'postgresql://crm:crm@localhost:5432/crm_dev'
-
-/**
- * Provisional. The real ceiling is a fact about the managed instance and is
- * still unmeasured — Sprint-0 gate G1(a) owns it, and G1(d) requires this to
- * be pinned against the measured number with 2x headroom for a rolling
- * redeploy. Until then this is deliberately small rather than optimistic.
- */
-const poolMax = Number.parseInt(process.env['DB_POOL_MAX'] ?? '8', 10)
-
-const pool = postgres(url, {
-  max: poolMax,
-  // Prepared statements do not survive a transaction-mode pooler: PgBouncer
-  // hands the next transaction a different server connection, which has never
-  // seen the prepared name. This must stay false in every environment,
-  // including local, so that development trains the production configuration.
-  prepare: false,
-  onnotice: () => {},
-})
 
 const db = drizzle(pool)
 
@@ -92,9 +74,4 @@ export async function withSystemWork<T>(tenantId: string, fn: (tx: Tx) => Promis
     await tx.execute(sql`SELECT app.begin_system_work(${tenantId}::uuid)`)
     return fn(tx)
   })
-}
-
-/** Closes the pool. Process shutdown only. */
-export async function closePool(): Promise<void> {
-  await pool.end()
 }

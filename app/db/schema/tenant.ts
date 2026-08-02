@@ -12,6 +12,7 @@ import {
 } from 'drizzle-orm/pg-core'
 
 import { app, citext, earningsDisposition, userRole } from './_shared'
+import { user as authUser } from './auth'
 
 /**
  * Tenancy root, and the only home for tenant-wide configuration.
@@ -87,6 +88,21 @@ export const appUser = app.table(
     id: uuid('id')
       .notNull()
       .default(sql`uuidv7()`),
+
+    /**
+     * The login identity behind this membership, or NULL for a seat that has
+     * no credentials yet (a seeded demo seller, or one invited but not
+     * activated).
+     *
+     * Unique, because in the MVP one login is one person in one tenant. The
+     * eventual model is one login to N memberships; lifting that is dropping
+     * this index, not a redesign. No cascade on purpose: `earnings_ledger`
+     * and `audit_log` anchor to app_user, so deleting a login must be blocked
+     * rather than allowed to orphan the all-time board.
+     */
+    authUserId: text('auth_user_id')
+      .unique()
+      .references(() => authUser.id),
 
     email: citext('email').notNull(),
     fullName: text('full_name').notNull(),

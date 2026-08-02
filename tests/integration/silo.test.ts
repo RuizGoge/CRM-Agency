@@ -112,14 +112,20 @@ describe('the generated hardening', () => {
     expect(violations).toEqual([])
   })
 
-  it('grants crm_app no DELETE on anything, anywhere', async () => {
-    // Soft delete is the only delete this product has.
+  it('grants crm_app DELETE on exactly two tables, both outside the domain', async () => {
+    // Soft delete is the only delete the domain has, so `app` and `ref` must
+    // carry none at all. The two exceptions are enumerated rather than
+    // described: better-auth removes a session row on sign-out and deletes a
+    // consumed verification token. Widening this — DELETE on auth.user, say,
+    // which would let a login vanish out from under a seller's ledger history
+    // — turns this red.
     const grants = await sql<{ relation: string }[]>`
       SELECT table_schema || '.' || table_name AS relation
       FROM information_schema.table_privileges
-      WHERE grantee = 'crm_app' AND privilege_type = 'DELETE'`
+      WHERE grantee = 'crm_app' AND privilege_type = 'DELETE'
+      ORDER BY 1`
 
-    expect(grants).toEqual([])
+    expect(grants.map((g) => g.relation)).toEqual(['auth.session', 'auth.verification'])
   })
 })
 

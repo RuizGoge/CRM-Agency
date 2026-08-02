@@ -29,6 +29,13 @@ export default tseslint.config(
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
       ],
       '@typescript-eslint/consistent-type-imports': 'error',
+      // Throwing a Response is React Router's documented control flow for
+      // loaders and actions — it is how a route short-circuits to a status.
+      // Everything else must still be an Error.
+      '@typescript-eslint/only-throw-error': [
+        'error',
+        { allow: [{ from: 'lib', name: 'Response' }] },
+      ],
     },
   },
 
@@ -89,7 +96,15 @@ export default tseslint.config(
         {
           patterns: [
             {
-              group: ['**/db/client', '~/db/client', '**/app/db/client'],
+              group: [
+                '**/db/client',
+                '~/db/client',
+                '**/app/db/client',
+                '**/db/pool',
+                '~/db/pool',
+                '**/db/auth-client',
+                '~/db/auth-client',
+              ],
               message:
                 'Import { withTenant } from "~/db". The pool is module-private; reaching past it means a unit of work with no session context.',
             },
@@ -97,6 +112,37 @@ export default tseslint.config(
               group: ['postgres', 'drizzle-orm/postgres-js'],
               message:
                 'Only app/db/** may construct a database connection. Application code uses withTenant from "~/db".',
+            },
+          ],
+        },
+      ],
+    },
+  },
+
+  // ---------------------------------------------------------------------------
+  // VERSIONED EXCEPTION to the guard above — one entry, with its reason.
+  //
+  // The authentication layer is what PRODUCES the identity that begin_request
+  // verifies, so it necessarily runs before any identity exists. It may reach
+  // the contextless handle in app/db/auth-client.ts. It may still not reach
+  // the pool or construct a connection of its own, so the shortcut it is
+  // granted is exactly one file wide.
+  // ---------------------------------------------------------------------------
+  {
+    files: ['app/lib/auth/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['**/db/client', '~/db/client', '**/db/pool', '~/db/pool'],
+              message:
+                'The auth layer may use ~/db/auth-client. withTenant and the pool remain out of reach.',
+            },
+            {
+              group: ['postgres', 'drizzle-orm/postgres-js'],
+              message: 'Only app/db/** may construct a database connection.',
             },
           ],
         },
