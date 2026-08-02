@@ -49,6 +49,31 @@ Evidencia completa: [`docs/sprint-0/g0-us-region.md`](docs/sprint-0/g0-us-region
 - **Dos aserciones más que agregó la suite:** un supervisor obtiene lectura global **pero la escritura le sigue siendo rechazada** (`USING` pasa, `WITH CHECK` falla — esa asimetría *es* el modelo de autorización, y es lo que hace que el caso del supervisor sea 403 y no un not-found), y el enum `user_role` tiene **exactamente tres etiquetas**, la forma mecánica de "no hay constructor de roles ni matriz de permisos".
 - **También pendiente:** el trigger que rechaza `is_demo=true` en producción (necesita `system_constant`, que aún no existe) y la validación de `display_tz` en `app_user`.
 
+### 🏆 SPRINT 1 · ITEM 7 — El leaderboard público, LA PRIMERA PANTALLA (2026-08-01)
+Migración **0016**, `app/routes/ui/leaderboard.tsx`, `app/routes/ui/sign-in.tsx`, 3 componentes, `scripts/seed.ts`. **Verificado en pantalla, no en test.**
+
+**Es la primera vez que el producto se ve.** Los seis ítems anteriores viven enteros en la base.
+
+**Aritmética verificada contra la pantalla real** (sembrado por el camino real: `stage_move` pasando el gate y apendeando al ledger, nunca insertando totales):
+| Vendedor | Mensual sumado | ×12 | En pantalla |
+|---|---|---|---|
+| Priya | 96.500¢ | 1.158.000¢ | **$11,580** ✓ |
+| Renata | 75.249¢ | 902.988¢ | **$9,029.88** ✓ |
+| Marcus | 67.400¢ | 808.800¢ | **$8,088** ✓ |
+| Dana | 27.500¢ | 330.000¢ | **$3,300** ✓ |
+
+Los centavos de Renata sobreviven exactos — en coma flotante eso sería `9029.879999…` en un tablero público.
+
+🔍 **Leer el árbol de accesibilidad del primer render encontró dos defectos que una captura no habría mostrado:** el número de rango del podio **no tenía etiqueta** (un "2" leído después de un nombre y un monto es ambiguo, y la altura del escalón no comunica nada a un lector de pantalla) y **el vendedor conectado no se distinguía en el podio** — el resaltado existía sólo en las filas de lista. Los dos corregidos y verificados.
+
+- **Las cuatro pantallas obligatorias existen:** vacío (con copy distinto para all-time que para un período), cargando (**skeleton, nunca spinner**), error y sin-permiso — y las dos últimas **no se ven iguales**, porque son respuestas distintas.
+- **El dinero cruza como string de centavos.** El cliente formatea con `format(fromWireString(…))` y **no hace aritmética**, nunca.
+- **El poll se detiene con la pestaña oculta y dispara al volver al foco.** Un tablero en segundo plano son 50 requests por minuto que nadie lee.
+- **ETag derivado del cuerpo renderizado, a propósito.** El valor público es dependiente del tiempo (las entradas dentro de la ventana de undo se excluyen), así que un ETag puramente derivado de escrituras respondería 304 mientras el número visible cambia al envejecer una entrada pendiente. Formas más baratas existen; ninguna puede perder esa propiedad.
+- **`sign-in` con un solo mensaje de error** para dirección equivocada y contraseña equivocada — dos mensajes son un oráculo de enumeración de cuentas. Y dice la verdad sobre el reset: *"An admin can set a new one for you."*
+- ⚠️ **Patrón que ya me costó tres veces: los UUID de prueba deben ser HEX.** `dev1`, `s1`, `t1` no lo son.
+- ⏳ **Debido:** la celebración (confetti tras la ventana de undo), el auto-rank con vecinos (patrón top10+2), y `npm run test:e2e` con axe-core.
+
 ### 📅 SPRINT 1 · ITEM 6 — Calendario y recordatorios (2026-08-01)
 Migraciones **0014–0015**, `app/db/schema/calendar.ts`, **12 tests**. Total: **98**.
 

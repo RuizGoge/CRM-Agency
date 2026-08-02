@@ -12,6 +12,11 @@ import { index, route, type RouteConfig } from '@react-router/dev/routes'
  */
 export default [
   index('routes/ui/home.tsx'),
+  // The one UI route allowed to serve board data as SSR HTML — see the note in
+  // the module for why it is this one and only this one.
+  route('sign-in', 'routes/ui/sign-in.tsx'),
+  route('earnings', 'routes/ui/leaderboard.tsx'),
+  route('api/leaderboard', 'routes/api/leaderboard.ts'),
   // better-auth mounts its whole surface under one splat. See the note in the
   // module for why this is the one resource route outside the endpoint factory.
   route('api/auth/*', 'routes/api/auth.ts'),
