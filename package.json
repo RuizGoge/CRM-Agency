@@ -24,6 +24,8 @@
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
     "db:seed": "tsx scripts/seed.ts",
+    "db:jobs": "tsx scripts/install-jobs.ts",
+    "worker": "tsx --env-file-if-exists=.env scripts/worker.ts",
     "verify": "npm run typecheck && npm run lint && npm run format:check && npm run test",
     "prepare": "husky"
   },
@@ -33,6 +35,7 @@
     "better-auth": "1.6.25",
     "drizzle-orm": "0.45.2",
     "isbot": "5.2.1",
+    "pg-boss": "^12.26.4",
     "postgres": "3.4.9",
     "react": "19.2.8",
     "react-dom": "19.2.8",

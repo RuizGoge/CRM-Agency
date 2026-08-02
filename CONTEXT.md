@@ -49,6 +49,28 @@ Evidencia completa: [`docs/sprint-0/g0-us-region.md`](docs/sprint-0/g0-us-region
 - **Dos aserciones más que agregó la suite:** un supervisor obtiene lectura global **pero la escritura le sigue siendo rechazada** (`USING` pasa, `WITH CHECK` falla — esa asimetría *es* el modelo de autorización, y es lo que hace que el caso del supervisor sea 403 y no un not-found), y el enum `user_role` tiene **exactamente tres etiquetas**, la forma mecánica de "no hay constructor de roles ni matriz de permisos".
 - **También pendiente:** el trigger que rechaza `is_demo=true` en producción (necesita `system_constant`, que aún no existe) y la validación de `display_tz` en `app_user`.
 
+### ⏰ SPRINT 1 — pg-boss cableado, y un "claim" que no clameaba nada (2026-08-02)
+Migración **0020**, `app/jobs/**`, `app/modules/calendar/dispatch.ts`, `scripts/install-jobs.ts` + `scripts/worker.ts`, **8 tests nuevos**. Total: **114**.
+
+El ítem 6 dejó la capa de dominio completa —intención, idempotencia por episodio, estados terminales, equidad por tenant— y **nada que la consumiera**. Este es el consumidor.
+
+🔴 **EL DEFECTO: `app.scheduled_job_claim` era un SELECT pelado. No tomaba lock y no dejaba marca**, así que dos despachadores en el mismo segundo recibían **las mismas filas y disparaban las dos**. `scheduled_job_resolve` actualiza `WHERE status='pending'`, o sea que la segunda resolución es un no-op inocuo — **el efecto ya ocurrió dos veces para entonces, y el efecto acá es un mensaje al teléfono de un consumidor**. Un recordatorio es un artefacto legal: tiene que disparar una vez, en el instante correcto, dentro de la ventana legal de llamada. **Dos veces no es una versión degradada de esa promesa, es otra promesa.** Invisible hasta hoy por una buena razón: nadie lo llamaba. **Un supuesto de un solo llamador se vuelve bug de concurrencia exactamente cuando aparece el segundo.**
+
+- **Dos mecanismos, y hacen falta los DOS.** `FOR UPDATE SKIP LOCKED` impide que dos claims en vuelo elijan la misma fila; **`claimed_at` sobrevive a la transacción** — sin él el lock termina en cuanto el claim retorna, y el tick siguiente levanta el mismo job antes de que el trabajo se resuelva. 🎯 **Probado por mutación:** con el claim viejo, `expected length 1 but got 2` — el doble disparo, reproducido.
+- **El lease es deliberadamente MÁS CORTO que los 15 minutos** tras los cuales un recordatorio se descarta: un reintento entra en la ventana, y un job que sigue fallando llega a su fila `dropped_late` en vez de reintentarse toda la noche. `claimed_at` entró a `protected_columns` — un rol de aplicación que puede limpiarlo puede hacer que un recordatorio dispare dos veces, que es el defecto reintroducido por un `UPDATE` plano.
+- 🔴 **Y un problema de diseño que sólo apareció al testear: la equidad entrega UN job POR TENANT POR LLAMADA.** Un tick de una sola llamada sería **un recordatorio por tenant por minuto**, y un tenant con cuarenta vencidos tardaría cuarenta minutos — muy por encima de los quince tras los cuales cada uno se descarta. El tick ahora **drena por rondas**, acotadas. **La equidad sobrevive intacta porque se preserva ENTRE rondas:** el tenant tormentoso sigue sin recibir un segundo job antes de que el tranquilo reciba el primero. El caudal lo dan las rondas; el orden lo da el claim.
+- **Las dos reglas con filo legal, como filas terminales y no líneas de log:** más de 15 minutos tarde → **`dropped_late`** con el número en la razón (*"dropped: 40m late"*) — un recordatorio tarde puede caer fuera de la ventana legal, y **uno meramente inútil es mejor resultado que uno ilegal**; y SMS apagado → **`skipped: sms_disabled`**, leído de **`tenant.sms_enabled`** (columna, §10.16) y no del entorno, con test que voltea la fila para probar que la columna decide.
+- ⚠️ **`catch {}` que corregí antes de que se quedara.** La primera corrida reportó `1 failed` y nada más — indistinguible de un despachador roto de una forma que nadie puede nombrar. **Ahora imprime la razón**, y eso encontró el bug de inmediato: el driver devuelve `fire_at` como **string**, no `Date`, así que `getTime is not a function`. Compilaba limpio. Ahora se pide como ISO-8601 UTC explícito, no `::text`, cuya salida `new Date` parsea por buena voluntad del motor y no por especificación.
+
+**pg-boss, con un esquema que NO puede modificar.** Instalado por el **migrador en el deploy** (`npm run db:jobs`); el worker corre con **`migrate: false`** y `crm_app` **no tiene CREATE** sobre el esquema. pg-boss migra su propio esquema al arrancar si lo dejás, y **una librería emitiendo DDL contra producción bajo la credencial de la aplicación es el cambio que nadie vería**. Medido antes de confiar: **en pg-boss 12 una cola es no particionada por default**, así que nada de lo que hace en runtime necesita crear un objeto — verificado con `has_schema_privilege` y `prosecdef`.
+
+- ✅ **La exención de esquema es load-bearing, y lo probé volteándola:** sin la fila en `security.schema_policy`, `harden()` levanta **`HR001: relation pgboss.version has no security.table_registry row`** y el deploy muere. `managed_relations()` escanea **todo** esquema. Eso es el gate funcionando; por eso la exención está escrita con su razón en la migración y no descubierta en un deploy rojo.
+- **La puerta del claim es una FUNCIÓN, no una tercera puerta.** La forma obvia sería `withoutTenantContext(fn)` y sería *segura* —sin contexto toda política evalúa contra NULL y devuelve cero filas, que la suite del silo ya asserta—, pero sería **una escotilla de propósito general en el único módulo que existe para que no haya una**. `claimDueJobs()` corre una sentencia y devuelve filas; no hay nada que pasarle.
+- ⚠️ **Declarado y NO cableado: la topología plegada.** `npm run worker` corre el proceso separado y `workerEnabled()` lee `PROCESS_ROLES`, pero **el worker todavía NO arranca dentro del proceso web**. Afirmar que es plegable sin haberlo cableado sería exactamente el fallo de "documentación, no mecanismo". Lo que sí es cierto hoy: nada del despachador sabe en cuál de los dos está.
+- **Verificado corriendo el proceso de verdad**, no sólo en test: dos jobs sembrados, uno a −1 min y otro a −40, y el worker resolvió `skipped: sms_disabled` y `dropped: 40m late`.
+- ⚠️ **Y un test flaky mío, atrapado por el hook de pre-commit y corregido, no reintentado.** El test del undo del ítem anterior usaba un hueco de 1,1 s contra una ventana de 900 ms, así que la segunda aserción necesitaba que la reversa siguiera siendo joven **después de dos round trips más** — falló una vez bajo la carga del `verify` completo, por una razón que no tenía nada que ver con el ledger. Ahora el hueco es 2,5 s contra 2,0 s, y **el fixture se assertea a sí mismo antes de assertear el producto**: lee las edades de las dos filas y exige venta > ventana > reversa. **Una máquina lenta ahora reporta un defecto de cronómetro con ese nombre, en vez de un defecto de ledger que no existe.** *Un test de dinero flaky es un test de dinero que falla.* Cuatro corridas completas seguidas, verde las cuatro.
+- ⚠️ **Trampa de sintaxis anotada:** un comentario SQL con backticks dentro de un template literal **cierra el literal**. `-- epoch, never \`milliseconds\`` rompió el parseo del archivo entero.
+
 ### 🖱️ SPRINT 1 — El drag, y una transición CSS que impedía que un color existiera (2026-08-02)
 `app/components/board/pipeline-columns.tsx`, `board.tsx` refactorizado, `tests/e2e/drag.spec.ts`. **22 tests e2e**; 106 de unit/integración sin cambios.
 
@@ -569,13 +591,13 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 | 3 | Espina dorsal del dinero | ✅ ledger, `ledger_append`, `annualize`, `leaderboard_read` |
 | 4 | Contactos + dedupe | ✅ fixture de colisión con canario a nivel de bytes |
 | 5 | Pipeline + ambos gates | ✅ gates como CHECK; `stage_move` atómico |
-| 6 | Calendario + recordatorios | 🟡 capa de dominio completa; **falta cablear pg-boss** |
+| 6 | Calendario + recordatorios | ✅ dominio **y** despachador: pg-boss cableado, claim con lease, 15-min drop y SMS-dark |
 | 7 | Leaderboard público | 🟡 tablero sí, **con el undo ya honrado**; **falta la celebración** |
 | 8 | My Day | ✅ |
 | 9 | Aloware | 🔴 **bloqueado por la Puerta 11** — necesita la cuenta real |
 | 10 | Datos demo | 🟡 siembra por el camino real y ya **se niega a duplicarse**; **faltan las aserciones DEMO-01..10** y los `lost_reason` |
 
-**Extra, no planificado:** shell de navegación, CI en GitHub Actions, aserción de arranque G4(a), **undo de 5 s**, **el test de deriva de la Puerta 10**, **el gate de axe-core con su job de CI** y **el drag de escritorio**.
+**Extra, no planificado:** shell de navegación, CI en GitHub Actions, aserción de arranque G4(a), **undo de 5 s**, **el test de deriva de la Puerta 10**, **el gate de axe-core con su job de CI**, **el drag de escritorio** y **el despachador de jobs**.
 
 ### 🔴 SPRINT 0 — estado real de la escalera
 
@@ -601,7 +623,7 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 1. ~~**Undo optimista de 5 s**~~ ✅ **HECHO (2026-08-02).** El costo que el tablero ya pagaba tiene contraprestación. Detalle arriba.
 2. ~~**axe-core bajo `test:e2e`**~~ ✅ **HECHO (2026-08-02).** 16 tests, seis superficies, dos perfiles, job propio en CI. Detalle arriba.
 3. ~~**Drag ≥1024px con puntero fino**~~ ✅ **HECHO (2026-08-02).** Hereda el undo por el mismo camino y registra `kanban_drag`. Detalle arriba. **Lo que NO cierra: la Puerta 12** — falta medir 60 fps con 500 tarjetas.
-4. **Cablear pg-boss** al `scheduled_job_claim`.
+4. ~~**Cablear pg-boss**~~ ✅ **HECHO (2026-08-02).** Detalle arriba. **Pendiente asociado:** arrancar el worker dentro del proceso web (topología plegada), hoy sólo corre separado.
 5. **Celebración** tras la ventana de undo. **Cierra la Puerta 10 del todo**: es la cuarta representación de los 5000 ms y el test de deriva ya tiene el lugar donde debe entrar.
 6. **`lost_reason` en el seed** — hoy el selector "Why?" está vacío y Closed Lost es inusable en el demo. **Confirmado por los e2e**, no sólo observado.
 7. **Alcanzabilidad por teclado de la barra de undo** — vive 5 s y está temprano en el DOM del `main`, pero un teclado que tabula desde el encabezado puede no llegar a tiempo. axe **no mide plazos**, así que esto queda fuera del gate nuevo: hay que medirlo, no suponerlo.
@@ -619,8 +641,10 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 ```bash
 npm run db:up      # Docker Postgres 18 — puede necesitar abrir Docker Desktop a mano
 npm run db:migrate
+npm run db:jobs    # instala el esquema de pg-boss COMO MIGRADOR (nunca en el arranque)
 npm run db:seed    # crea el tenant demo Y fija la contraseña dev de crm_app
 npm run dev        # http://localhost:3000
+npm run worker     # opcional: el despachador de recordatorios, proceso aparte
 ```
 Hace falta un `.env` (copiar de `.env.example`; está en `.gitignore`, así que un clon nuevo no lo trae y sin él la app **no arranca**, por diseño de G4(a)).
 

@@ -90,6 +90,65 @@ export async function withTenant<T>(
  * this, because reaching it means importing a different function by a
  * different name — which is greppable, reviewable, and countable.
  */
+/** One due job, with the tenant the caller must scope to before touching anything. */
+export interface ClaimedJob {
+  readonly tenantId: string
+  readonly jobId: string
+  readonly kind: string
+  readonly subjectId: string
+  readonly fireAt: Date
+}
+
+/**
+ * Takes a lease on the next batch of due scheduled jobs, across all tenants.
+ *
+ * A FUNCTION, not a third door. The obvious shape here would be a generic
+ * `withoutTenantContext(fn)`, and that would be safe — with no context every
+ * policy evaluates `tenant_id = app.current_tenant()` against NULL and returns
+ * zero rows, which the silo suite asserts directly. It would also be a
+ * general-purpose escape hatch sitting in the one module that exists to make
+ * sure there is not one. This runs a single statement and returns rows; there
+ * is nothing to pass it.
+ *
+ * The claim TAKES A LEASE rather than reading — see migration 0020. Two
+ * dispatchers ticking the same second used to receive the same jobs and both
+ * fire them, and the side effect of a reminder is a message to a consumer's
+ * phone.
+ *
+ * The rows carry ids and tenants only. The caller must open `withSystemWork`
+ * per row before it reads a single domain column.
+ */
+export async function claimDueJobs(limit = 50): Promise<ClaimedJob[]> {
+  return db.transaction(async (tx) => {
+    await tx.execute(dropPrivilege)
+    const rows = await tx.execute<{
+      tenant_id: string
+      job_id: string
+      kind: string
+      subject_id: string
+      // The driver hands timestamps back as strings here, not Dates. Typing it
+      // as a Date compiled cleanly and then threw `getTime is not a function`
+      // on the first real job — which the dispatcher counted as one failure and,
+      // until it started printing the reason, said nothing else about.
+      fire_at: string
+      // Rendered as explicit UTC ISO-8601 rather than left to `::text`, whose
+      // output is a local-format string that `new Date` parses by engine
+      // goodwill rather than by specification.
+    }>(sql`SELECT tenant_id, job_id, kind::text AS kind, subject_id,
+                  to_char(fire_at AT TIME ZONE 'UTC',
+                          'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS fire_at
+             FROM app.scheduled_job_claim(${limit})`)
+
+    return [...rows].map((r) => ({
+      tenantId: r.tenant_id,
+      jobId: r.job_id,
+      kind: r.kind,
+      subjectId: r.subject_id,
+      fireAt: new Date(r.fire_at),
+    }))
+  })
+}
+
 export async function withSystemWork<T>(tenantId: string, fn: (tx: Tx) => Promise<T>): Promise<T> {
   return db.transaction(async (tx) => {
     await tx.execute(sql`SELECT app.begin_system_work(${tenantId}::uuid)`)

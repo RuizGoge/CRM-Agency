@@ -23,10 +23,10 @@ const TENANT = '00000000-0000-7000-8000-0000000000f4'
 const SELLER = '00000000-0000-7000-8000-0000000000c1'
 const RIVAL = '00000000-0000-7000-8000-0000000000c2'
 /**
- * Owns no other entry in this file, deliberately. The undo assertions move the
- * reveal delay down to 900ms, which would also un-hide anything another test
- * wrote in the previous few seconds — and the run would fail, or pass, on
- * timing that has nothing to do with what is being asserted.
+ * Owns no other entry in this file, deliberately. The undo assertions shrink
+ * the reveal delay, which would also un-hide anything another test wrote in the
+ * previous few seconds — and the run would fail, or pass, on timing that has
+ * nothing to do with what is being asserted.
  */
 const UNDOER = '00000000-0000-7000-8000-0000000000c3'
 
@@ -367,13 +367,45 @@ describe('the public board hides a win that can still be undone', () => {
 
     // A real gap, so a reveal delay can be chosen that separates the two rows.
     // Well inside undo_deadline_ms (5000), which is what makes this an undo.
-    await new Promise((r) => setTimeout(r, 1_100))
+    //
+    // The margins are generous on BOTH sides deliberately. The first version
+    // used a 1.1s gap against a 900ms window, which left the second assertion
+    // needing the reversal to still be younger than 900ms after two more round
+    // trips — and it failed once, under the load of a pre-commit run, for a
+    // reason that had nothing to do with the ledger. A flaky money test is a
+    // failing money test.
+    const GAP_MS = 2_500
+    const REVEAL_MS = 2_000
+
+    await new Promise((r) => setTimeout(r, GAP_MS))
     await seedReversal(UNDOER, '00000000-0000-7000-8000-00000000e011', -88_800n, sale.entryId)
 
-    await sql`UPDATE ref.timing_constant SET value_ms = 900 WHERE key = 'projection_reveal_delay_ms'`
+    await sql`
+      UPDATE ref.timing_constant SET value_ms = ${REVEAL_MS}
+      WHERE key = 'projection_reveal_delay_ms'`
     try {
-      // The sale is now older than 900ms and the reversal is milliseconds old:
-      // the exact window in which the old predicate republished the win.
+      // The fixture asserts ITSELF before it asserts the product. This test is
+      // only meaningful at one instant — sale already public, reversal not yet —
+      // and a machine slow enough to miss that instant would otherwise report a
+      // ledger defect that is really a stopwatch defect.
+      const [ages] = await sql<{ sale_ms: number; reversal_ms: number }[]>`
+        SELECT
+          -- epoch, never the milliseconds field: that one is the
+          -- seconds-and-milliseconds component and wraps every minute.
+          max(CASE WHEN entry_type = 'sale'
+                   THEN extract(epoch from clock_timestamp() - recorded_at) * 1000 END)::int
+            AS sale_ms,
+          max(CASE WHEN entry_type = 'reversal'
+                   THEN extract(epoch from clock_timestamp() - recorded_at) * 1000 END)::int
+            AS reversal_ms
+        FROM app.earnings_ledger
+        WHERE tenant_id = ${TENANT} AND owner_user_id = ${UNDOER}`
+
+      expect(ages?.sale_ms, 'the sale must be old enough to be public').toBeGreaterThan(REVEAL_MS)
+      expect(ages?.reversal_ms, 'the reversal must still be young').toBeLessThan(REVEAL_MS)
+
+      // The exact instant in which the old predicate republished the win: sale
+      // past the reveal delay, reversal still inside it.
       expect(await publicTotal(UNDOER)).toBe(baseline)
 
       // The other side of the gate. Shrink the undo deadline below the gap and
@@ -381,6 +413,9 @@ describe('the public board hides a win that can still be undone', () => {
       // correction — which the board is supposed to reveal on the delay. A
       // rule that withheld EVERY reversal would stay green here and would be
       // hiding real corrections forever.
+      //
+      // 200ms is well under the 2.5s gap, so the pair fails the undo test by a
+      // wide margin rather than by a hair.
       await sql`UPDATE ref.timing_constant SET value_ms = 200 WHERE key = 'undo_deadline_ms'`
       expect(await publicTotal(UNDOER)).toBe(baseline + 88_800n)
     } finally {
