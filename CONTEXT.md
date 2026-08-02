@@ -18,6 +18,34 @@ Evidencia completa: [`docs/sprint-0/g0-us-region.md`](docs/sprint-0/g0-us-region
 - **G0-hour · números de costo: ✅ el modelo de la arquitectura era correcto en TODAS las líneas.** Confirmados: storage **$0.30/GB/mes sin asignación incluida** (leído en vivo: 15 GB → $4,50/mes), egress Hobby **5 GB + $0.15/GB**, **PITR de 3 días en Hobby** (§9.4.2 ya lo decía), **Starter $7 a 0,5 vCPU** y **Basic-1gb $19**. **La línea innegociable sobrevive:** los backups son propiedad de la *instancia* pagada, no del *workspace* Pro. Dos confirmaciones colaterales: **Starter es 0,5 vCPU y no un núcleo** (la corrección que G6 ya cargaba) y **el salto Starter→Standard es exactamente +$18**, la válvula de escape que G6 había presupuestado. Y el campo Storage dice *"you can't decrease it"* — la frase que convierte el archivo en R2 en mecanismo de presupuesto y no en optimización.
 - **Consecuencia para G9:** la ventana real de recuperación son **3 días de PITR**, no 7. Una corrupción del ledger descubierta al día 4 solo se recupera del dump horario a R2.
 
+### 🧱 SPRINT 1 · ITEM 1 — Fundaciones de datos y arnés de RLS (2026-08-01)
+**Primer código de producto del proyecto.** Tres migraciones aplicadas y verificadas contra Postgres 18 local.
+
+- `0000_bootstrap` — extensiones (`citext`, `pg_trgm`, `btree_gin`), roles `crm_migrator` / `crm_app` (NOINHERIT, con `idle_in_transaction_session_timeout`), `security.table_registry`, `security.schema_policy`, `security.managed_relations()`, `security.refuse_mutation()` y **`security.harden()`**.
+- `0001_tenancy_foundations` — generada por Drizzle: esquemas `app`/`ref`, enums `user_role` y `earnings_disposition`, tablas **`tenant`** y **`app_user`**.
+- `0002_context_and_harden` — `app.current_tenant()`, `app.current_user_id()`, `app.scope_is_global()`, `app.scope_is_admin()`, el trigger de validación de `business_tz`, las filas de registro y la primera corrida de `harden()`.
+
+**Las políticas se GENERAN, nunca se escriben.** `harden()` las deriva de la clasificación en `security.table_registry`. Como no hay dónde escribir una política, la falla de escribir `USING` sin `WITH CHECK` queda eliminada en el origen — que era el punto. **`FOR ALL` es la única forma permitida**, porque Postgres hace de `WITH CHECK` sobre `FOR SELECT` un error de sintaxis, y un gate insatisfacible se "arregla" debilitándolo.
+
+**Verificado ejecutándose, no en papel** — nueve aserciones, todas verdes:
+| # | Aserción | Resultado |
+|---|---|---|
+| A | FORCE RLS en toda relación gestionada | ✅ |
+| B | Toda política es `FOR ALL` con `qual` **y** `with_check` | ✅ **0 violaciones** |
+| C | `crm_app` sin `DELETE` en ningún lado | ✅ **0 grants** |
+| D | Tabla sin clasificar → **`harden()` levanta HR001 y rompe el deploy** | ✅ |
+| E | Tabla creada en `public` → también rompe el deploy | ✅ |
+| F1 | Sin contexto de sesión → **cero filas, no un error** | ✅ |
+| F2 | Ana ve sólo su propia fila | ✅ |
+| F3 | **Ana escribiendo una fila de Ben → RECHAZADO** | ✅ el modo de falla de `USING`-only, cerrado |
+| F4 | Ana no puede `DELETE` — privilegio, no política | ✅ |
+| F5 | Vendedor forjando `scope_mode=tenant_read` → **no obtiene alcance global** | ✅ el GUC no se cree; se re-lee `app_user.role` |
+
+- **Trampa evitada y documentada:** `app_user` es la única tabla con dueño que es legible a nivel tenant a propósito. Si su `USING` llamara a `scope_is_global()` — que a su vez lee `app_user` — Postgres levanta *"infinite recursion detected in policy"*. La clase `tenant_scoped` genera un `USING` que no la llama.
+- **Desviación documentada:** `policy_class` vive en el esquema `security`, no en `app` (05b §938). Es metadata que `crm_app` nunca puede leer y evita un peligro de orden en el bootstrap. Sin consecuencia de comportamiento.
+- ⚠️ **PENDIENTE INMEDIATO — sin esto NO es un mecanismo:** las nueve aserciones se corrieron **a mano, una vez**. Por la regla de oro del proyecto, eso es documentación, no garantía. **Hay que convertirlas en suite de tests que rompa el build.** Hasta entonces, verificado ≠ garantizado.
+- **También pendiente:** el trigger que rechaza `is_demo=true` en producción (necesita `system_constant`, que aún no existe) y la validación de `display_tz` en `app_user`.
+
 ### 🟡 G1 PARCIALMENTE CERRADO — 2026-08-01
 Sonda contra `postgres:18-alpine` local (server **18.4**). Evidencia: [`docs/sprint-0/g1-platform-probe.md`](docs/sprint-0/g1-platform-probe.md).
 
