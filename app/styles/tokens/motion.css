@@ -46,4 +46,25 @@
     transition-duration: 1ms !important;
     scroll-behavior: auto !important;
   }
+
+  /* The one exemption, and it is the rule above rather than a hole in it: the
+   * undo rail is not movement, it is the deadline drawn. Collapsed to 1ms it
+   * empties instantly and tells a seller their five seconds are gone while
+   * four and a half remain — feedback removed, which this block exists not to
+   * do. Same duration for everyone; the drain is linear and carries no
+   * parallax, bounce or travel. */
+  .undo-window-rail {
+    animation-duration: var(--time-undo-window) !important;
+  }
+}
+
+/* Draws --time-undo-window. Nothing else may use it: a second caller would be
+ * a second thing claiming to mean the undo window. */
+@keyframes undo-window-drain {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
 }

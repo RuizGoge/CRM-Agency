@@ -49,6 +49,41 @@ Evidencia completa: [`docs/sprint-0/g0-us-region.md`](docs/sprint-0/g0-us-region
 - **Dos aserciones más que agregó la suite:** un supervisor obtiene lectura global **pero la escritura le sigue siendo rechazada** (`USING` pasa, `WITH CHECK` falla — esa asimetría *es* el modelo de autorización, y es lo que hace que el caso del supervisor sea 403 y no un not-found), y el enum `user_role` tiene **exactamente tres etiquetas**, la forma mecánica de "no hay constructor de roles ni matriz de permisos".
 - **También pendiente:** el trigger que rechaza `is_demo=true` en producción (necesita `system_constant`, que aún no existe) y la validación de `display_tz` en `app_user`.
 
+### ↩️ SPRINT 1 — El undo de 5 s, y el defecto que sólo aparece cuando el undo existe (2026-08-02)
+Migración **0019**, `app/components/board/undo-bar.tsx`, `app/routes/ui/board.tsx`, **5 tests nuevos**. Total: **106**.
+
+🔴 **EL HALLAZGO DEL ÍTEM: `leaderboard_read` publicaba una venta ya deshecha, durante ~3 segundos, en el tablero público.** Retener las entradas más jóvenes que `projection_reveal_delay_ms` convierte al tablero en una **reproducción diferida** del ledger. Eso es correcto para una corrección y **exactamente equivocado para un undo**, porque un undo son DOS filas y el retardo se mide sobre cada una por separado:
+
+| t | Evento | Proyección | Público |
+|---|---|---|---|
+| 0,0 s | venta +$2.220 | $2.220 | $0 (retenida) |
+| 3,0 s | reversa −$2.220 | $0 | $0 (las dos retenidas) |
+| 5,5 s | la **venta** envejece y sale de la ventana | $0 | **$2.220 ← MAL** |
+| 8,5 s | la reversa envejece | $0 | $0 |
+
+Tres segundos mostrando una venta que el vendedor ya canceló, y después retirándola. **Es el fallo que la regla R1.3 existe para hacer imposible.** Vivía desde el ítem 3 y era estrecho porque la única forma de producir una reversa era arrastrar una tarjeta fuera de una etapa earning; **el día que `Undo` es un botón en cada venta, pasa a ser el caso normal**.
+
+**La regla, escrita una sola vez:** *una reversa registrada dentro de `undo_deadline_ms` de la entrada que revierte es un UNDO, y ninguna de las dos mitades se publica jamás.* Registrada más tarde es una **corrección** ordinaria y conserva el retardo ordinario. Los dos intervalos hacen trabajos distintos y por primera vez aparecen juntos: el **reveal** decide *cuándo* una entrada se hace pública; el **undo deadline** decide *si el par es un undo*.
+
+- **`reverses_entry_id` dejó de ser decorativo.** `stage_move` le pasaba `NULL` — un campo que documentaba una intención que nada usaba. Ahora la reversa **nombra** el crédito que cancela, con `CHECK` que rechaza una reversa sin objetivo, FK compuesta (una reversa hacia otro tenant no se rechaza: es inescribible) y **único parcial** para que no haya dos reversas de la misma entrada.
+- **`SM005`:** salir de una etapa earning sin crédito sin revertir detrás ahora **levanta**, en vez de escribir un delta negativo que empujaría el total público bajo cero sin job de recomputo que lo note.
+- 🎯 **Probado por mutación y con el número del síntoma.** Saqué las dos cláusulas del predicado y el test se puso rojo con `expected 88800n to be 0n` — la venta cancelada, publicada. Revertido.
+- ✅ **VERIFICADO EN PANTALLA, que es lo que decide.** Venta de **$9.000** deshecha a los **3.102 ms** medidos en el ledger, con el tablero público muestreado **57 veces en 11,4 segundos**: **un solo valor distinto**, $11.429,88. La banda 5,0–10,5 s —donde el predicado viejo habría mostrado $20.429,88— quedó plana. Un primer intento con un undo de 92 ms **no probaba nada** y lo repetí: con esa separación el defecto viejo dura 92 ms y el muestreo lo habría pasado por alto.
+- **El undo NO es un camino privilegiado.** Es un POST al mismo `stage_move` con el mismo gate; no borra nada, apendea una reversa. **Quién publica el par lo decide la distancia entre las dos filas del ledger, no qué botón se apretó** — así que un vendedor que arrastra la tarjeta de vuelta a mano dentro de la ventana queda protegido igual. Eso es lo que lo hace mecanismo y no característica de un botón.
+- **Un error refutado por medirlo.** Escribí que el riel de cuenta atrás sobrevivía a `prefers-reduced-motion`; el bloque pone `animation-duration: 1ms !important` sobre `*`. Le puse exención explícita a `.undo-window-rail` **con su razón** (un riel colapsado a 1 ms informa que el plazo se agotó con 4,5 s por delante: eso es quitar *feedback*, que es justo lo que ese bloque dice no hacer). **Mi primera sonda fue inválida** —midió con el `@media` inactivo— y la rehíce aislando la especificidad: **riel 5 s, todo lo demás 1 ms**.
+- **El error del undo tiene dónde verse.** Un movimiento rechazado fuera de la move-sheet no tenía superficie: la tarjeta volvía sola y en silencio. Ahora hay `role="alert"` a nivel de pantalla, verificado con un `SM404` real → *"That card is no longer where it was. Nothing changed."* — nunca "no podés", que confirmaría que el registro existe.
+- ✅ **Puerta 10 casi cerrada: existe el test de deriva.** Compara **valores, nunca nombres** (E7/NEW-1 registra que un test que compara nombres sigue verde a través del fallo exacto que fue escrito para atrapar) entre **TypeScript, CSS y SQL**, más la relación `reveal = undo + guard` en vez del literal 5500. Falta la cuarta representación, el scheduler de la celebración, que todavía no existe.
+- ⏳ **Observado y NO corregido:** una tarjeta que vuelve de Closed Won conserva su prima, así que **columnas abiertas ahora muestran total** ("New Lead $9,000"). Es valor de pipeline y el color lo distingue del de earnings, pero comparten ranura visual. Decisión de tablero, de Jorge.
+
+#### 🌱 Tres defectos del seed, encontrados al intentar verificar en pantalla
+Ninguno tiene que ver con el undo; los tres bloqueaban verificarlo, y los tres se descubren **corriendo el procedimiento que el propio `CONTEXT.md` manda correr al retomar una sesión**.
+
+1. 🔴 **`npm run db:seed` sobre una base ya sembrada DUPLICABA el tenant demo.** Tenant, usuarios y pipeline tenían `ON CONFLICT DO NOTHING`; etapas, contactos y oportunidades no. El tablero volvió con **cada columna y cada tarjeta dos veces** — y, invisible ahí, **cada duplicado pasó por `stage_move`, así que se apendeó un segundo juego completo de entradas y el total PÚBLICO de cada vendedor se duplicó**. Es el tenant que se muestra en un demo comercial. **No hay limpieza posible y eso es el diseño:** `earnings_ledger` rechaza UPDATE, DELETE y TRUNCATE por trigger de sentencia, al dueño y al superusuario, no sólo a `crm_app`. **El único reset de un ledger es una base nueva**, y eso es lo que el script ahora dice al negarse.
+2. **El comando que ese mensaje imprimía no funcionaba.** `db:down` deja el volumen nombrado en su lugar, así que el cluster vuelve con todas las filas y el mensaje se imprime otra vez. Agregado **`npm run db:reset`** (`down -v`). *Un consejo que no funciona es peor que ninguno.*
+3. 🔴 **El seed no podía correr contra una base genuinamente nueva.** `auth` era import estático, y el adaptador drizzle de better-auth abre su pool **como `crm_app` al cargar el módulo** — o sea antes de la línea que fija la contraseña. Murió con `password authentication failed for user "crm_app"`. El archivo ya tenía comentado ese mismo peligro para `~/db` y lo resolvía con import dinámico; **`auth` tenía el peligro idéntico y se pasó por alto**. Invisible desde la migración 0018 porque toda corrida cayó sobre una base que ya tenía contraseña. **Un camino que nunca se ejecutó no es infraestructura verificada.**
+
+- ⏳ **Observado y no corregido:** el seed no crea ni un `lost_reason`, así que en el demo el selector "Why?" de Closed Lost está vacío y **la columna Closed Lost es inusable**. Candidato directo a las aserciones `DEMO-01..10` pendientes.
+
 ### 🔒 CI + G4(a): la app se niega a arrancar si puede saltear el silo (2026-08-02)
 `.github/workflows/verify.yml`, migración **0018**, `app/db/boot-assert.ts`, **3 tests nuevos**. Total: **101**.
 
@@ -500,12 +535,12 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 | 4 | Contactos + dedupe | ✅ fixture de colisión con canario a nivel de bytes |
 | 5 | Pipeline + ambos gates | ✅ gates como CHECK; `stage_move` atómico |
 | 6 | Calendario + recordatorios | 🟡 capa de dominio completa; **falta cablear pg-boss** |
-| 7 | Leaderboard público | 🟡 tablero sí; **falta la celebración** |
+| 7 | Leaderboard público | 🟡 tablero sí, **con el undo ya honrado**; **falta la celebración** |
 | 8 | My Day | ✅ |
 | 9 | Aloware | 🔴 **bloqueado por la Puerta 11** — necesita la cuenta real |
-| 10 | Datos demo | 🟡 `scripts/seed.ts` siembra por el camino real; **faltan las aserciones DEMO-01..10** |
+| 10 | Datos demo | 🟡 siembra por el camino real y ya **se niega a duplicarse**; **faltan las aserciones DEMO-01..10** y los `lost_reason` |
 
-**Extra, no planificado:** shell de navegación, CI en GitHub Actions, aserción de arranque G4(a).
+**Extra, no planificado:** shell de navegación, CI en GitHub Actions, aserción de arranque G4(a), **undo de 5 s y el test de deriva de la Puerta 10**.
 
 ### 🔴 SPRINT 0 — estado real de la escalera
 
@@ -521,18 +556,19 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 | 7 | SSE detrás del proxy | ⬜ no empezado |
 | 8 | pg-boss bajo estrés de versión | ⬜ no empezado |
 | 9 | Simulacro de restauración | ⬜ no empezado |
-| 10 | Los 5000 ms en cuatro representaciones | 🟡 los dos intervalos existen en SQL y TS; **falta el test de deriva** |
+| 10 | Los 5000 ms en cuatro representaciones | 🟡 **el test de deriva EXISTE** y compara valores (TS · CSS · SQL) más la relación `reveal = undo + guard`. Falta la 4ª representación: el scheduler de la celebración, que aún no se construyó |
 | 11 | Bundle y primer paint medidos | ⬜ **fija los dos presupuestos que hoy no tienen número** (E6/R7) |
 | 12 | Drag a 60 fps con 500 tarjetas | 🟡 move-sheet construida primero (camino universal); **falta el drag** |
 | 13 | Publicar las contradicciones | ✅ `docs/sprint-0/g13-published-contradictions.md` |
 
 ### ▶️ LO SIGUIENTE, en orden
 
-1. **Undo optimista de 5 s** — *en curso cuando se cortó la sesión.* Hoy el tablero esconde cada venta ~10 s para proteger un undo **que no existe**: el costo se cobra, la contraprestación no.
-2. **axe-core bajo `test:e2e`** — el script existe en `package.json` y **no hay un solo test de Playwright**. WCAG con cero hallazgos serios está declarado como gate.
-3. **Drag ≥1024px con puntero fino** — la move-sheet ya es el camino universal, así que el drag es aditivo y su fallo queda confinado.
+1. ~~**Undo optimista de 5 s**~~ ✅ **HECHO (2026-08-02).** El costo que el tablero ya pagaba tiene contraprestación. Detalle arriba.
+2. **axe-core bajo `test:e2e`** — el script existe en `package.json` y **no hay un solo test de Playwright**. WCAG con cero hallazgos serios está declarado como gate. **Nota nueva:** la barra de undo vive 5 s, así que un teclado que tabula desde el encabezado puede no alcanzarla a tiempo — está temprano en el DOM del `main`, pero eso hay que medirlo, no suponerlo.
+3. **Drag ≥1024px con puntero fino** — la move-sheet ya es el camino universal, así que el drag es aditivo y su fallo queda confinado. **Ya hereda el undo**: el drag redirige al mismo `?moved=…&from=…`.
 4. **Cablear pg-boss** al `scheduled_job_claim`.
-5. **Celebración** tras la ventana de undo.
+5. **Celebración** tras la ventana de undo. **Cierra la Puerta 10 del todo**: es la cuarta representación de los 5000 ms y el test de deriva ya tiene el lugar donde debe entrar.
+6. **`lost_reason` en el seed** — hoy el selector "Why?" está vacío y Closed Lost es inusable en el demo.
 
 ### 🧾 DEUDA TÉCNICA DECLARADA (no perder de vista)
 - **E9 está firmada pero NO implementada:** no existe `ref.capability_probe`. Llega con el módulo Aloware.
@@ -550,6 +586,13 @@ npm run db:migrate
 npm run db:seed    # crea el tenant demo Y fija la contraseña dev de crm_app
 npm run dev        # http://localhost:3000
 ```
+Hace falta un `.env` (copiar de `.env.example`; está en `.gitignore`, así que un clon nuevo no lo trae y sin él la app **no arranca**, por diseño de G4(a)).
+
+**`db:seed` se niega si la base ya está sembrada**, y tiene razón: sembrar dos veces duplicaba las tarjetas y el total público. Para volver a empezar de verdad:
+```bash
+npm run db:reset && npm run db:up && npm run db:migrate && npm run db:seed
+```
+`db:down` **no** alcanza — deja el volumen y las filas vuelven.
 Entrar con `renata@demo.test` / `demo-password-1234`. Otros: `priya@`, `marcus@`, `dana@`, `tomas@` (este último con **cero ventas** a propósito: es el caso que probó que el tablero debía incluirlo).
 
 ### Decisiones abiertas que Jorge confirma cuando quiera (ninguna bloquea la escritura; van con mi recomendación): propiedad del registro 10DLC (agencia del cliente vs nuestra); grabación de llamadas si el aviso no se dispara en el two-legged → *reco: desactivar a nivel de cuenta*; retención de payloads crudos → *reco: 60 días*; atajos de una tecla → *reco: apagados por defecto los primeros 30 días*; Sentry Team USD 26 pre-aprobado para activar el día del primer incidente; confirmar que sin email no hay reset de contraseña autogestionado; y si habrá una 2ª persona con acceso en 12 meses (**+USD 25/mes planos** — corregido en G0 desde el "+USD 51" que decía antes; Render reemplazó sus planes de workspace el 2026-04-23 y Pro dejó de cobrar por asiento. La prohibición de §9.4.5 no cambia, solo su aritmética).

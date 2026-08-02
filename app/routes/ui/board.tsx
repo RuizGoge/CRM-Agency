@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm'
 import { Form, Link, redirect, useSearchParams } from 'react-router'
 
+import { UndoBar } from '~/components/board/undo-bar'
 import { withTenant } from '~/db'
 import { requireIdentity } from '~/lib/auth/identity'
 import { MoneyError, format, fromWireString, parseUserAmount } from '~/lib/money/money'
@@ -49,9 +50,14 @@ export async function action({ request }: Route.ActionArgs): Promise<Response | 
 
   const opportunityId = field(form, 'opportunityId')
   const toStageId = field(form, 'toStageId')
+  const fromStageId = field(form, 'fromStageId')
   const rawPremium = field(form, 'premium').trim()
   const mode = field(form, 'premiumMode')
   const lostReasonId = field(form, 'lostReasonId')
+  // An undo is an ordinary move back through the ordinary gate. The only thing
+  // it changes here is what the next screen offers: undoing an undo is a loop,
+  // so that redirect carries no bar.
+  const isUndo = field(form, 'intent') === 'undo'
 
   let premiumCents: string | null = null
   if (rawPremium !== '') {
@@ -94,10 +100,22 @@ export async function action({ request }: Route.ActionArgs): Promise<Response | 
     if (text.includes('premium_in_range')) {
       return { error: 'Deal value must be between $1 and $100,000 a year.' }
     }
+    if (text.includes('SM404')) {
+      // Owner-scoped not-found. Reached by an undo whose card moved underneath
+      // it — and never phrased as "you may not", because that confirms the
+      // record exists.
+      return { error: 'That card is no longer where it was. Nothing changed.' }
+    }
     return { error: 'That move could not be saved. Nothing changed.' }
   }
 
-  return redirect('/board')
+  // Enough to name the move and to walk it back: which card, and which column
+  // it came from. No money in the URL, ever — the bar reads the card off the
+  // board it just reloaded.
+  if (isUndo || fromStageId === '') return redirect('/board')
+  return redirect(
+    `/board?${new URLSearchParams({ moved: opportunityId, from: fromStageId }).toString()}`,
+  )
 }
 
 export default function Board({ loaderData, actionData }: Route.ComponentProps) {
@@ -105,6 +123,19 @@ export default function Board({ loaderData, actionData }: Route.ComponentProps) 
   const movingId = params.get('move')
   const moving = loaderData.columns.flatMap((c) => c.cards).find((c) => c.id === movingId)
   const from = loaderData.columns.find((c) => c.cards.some((k) => k.id === movingId))
+  const error = actionData && 'error' in actionData ? actionData.error : null
+
+  // The card that just moved, resolved against the board as it is NOW rather
+  // than trusted from the URL. A stale link, a card moved in another tab, or a
+  // back button lands on `undefined` and offers no undo, instead of offering
+  // one that would fail.
+  const movedId = params.get('moved')
+  const backId = params.get('from')
+  const movedTo = movedId
+    ? loaderData.columns.find((c) => c.cards.some((k) => k.id === movedId))
+    : undefined
+  const movedCard = movedTo?.cards.find((k) => k.id === movedId)
+  const back = backId ? loaderData.columns.find((c) => c.id === backId) : undefined
 
   return (
     <main style={{ padding: 'var(--space-8) var(--space-6)' }}>
@@ -118,6 +149,26 @@ export default function Board({ loaderData, actionData }: Route.ComponentProps) 
       >
         Pipeline
       </h1>
+
+      {/* A refused move outside the move sheet — an undo, most often — has
+          nowhere else to be seen. A card that quietly springs back with no
+          message is how a seller learns to distrust the board. */}
+      {error && !moving ? (
+        <p
+          role="alert"
+          style={{
+            marginBottom: 'var(--space-5)',
+            padding: 'var(--space-3) var(--space-4)',
+            borderRadius: 'var(--radius-md)',
+            background: 'var(--color-danger-fill)',
+            border: '1px solid var(--color-danger-stroke)',
+            color: 'var(--color-danger-text)',
+            fontSize: 'var(--type-sm)',
+          }}
+        >
+          {error}
+        </p>
+      ) : null}
 
       <div
         style={{
@@ -135,10 +186,24 @@ export default function Board({ loaderData, actionData }: Route.ComponentProps) 
       {moving && from ? (
         <MoveSheet
           card={moving}
+          fromId={from.id}
           fromName={from.name}
           columns={loaderData.columns}
           lostReasons={loaderData.lostReasons}
-          error={actionData && 'error' in actionData ? actionData.error : null}
+          error={error}
+        />
+      ) : null}
+
+      {/* Keyed by the card, so a second move remounts the bar and restarts the
+          window rather than inheriting the remains of the first one. */}
+      {movedCard && movedTo && back ? (
+        <UndoBar
+          key={movedCard.id}
+          opportunityId={movedCard.id}
+          contactName={movedCard.contactName}
+          toStageName={movedTo.name}
+          backStageId={back.id}
+          backStageName={back.name}
         />
       ) : null}
     </main>
@@ -282,12 +347,14 @@ function Column({ column }: { column: BoardColumn }): React.JSX.Element {
 
 function MoveSheet({
   card,
+  fromId,
   fromName,
   columns,
   lostReasons,
   error,
 }: {
   card: { id: string; contactName: string }
+  fromId: string
   fromName: string
   columns: readonly BoardColumn[]
   lostReasons: ReadonlyArray<{ id: string; label: string }>
@@ -365,6 +432,8 @@ function MoveSheet({
               >
                 <input type="hidden" name="opportunityId" value={card.id} />
                 <input type="hidden" name="toStageId" value={target.id} />
+                {/* Where to put the card back, captured before it leaves. */}
+                <input type="hidden" name="fromStageId" value={fromId} />
 
                 <strong style={{ fontSize: 'var(--type-sm)' }}>{target.name}</strong>
 

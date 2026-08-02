@@ -224,14 +224,38 @@ describe('a qualified win credits exactly once, at the annual figure', () => {
     await move(CLOSER, opp, stageWon, { premium: ANNUAL, mode: 'annual' })
     await move(CLOSER, opp, stageOpen)
 
-    const rows = await sql<{ delta: string; etype: string }[]>`
-      SELECT delta_cents::text AS delta, entry_type::text AS etype
+    const rows = await sql<{ id: string; delta: string; etype: string; reverses: string | null }[]>`
+      SELECT id::text AS id, delta_cents::text AS delta, entry_type::text AS etype,
+             reverses_entry_id::text AS reverses
       FROM app.earnings_ledger
       WHERE tenant_id = ${TENANT} AND opportunity_id = ${opp}
       ORDER BY recorded_at`
 
     expect(rows.map((r) => r.etype)).toEqual(['sale', 'reversal'])
     expect(BigInt(rows[0]?.delta ?? '0') + BigInt(rows[1]?.delta ?? '0')).toBe(0n)
+
+    // The reversal NAMES the credit it cancels. Without the link the public
+    // board cannot tell a 3-second undo from a correction made next month, so
+    // it treats the undo as a correction and republishes the cancelled sale for
+    // the 500ms the two reveal clocks are apart. Migration 0019 has the case.
+    expect(rows[1]?.reverses).toBe(rows[0]?.id)
+  })
+
+  it('refuses to reverse a credit that is not there', async () => {
+    // A card can only sit in an earning stage by way of the gate, so an
+    // unreversed credit always exists behind it. If that ever stops being true,
+    // reversing anyway pushes the seller's public total NEGATIVE — and the
+    // ledger has no recompute job that would ever notice.
+    const opp = await newOpportunity()
+    await move(CLOSER, opp, stageWon, { premium: ANNUAL, mode: 'annual' })
+    await move(CLOSER, opp, stageOpen)
+
+    // Second exit with the credit already reversed: nothing left to cancel.
+    await sql`
+      UPDATE app.opportunity SET stage_id = ${stageWon}, current_stage_type = 'earning'
+      WHERE tenant_id = ${TENANT} AND id = ${opp}`
+
+    expect(await rejectionChain(move(CLOSER, opp, stageOpen))).toMatch(/SM005/)
   })
 })
 

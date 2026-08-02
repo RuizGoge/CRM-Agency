@@ -1,8 +1,11 @@
+import { readFileSync } from 'node:fs'
+
 import { sql as raw } from 'drizzle-orm'
 import postgres from 'postgres'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { withTenant } from '~/db'
+import { UNDO_PROJECTION_GUARD_MS, UNDO_WINDOW_MS } from '~/styles/tokens/timing'
 
 import { TEST_URL } from './setup/urls'
 
@@ -19,6 +22,13 @@ import { TEST_URL } from './setup/urls'
 const TENANT = '00000000-0000-7000-8000-0000000000f4'
 const SELLER = '00000000-0000-7000-8000-0000000000c1'
 const RIVAL = '00000000-0000-7000-8000-0000000000c2'
+/**
+ * Owns no other entry in this file, deliberately. The undo assertions move the
+ * reveal delay down to 900ms, which would also un-hide anything another test
+ * wrote in the previous few seconds — and the run would fail, or pass, on
+ * timing that has nothing to do with what is being asserted.
+ */
+const UNDOER = '00000000-0000-7000-8000-0000000000c3'
 
 /** $249.99 monthly — the Final Expense case the Money unit test also pins. */
 const MONTHLY_CENTS = 24_999n
@@ -48,6 +58,27 @@ async function seedEntry(
   })
 }
 
+/** The other half of an undo: a reversal that names the credit it cancels. */
+async function seedReversal(
+  owner: string,
+  sourceEventId: string,
+  deltaCents: bigint,
+  reversesEntryId: string,
+): Promise<void> {
+  await withTenant({ tenantId: TENANT, userId: owner }, (tx) =>
+    tx.execute(
+      raw`SELECT * FROM app.ledger_append(
+            ${owner}::uuid, ${sourceEventId}::uuid, 'opportunity.reopened',
+            'reversal'::app.ledger_entry_type, ${deltaCents.toString()}::bigint,
+            '2026-03-15T18:30:00Z'::timestamptz,
+            '00000000-0000-7000-8000-00000000aaa1'::uuid,
+            '00000000-0000-7000-8000-00000000bbb1'::uuid,
+            NULL, 'Closed Won', 1::bigint, NULL, NULL, NULL,
+            ${reversesEntryId}::uuid)`,
+    ),
+  )
+}
+
 beforeAll(async () => {
   sql = postgres(TEST_URL, { max: 1, onnotice: () => {} })
 
@@ -60,7 +91,8 @@ beforeAll(async () => {
   await sql`
     INSERT INTO app.app_user (tenant_id, id, email, full_name, display_name, role) VALUES
       (${TENANT}, ${SELLER}, 'closer@money.test', 'Cleo Closer', 'Cleo', 'seller'),
-      (${TENANT}, ${RIVAL},  'rival@money.test',  'Rita Rival',  'Rita', 'seller')`
+      (${TENANT}, ${RIVAL},  'rival@money.test',  'Rita Rival',  'Rita', 'seller'),
+      (${TENANT}, ${UNDOER}, 'undoer@money.test', 'Uma Undo',    'Uma',  'seller')`
 })
 
 afterAll(async () => {
@@ -231,6 +263,46 @@ describe('the two intervals are never given one name', () => {
 
     expect(offenders).toEqual([])
   })
+
+  /**
+   * Gate 10, the part that was missing. The undo window had three live
+   * representations — TypeScript, CSS and SQL — and nothing that noticed if one
+   * moved. They only started disagreeing in ways a seller would feel once the
+   * undo existed: the toast's lifetime comes from TypeScript, the rail that
+   * draws it from CSS, and whether the public board ever publishes the pair
+   * from SQL. Three seconds of divergence is a cancelled sale on a leaderboard
+   * fifty people watch.
+   *
+   * Compares VALUES, never names. E7/NEW-1 records that a drift test comparing
+   * names stays green through exactly the failure it was written to catch.
+   */
+  it('keeps the undo window identical in TypeScript, CSS and SQL', async () => {
+    const css = readFileSync(
+      new URL('../../app/styles/tokens/motion.css', import.meta.url),
+      'utf-8',
+    )
+    const declared = /--time-undo-window:\s*(\d+)ms/.exec(css)?.[1]
+
+    const [row] = await sql<{ undo: number }[]>`SELECT app.undo_deadline_ms() AS undo`
+
+    expect(UNDO_WINDOW_MS).toBe(5000)
+    expect(Number(declared)).toBe(UNDO_WINDOW_MS)
+    expect(row?.undo).toBe(UNDO_WINDOW_MS)
+
+    // The fourth representation, the celebration scheduler, does not exist yet.
+    // When it does it belongs in this assertion — noted here rather than in a
+    // document, because this is the file that would have caught it.
+  })
+
+  it('keeps the reveal delay exactly one guard interval above the undo window', async () => {
+    const [row] = await sql<{ reveal: number }[]>`
+      SELECT app.projection_reveal_delay_ms() AS reveal`
+
+    // Not "5500", which is a number someone could re-derive wrongly. The
+    // relationship is the rule: recorded_at is stamped at INSERT while the
+    // seller's undo timer starts after COMMIT plus the network.
+    expect(row?.reveal).toBe(UNDO_WINDOW_MS + UNDO_PROJECTION_GUARD_MS)
+  })
 })
 
 describe('the public board hides a win that can still be undone', () => {
@@ -273,5 +345,75 @@ describe('the public board hides a win that can still be undone', () => {
     // And back to hidden once the window is restored — so the exclusion is the
     // window, not a coincidence of ordering.
     expect(await publicTotal(RIVAL)).toBe(baseline)
+  })
+
+  /**
+   * The defect the 5-second undo exposed, reproduced at the instant it shows.
+   *
+   * Withholding entries younger than the reveal delay makes the public board a
+   * delayed replay of the ledger. That is right for a correction and wrong for
+   * an undo, because an undo is TWO entries and the delay is measured on each
+   * one separately: the sale ages out first and the board publishes a sale the
+   * seller already cancelled, then takes it back seconds later.
+   *
+   * The fixture builds exactly that instant — a sale old enough to be public
+   * next to a reversal still inside the window — instead of sleeping through
+   * the real 5.5 seconds. Before migration 0019 this assertion is the wrong
+   * number by the full amount of the sale, which is the symptom on screen.
+   */
+  it('never publishes a sale that was undone, not even while the reversal is young', async () => {
+    const baseline = await publicTotal(UNDOER)
+    const sale = await seedEntry(UNDOER, '00000000-0000-7000-8000-00000000e010', 88_800n)
+
+    // A real gap, so a reveal delay can be chosen that separates the two rows.
+    // Well inside undo_deadline_ms (5000), which is what makes this an undo.
+    await new Promise((r) => setTimeout(r, 1_100))
+    await seedReversal(UNDOER, '00000000-0000-7000-8000-00000000e011', -88_800n, sale.entryId)
+
+    await sql`UPDATE ref.timing_constant SET value_ms = 900 WHERE key = 'projection_reveal_delay_ms'`
+    try {
+      // The sale is now older than 900ms and the reversal is milliseconds old:
+      // the exact window in which the old predicate republished the win.
+      expect(await publicTotal(UNDOER)).toBe(baseline)
+
+      // The other side of the gate. Shrink the undo deadline below the gap and
+      // the same two rows stop being an undo and become an ordinary
+      // correction — which the board is supposed to reveal on the delay. A
+      // rule that withheld EVERY reversal would stay green here and would be
+      // hiding real corrections forever.
+      await sql`UPDATE ref.timing_constant SET value_ms = 200 WHERE key = 'undo_deadline_ms'`
+      expect(await publicTotal(UNDOER)).toBe(baseline + 88_800n)
+    } finally {
+      await sql`UPDATE ref.timing_constant SET value_ms = 5000 WHERE key = 'undo_deadline_ms'`
+      await sql`UPDATE ref.timing_constant SET value_ms = 5500 WHERE key = 'projection_reveal_delay_ms'`
+    }
+
+    // Both aged out: the pair nets to zero and the board never moved at all.
+    await sql`UPDATE ref.timing_constant SET value_ms = 0 WHERE key = 'projection_reveal_delay_ms'`
+    try {
+      expect(await publicTotal(UNDOER)).toBe(baseline)
+    } finally {
+      await sql`UPDATE ref.timing_constant SET value_ms = 5500 WHERE key = 'projection_reveal_delay_ms'`
+    }
+  })
+
+  it('refuses a reversal that does not say what it reverses', async () => {
+    // Without the link an undo is indistinguishable from a correction, so it
+    // takes the correction path and lands on the public board. The constraint
+    // is what stops that from being a matter of remembering.
+    await expect(
+      sql`
+        INSERT INTO app.earnings_ledger
+          (tenant_id, owner_user_id, source_event_id, source_event_name, entry_type,
+           delta_cents, opportunity_id, contact_id, stage_name_snapshot,
+           stage_config_version, period_day, period_week, period_month,
+           business_tz_snapshot, occurred_at)
+        VALUES
+          (${TENANT}, ${SELLER}, gen_random_uuid(), 'opportunity.reopened', 'reversal',
+           -100, '00000000-0000-7000-8000-00000000aaa1',
+           '00000000-0000-7000-8000-00000000bbb1', 'Closed Won', 1,
+           DATE '2026-03-15', DATE '2026-03-09', DATE '2026-03-01',
+           'America/New_York', now())`,
+    ).rejects.toThrow(/earnings_reversal_names_its_target/)
   })
 })

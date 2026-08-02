@@ -1,8 +1,6 @@
 import { sql } from 'drizzle-orm'
 import postgres from 'postgres'
 
-import { auth } from '../app/lib/auth/server'
-
 /**
  * The development tenant.
  *
@@ -70,6 +68,44 @@ function emailLocalPart(name: string): string {
 
 const client = postgres(URL_, { max: 1, onnotice: () => {} })
 
+/**
+ * A second seed run is not a no-op, and it cannot be made into one.
+ *
+ * Found by running `npm run db:seed` on an already-seeded database — which is
+ * the literal restart procedure written in CONTEXT.md. The tenant, users and
+ * pipeline carry natural keys and were already `ON CONFLICT DO NOTHING`;
+ * stages, contacts and opportunities have none, so the board came back with
+ * every column and every card twice. Worse, and invisible on the board: each
+ * duplicate went through `stage_move`, so a second full set of ledger entries
+ * was appended and every seller's PUBLIC total doubled. The demo tenant is the
+ * one that runs in front of a customer.
+ *
+ * There is no cleanup path, by design. `earnings_ledger` refuses UPDATE,
+ * DELETE and TRUNCATE by statement trigger — to the owner and to a superuser,
+ * not only to `crm_app` — so no `DELETE FROM` this script could run would work,
+ * and one that did would be the hole the append-only record exists to close.
+ * The only reset for a ledger is a new database, and that is what this says.
+ */
+async function refuseToSeedTwice(): Promise<void> {
+  const [row] = await client<{ n: string }[]>`
+    SELECT count(*)::text AS n FROM app.earnings_ledger WHERE tenant_id = ${TENANT}`
+
+  if (row && row.n !== '0') {
+    console.error(
+      `\nThis database is already seeded — ${row.n} ledger entries for the demo tenant.` +
+        `\nSeeding again would append a SECOND set and double every public total.` +
+        `\n\nThe ledger is append-only and cannot be cleaned up, so the reset is a new database:` +
+        // db:reset, not db:down. `down` leaves the named volume in place, so
+        // the cluster comes back with every row still in it and this message
+        // prints again — advice that does not work is worse than none.
+        `\n\n  npm run db:reset && npm run db:up && npm run db:migrate && npm run db:seed\n`,
+    )
+    process.exitCode = 1
+    await client.end()
+    process.exit(1)
+  }
+}
+
 async function main(): Promise<void> {
   console.log('Seeding development tenant…')
 
@@ -83,12 +119,22 @@ async function main(): Promise<void> {
   // static import here would connect as crm_app before crm_app could log in —
   // and the boot guard would take the seed down for the right reason at the
   // wrong moment.
+  //
+  // `auth` has the SAME hazard and was a static import until a genuinely fresh
+  // volume proved it: better-auth's drizzle adapter opens its own pool as
+  // crm_app at module load, so `npm run db:seed` died with `password
+  // authentication failed for user "crm_app"` before reaching the line that
+  // sets the password. Invisible until now because every run since migration
+  // 0018 landed on a database that already had one.
   const { withTenant } = await import('../app/db')
+  const { auth } = await import('../app/lib/auth/server')
 
   await client`
     INSERT INTO app.tenant (id, name, business_tz)
     VALUES (${TENANT}, 'Demo Agency', 'America/New_York')
     ON CONFLICT (id) DO NOTHING`
+
+  await refuseToSeedTwice()
 
   for (const seller of SELLERS) {
     const email = `${emailLocalPart(seller.name)}@demo.test`

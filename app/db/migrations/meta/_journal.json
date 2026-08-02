@@ -134,6 +134,13 @@
       "when": 1785645286082,
       "tag": "0018_app_role_login",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1785734400000,
+      "tag": "0019_undo_pairs",
+      "breakpoints": true
     }
   ]
 }

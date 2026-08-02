@@ -33,6 +33,11 @@
   --color-text-on-tint: var(--p-n-700);
   --color-text-inverse: var(--p-n-0);
   --color-text-link: var(--p-b-600);
+  /* The undo affordance sits on --color-surface-inverse, where --color-text-link
+   * measures 2.03:1 and fails. At 6.43:1 this one passes AA. The primitive was
+   * reserved for exactly this in
+   * primitives.css and had no semantic name until the undo bar needed one. */
+  --color-text-link-inverse: var(--p-b-300);
 
   /* --- Interactive ------------------------------------------------------- */
   --color-action-primary-bg: var(--p-b-600);
