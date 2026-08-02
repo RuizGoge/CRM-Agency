@@ -49,6 +49,26 @@ Evidencia completa: [`docs/sprint-0/g0-us-region.md`](docs/sprint-0/g0-us-region
 - **Dos aserciones más que agregó la suite:** un supervisor obtiene lectura global **pero la escritura le sigue siendo rechazada** (`USING` pasa, `WITH CHECK` falla — esa asimetría *es* el modelo de autorización, y es lo que hace que el caso del supervisor sea 403 y no un not-found), y el enum `user_role` tiene **exactamente tres etiquetas**, la forma mecánica de "no hay constructor de roles ni matriz de permisos".
 - **También pendiente:** el trigger que rechaza `is_demo=true` en producción (necesita `system_constant`, que aún no existe) y la validación de `display_tz` en `app_user`.
 
+### 🖱️ SPRINT 1 — El drag, y una transición CSS que impedía que un color existiera (2026-08-02)
+`app/components/board/pipeline-columns.tsx`, `board.tsx` refactorizado, `tests/e2e/drag.spec.ts`. **22 tests e2e**; 106 de unit/integración sin cambios.
+
+**El drag es ADITIVO y ese orden es el diseño (G12).** La move-sheet se construyó primero y es el camino universal —móvil, teclado, tecnologías de asistencia—, así que **nada de esto es la única forma de hacer nada**: si el drag se rompe, el producto sigue funcionando y el fallo queda confinado a una superficie en una clase de dispositivo. Cada test del drag comprueba además que la move-sheet sigue ahí.
+
+- **Se arma con `>=BREAKPOINTS.lg` Y `pointer: fine`, juntas.** Sólo ancho lo encendería en una tablet grande, donde un drag compite con el gesto de scroll y **un vendedor pierde una tarjeta intentando desplazar el tablero**. El número sale del módulo de tokens; dos breakpoints hardcodeados en el árbol rompen el build.
+- **Un drop sobre una etapa con gate ABRE LA MOVE-SHEET, no falla.** Un drop no puede llevar el valor del deal ni el motivo de pérdida, y la base rechaza el movimiento sin ellos. **No es un fallback tras un rechazo: es el gate apareciendo donde aplica, antes de que al vendedor le digan que no.**
+- 🔴 **`moved_via` estaba mintiendo, y ahora se ve.** La acción escribía `'move_sheet'` fijo en TODA transición. Ahora se elige de una **lista cerrada** —nunca se pasa el valor del formulario—, porque el enum tiene siete etiquetas incluidas `automation` y `api`, y **un POST a mano no puede archivar el drag de un vendedor como algo que hizo una máquina**. Verificado en la base: `kanban_drag` para el drag, `move_sheet` para la sheet.
+- **El error del drop llega por el `fetcher`, no por `actionData`** — canal distinto, misma exigencia. Leer sólo `actionData` habría puesto la corrección en pantalla **sin explicación**, que es exactamente el fallo de corrección silenciosa que `CLAUDE.md` prohíbe.
+- **La colocación optimista NO mueve los totales de columna, a propósito.** Moverlos sería el cliente sumando y restando centavos, cosa que no hace nunca. Durante las decenas de milisegundos intermedias la tarjeta se movió y los totales no; la tarjeta se dibuja al 55% de opacidad justo por eso. **Un tablero brevemente honesto sobre estar en vuelo le gana a uno brevemente equivocado sobre dinero.**
+
+🔴 **EL DEFECTO DEL ÍTEM: `transition: background …` impedía que el color de destino APLICARA, para siempre.** El estilo inline decía `var(--color-selected-bg)` y el `backgroundColor` computado se quedaba en el valor viejo **los 500 ms completos que lo muestreé**. Chromium no interpola entre dos custom properties y el resultado no fue "sin animación": fue **el color nuevo no llegando nunca**. La columna de destino se veía inerte mientras el código decía que estaba resaltada.
+
+Lo instructivo: **el anillo sí se dibujaba** (misma condición, otra propiedad), así que al lado de un resalte que funcionaba el tinte faltante era invisible — **ninguna captura de pantalla lo habría mostrado**. Encontrado leyendo estilo computado en el tiempo. Convertido en test: la aserción es sobre `getComputedStyle`, no sobre el atributo.
+
+- **La otra mitad de la condición no la alcanzaba ningún perfil.** `mobile-ci` es un Pixel 7 a 412 px, o sea **excluido por ANCHO antes de que se consulte el puntero** — se podía borrar la cláusula `pointer: fine` y los dos perfiles seguían verdes. Agregado un caso con `test.use({ viewport: 1366, hasTouch, isMobile })`: ancho suficiente, puntero grueso. **Es el caso para el que la cláusula se escribió.**
+- 🎯 **Las dos condiciones probadas por mutación:** sacando `pointer: fine` → rojo (8 tarjetas arrastrables donde debía haber 0); haciendo que un drop sobre etapa earning se envíe directo → rojo (la sheet no aparece).
+- ⚠️ **No verificado y anotado como tal:** la **re-evaluación en vivo** al cruzar el borde de 1024 px. La emulación de viewport por CDP **no dispara `resize` ni el `change` de `matchMedia`** —lo comprobé con listeners propios, cero disparos—, así que en este entorno sólo es observable la evaluación inicial, que sí está verificada de los dos lados. El listener es estándar; **no lo estoy afirmando probado**.
+- **Tres fragilidades de test cerradas, todas del mismo origen —una suite que comparte un tenant demo—:** el drag se arma en un efecto, así que hay que **esperar a que exista una tarjeta arrastrable** antes de arrastrarla (si no, `dragTo` es un no-op que falla mucho después y en otro lado); **qué columna abierta tiene tarjetas se DESCUBRE**, no se asume (fijar "New Lead" es fijarle fecha de vencimiento al test); y **el drop va sobre la zona, no sobre la `section`** — `dragTo` apunta al centro, y el centro de una sección se corre al encabezado cuando la columna queda corta. Suite corrida tres veces seguidas, verde las tres.
+
 ### ♿ SPRINT 1 — axe-core bajo `test:e2e`: el gate de WCAG deja de ser una declaración (2026-08-02)
 `tests/e2e/a11y.spec.ts` + `undo-window.spec.ts` + `fixtures/`, `playwright.config.ts`, job `e2e` en CI. **16 tests e2e** (8 casos × dos perfiles) sobre los **106** de unit/integración.
 
@@ -555,7 +575,7 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 | 9 | Aloware | 🔴 **bloqueado por la Puerta 11** — necesita la cuenta real |
 | 10 | Datos demo | 🟡 siembra por el camino real y ya **se niega a duplicarse**; **faltan las aserciones DEMO-01..10** y los `lost_reason` |
 
-**Extra, no planificado:** shell de navegación, CI en GitHub Actions, aserción de arranque G4(a), **undo de 5 s**, **el test de deriva de la Puerta 10** y **el gate de axe-core con su job de CI**.
+**Extra, no planificado:** shell de navegación, CI en GitHub Actions, aserción de arranque G4(a), **undo de 5 s**, **el test de deriva de la Puerta 10**, **el gate de axe-core con su job de CI** y **el drag de escritorio**.
 
 ### 🔴 SPRINT 0 — estado real de la escalera
 
@@ -573,14 +593,14 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 | 9 | Simulacro de restauración | ⬜ no empezado |
 | 10 | Los 5000 ms en cuatro representaciones | 🟡 **el test de deriva EXISTE** y compara valores (TS · CSS · SQL) más la relación `reveal = undo + guard`. Falta la 4ª representación: el scheduler de la celebración, que aún no se construyó |
 | 11 | Bundle y primer paint medidos | ⬜ **fija los dos presupuestos que hoy no tienen número** (E6/R7) |
-| 12 | Drag a 60 fps con 500 tarjetas | 🟡 move-sheet construida primero (camino universal); **falta el drag** |
+| 12 | Drag a 60 fps con 500 tarjetas | 🟡 **el drag existe** y está atado a `>=lg` + `pointer: fine`, con e2e en los dos perfiles. **Falta la mitad que da nombre a la puerta: medirlo a 60 fps con 500 tarjetas.** El estado sólo cambia en `dragenter`/`dragleave`, nunca en `dragover` — condición necesaria, no la medición |
 | 13 | Publicar las contradicciones | ✅ `docs/sprint-0/g13-published-contradictions.md` |
 
 ### ▶️ LO SIGUIENTE, en orden
 
 1. ~~**Undo optimista de 5 s**~~ ✅ **HECHO (2026-08-02).** El costo que el tablero ya pagaba tiene contraprestación. Detalle arriba.
 2. ~~**axe-core bajo `test:e2e`**~~ ✅ **HECHO (2026-08-02).** 16 tests, seis superficies, dos perfiles, job propio en CI. Detalle arriba.
-3. **Drag ≥1024px con puntero fino** — la move-sheet ya es el camino universal, así que el drag es aditivo y su fallo queda confinado. **Ya hereda el undo**: el drag redirige al mismo `?moved=…&from=…`.
+3. ~~**Drag ≥1024px con puntero fino**~~ ✅ **HECHO (2026-08-02).** Hereda el undo por el mismo camino y registra `kanban_drag`. Detalle arriba. **Lo que NO cierra: la Puerta 12** — falta medir 60 fps con 500 tarjetas.
 4. **Cablear pg-boss** al `scheduled_job_claim`.
 5. **Celebración** tras la ventana de undo. **Cierra la Puerta 10 del todo**: es la cuarta representación de los 5000 ms y el test de deriva ya tiene el lugar donde debe entrar.
 6. **`lost_reason` en el seed** — hoy el selector "Why?" está vacío y Closed Lost es inusable en el demo. **Confirmado por los e2e**, no sólo observado.

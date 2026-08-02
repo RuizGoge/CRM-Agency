@@ -1,10 +1,11 @@
 import { sql } from 'drizzle-orm'
-import { Form, Link, redirect, useSearchParams } from 'react-router'
+import { Form, Link, redirect, useFetcher, useNavigate, useSearchParams } from 'react-router'
 
+import { PipelineColumns } from '~/components/board/pipeline-columns'
 import { UndoBar } from '~/components/board/undo-bar'
 import { withTenant } from '~/db'
 import { requireIdentity } from '~/lib/auth/identity'
-import { MoneyError, format, fromWireString, parseUserAmount } from '~/lib/money/money'
+import { MoneyError, parseUserAmount } from '~/lib/money/money'
 import { readPipeline, type BoardColumn, type PipelinePayload } from '~/routes/api/board'
 
 import type { Route } from './+types/board'
@@ -59,6 +60,13 @@ export async function action({ request }: Route.ActionArgs): Promise<Response | 
   // so that redirect carries no bar.
   const isUndo = field(form, 'intent') === 'undo'
 
+  // `moved_via` is audit data, so it is chosen from a closed list rather than
+  // passed through. The enum has seven labels — `automation` and `api` among
+  // them — and a hand-written POST must not be able to file a seller's own
+  // drag as something a machine did. These two are the only ones this screen
+  // can honestly produce.
+  const via = field(form, 'via') === 'kanban_drag' ? 'kanban_drag' : 'move_sheet'
+
   let premiumCents: string | null = null
   if (rawPremium !== '') {
     try {
@@ -75,7 +83,7 @@ export async function action({ request }: Route.ActionArgs): Promise<Response | 
     await withTenant(identity, (tx) =>
       tx.execute(sql`
         SELECT app.stage_move(
-          ${opportunityId}::uuid, ${toStageId}::uuid, 'move_sheet'::app.moved_via,
+          ${opportunityId}::uuid, ${toStageId}::uuid, ${via}::app.moved_via,
           'human'::app.actor_type, NULL,
           ${premiumCents}::bigint, ${mode === '' ? null : mode}::app.premium_mode,
           ${lostReasonId === '' ? null : lostReasonId}::uuid, NULL)`),
@@ -118,12 +126,61 @@ export async function action({ request }: Route.ActionArgs): Promise<Response | 
   )
 }
 
+/**
+ * The card shown in its new column while the request is still out.
+ *
+ * COLUMN TOTALS ARE DELIBERATELY LEFT ALONE. Moving the money too would mean
+ * the client adding and subtracting cents, which it never does — the totals are
+ * summed by the database and arrive with the next loader run. For the tens of
+ * milliseconds in between, the card has moved and the totals have not; the card
+ * renders at reduced opacity for exactly that reason. A board that is briefly
+ * honest about being mid-flight beats one that is briefly wrong about money.
+ */
+function optimisticallyPlaced(
+  columns: readonly BoardColumn[],
+  cardId: string | null,
+  toStageId: string | null,
+): readonly BoardColumn[] {
+  if (cardId === null || toStageId === null) return columns
+
+  const card = columns.flatMap((c) => c.cards).find((k) => k.id === cardId)
+  if (!card) return columns
+
+  return columns.map((column) => {
+    if (column.id === toStageId) {
+      return { ...column, cards: [card, ...column.cards.filter((k) => k.id !== cardId)] }
+    }
+    if (column.cards.some((k) => k.id === cardId)) {
+      return { ...column, cards: column.cards.filter((k) => k.id !== cardId) }
+    }
+    return column
+  })
+}
+
 export default function Board({ loaderData, actionData }: Route.ComponentProps) {
   const [params] = useSearchParams()
+  const navigate = useNavigate()
+  const drag = useFetcher<typeof action>()
+
   const movingId = params.get('move')
   const moving = loaderData.columns.flatMap((c) => c.cards).find((c) => c.id === movingId)
   const from = loaderData.columns.find((c) => c.cards.some((k) => k.id === movingId))
-  const error = actionData && 'error' in actionData ? actionData.error : null
+
+  // A drop's refusal arrives on the fetcher, not on actionData — different
+  // channel, same requirement. `CLAUDE.md`: if the server disagrees with the
+  // optimistic state, the card corrects AND a visible message appears. Reading
+  // only actionData here would put the correction on screen with no
+  // explanation, which is precisely the silent-correction failure.
+  const dragError = drag.data && 'error' in drag.data ? drag.data.error : null
+  const error = (actionData && 'error' in actionData ? actionData.error : null) ?? dragError
+
+  // Optimistic placement, straight off the in-flight submission. The card sits
+  // in its new column while the request is out, and if the server refuses, the
+  // next render puts it back — with the message above.
+  const pendingCardId = drag.formData ? field(drag.formData, 'opportunityId') || null : null
+  const pendingToStageId = drag.formData ? field(drag.formData, 'toStageId') || null : null
+
+  const columns = optimisticallyPlaced(loaderData.columns, pendingCardId, pendingToStageId)
 
   // The card that just moved, resolved against the board as it is NOW rather
   // than trusted from the URL. A stale link, a card moved in another tab, or a
@@ -170,18 +227,21 @@ export default function Board({ loaderData, actionData }: Route.ComponentProps) 
         </p>
       ) : null}
 
-      <div
-        style={{
-          display: 'flex',
-          gap: 'var(--space-4)',
-          overflowX: 'auto',
-          paddingBottom: 'var(--space-4)',
+      <PipelineColumns
+        columns={columns}
+        pendingCardId={pendingCardId}
+        onDropCard={(cardId, fromStageId, toStageId) => {
+          void drag.submit(
+            { opportunityId: cardId, fromStageId, toStageId, via: 'kanban_drag' },
+            { method: 'post', action: '/board' },
+          )
         }}
-      >
-        {loaderData.columns.map((col) => (
-          <Column key={col.id} column={col} />
-        ))}
-      </div>
+        // The gate cannot be satisfied by a drop, so the sheet opens instead of
+        // the seller being told no after the fact.
+        onNeedsGate={(cardId) => {
+          void navigate(`/board?move=${cardId}`)
+        }}
+      />
 
       {moving && from ? (
         <MoveSheet
@@ -207,141 +267,6 @@ export default function Board({ loaderData, actionData }: Route.ComponentProps) 
         />
       ) : null}
     </main>
-  )
-}
-
-function Column({ column }: { column: BoardColumn }): React.JSX.Element {
-  const earning = column.stageType === 'earning'
-
-  return (
-    <section
-      aria-label={column.name}
-      style={{
-        flex: '0 0 17rem',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 'var(--space-3)',
-      }}
-    >
-      {/* The total sits BELOW the name rather than flush right. Pushed right it
-          lands against the next column's heading, and two adjacent columns
-          read as one run-on line. */}
-      <header style={{ display: 'grid', gap: 'var(--space-1)', minHeight: 'var(--space-10)' }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 'var(--space-2)' }}>
-          <h2 style={{ fontSize: 'var(--type-sm)', fontWeight: 'var(--font-weight-semibold)' }}>
-            {column.name}
-          </h2>
-          <span style={{ fontSize: 'var(--type-xs)', color: 'var(--color-text-tertiary)' }}>
-            {column.cards.length}
-          </span>
-        </div>
-
-        {/* Summed by the database. The client never adds money. */}
-        {column.totalCents !== '0' ? (
-          <span
-            className="money"
-            style={{
-              fontSize: 'var(--type-xs)',
-              fontWeight: 'var(--font-weight-semibold)',
-              color: earning ? 'var(--color-success-text)' : 'var(--color-text-secondary)',
-            }}
-          >
-            {format(fromWireString(column.totalCents))}
-          </span>
-        ) : null}
-      </header>
-
-      <div
-        style={{
-          display: 'grid',
-          gap: 'var(--space-2)',
-          alignContent: 'start',
-          minHeight: 'var(--space-16)',
-          padding: 'var(--space-2)',
-          background: 'var(--color-surface-2)',
-          borderRadius: 'var(--radius-lg)',
-        }}
-      >
-        {column.cards.length === 0 ? (
-          <p
-            style={{
-              margin: 0,
-              padding: 'var(--space-4) var(--space-2)',
-              textAlign: 'center',
-              fontSize: 'var(--type-xs)',
-              color: 'var(--color-text-tertiary)',
-            }}
-          >
-            Nothing here yet.
-          </p>
-        ) : (
-          column.cards.map((card) => (
-            <article
-              key={card.id}
-              style={{
-                padding: 'var(--space-3)',
-                background: 'var(--color-surface-1)',
-                border: '1px solid var(--color-border-subtle)',
-                borderRadius: 'var(--radius-md)',
-                display: 'grid',
-                gap: 'var(--space-2)',
-              }}
-            >
-              <span
-                style={{ fontSize: 'var(--type-sm)', fontWeight: 'var(--font-weight-semibold)' }}
-              >
-                {card.contactName}
-              </span>
-
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 'var(--space-2)',
-                  fontSize: 'var(--type-xs)',
-                  color: 'var(--color-text-tertiary)',
-                }}
-              >
-                {card.premiumCents ? (
-                  <span className="money" style={{ color: 'var(--color-text-secondary)' }}>
-                    {format(fromWireString(card.premiumCents))}
-                  </span>
-                ) : (
-                  <span>No value yet</span>
-                )}
-                <span aria-hidden="true">·</span>
-                <span>{card.daysUntouched}d untouched</span>
-              </div>
-
-              {card.nextActivity ? (
-                <span style={{ fontSize: 'var(--type-xs)', color: 'var(--color-text-secondary)' }}>
-                  Next: {card.nextActivity}
-                </span>
-              ) : (
-                <span style={{ fontSize: 'var(--type-xs)', color: 'var(--color-caution-text)' }}>
-                  No next step
-                </span>
-              )}
-
-              {/* The universal move path. Drag is bound later and only at
-                  >=1024px with a fine pointer, so if it ever fails the product
-                  still works from here — on mobile, from the keyboard, and
-                  with assistive technology. */}
-              <Link
-                to={`?move=${card.id}`}
-                style={{
-                  justifySelf: 'start',
-                  fontSize: 'var(--type-xs)',
-                  color: 'var(--color-text-link)',
-                }}
-              >
-                Move
-              </Link>
-            </article>
-          ))
-        )}
-      </div>
-    </section>
   )
 }
 
