@@ -71,6 +71,20 @@
       "when": 1785636950811,
       "tag": "0009_ledger_append",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1785638566979,
+      "tag": "0010_contacts",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1785638569105,
+      "tag": "0011_contacts_hardening",
+      "breakpoints": true
     }
   ]
 }

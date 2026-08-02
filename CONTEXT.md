@@ -49,6 +49,22 @@ Evidencia completa: [`docs/sprint-0/g0-us-region.md`](docs/sprint-0/g0-us-region
 - **Dos aserciones más que agregó la suite:** un supervisor obtiene lectura global **pero la escritura le sigue siendo rechazada** (`USING` pasa, `WITH CHECK` falla — esa asimetría *es* el modelo de autorización, y es lo que hace que el caso del supervisor sea 403 y no un not-found), y el enum `user_role` tiene **exactamente tres etiquetas**, la forma mecánica de "no hay constructor de roles ni matriz de permisos".
 - **También pendiente:** el trigger que rechaza `is_demo=true` en producción (necesita `system_constant`, que aún no existe) y la validación de `display_tz` en `app_user`.
 
+### 👥 SPRINT 1 · ITEM 4 — Contactos y el fixture de colisión (2026-08-01)
+Migraciones **0010–0011**, `app/db/schema/contacts.ts`, **11 tests**. Total: **70**.
+
+🔴 **EL CANARIO ATRAPÓ UNA FUGA REAL, Y ERA MÍA.** El fixture de §7.7.1 —dos vendedores con el mismo consumidor, tokens `ZZQA-` en los campos de Ana, aserción **a nivel de bytes sobre la respuesta serializada entera**— mostró las filas de Ana dentro de la búsqueda de Ben la primera vez que corrió.
+
+**Causa:** `withTenant` fijaba las tres GUCs pero **no bajaba de rol**. Un superusuario —o cualquier rol dueño del esquema— **saltea RLS por completo, FORCE incluido**. En producción la app conecta como `crm_app` y funciona; pero eso significaba que **el silo dependía de qué usuario dijera `DATABASE_URL`**, y el string que `docker compose` entrega por defecto es exactamente ese superusuario. El entorno de desarrollo entrenaba la configuración rota con fidelidad perfecta, y el fallo no tiene síntoma: todas las páginas renderizan, con las filas de todos.
+
+**Cerrado:** `withTenant` y `withSystemWork` ahora hacen `SET LOCAL ROLE crm_app` tras establecer contexto. Es defensa en profundidad — **G4(a) sigue debiendo la aserción de arranque que se niega a bootear si el usuario de conexión es dueño del esquema.**
+
+- **La aserción a nivel de bytes es el mejor test del corpus** y ahora está construida: no dice "ninguna fila con otro `owner_user_id`", dice **ninguna aparición del token en toda la respuesta** — así atrapa una fuga por una columna que se agregue dentro de seis meses y que ningún test conozca. Con su control positivo: las filas de Ana **sí** llevan el canario.
+- **La identidad es owner-scoped a propósito:** dos vendedores que compraron el mismo consumidor tienen dos filas y ninguno ve la del otro. Eso *es* el requisito, no un duplicado tolerado. La suppression, en cambio, es tenant-wide — por eso `contact_phone` es tabla aparte.
+- **`contact_live` es `security_invoker`.** Sin esa palabra, una vista propiedad del migrador lee con la política del migrador —`USING (true)`— o sea un bypass total del silo disfrazado de "vista". Hay test que lo asegura.
+- E.164 y la coherencia de zona horaria son **constraints**, no helpers: una zona `high` con valor NULL es la forma exacta en que una llamada ilegal parece permitida.
+- **Ajuste de test honesto:** la aserción de plan sobre el índice trigram se cambió por una estructural. Con seis filas el planner prefiere correctamente la PK, así que un `EXPLAIN` ahí testearía el modelo de costos de Postgres, no nuestro índice. G1e ya probó el plan contra 20.000 filas; esto cuida que nadie saque `owner_user_id` de la clave.
+- ⏳ **Debido:** el trigger diferido "un lead nunca existe sin tarjeta" (necesita `opportunity`, ítem 5) y `lead_source_id` (llega con el módulo de intake). **Omitidos en vez de construidos a medias.**
+
 ### 💰 SPRINT 1 · ITEM 3 — La espina dorsal del dinero (2026-08-01) · Opus · máximo
 Migraciones **0006–0009**, `app/db/schema/earnings.ts`, **15 tests nuevos**. Total: **59**.
 

@@ -34,6 +34,25 @@ export interface SessionIdentity {
 export type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0]
 
 /**
+ * Drops to the unprivileged role for the rest of the transaction, reverted at
+ * COMMIT or ROLLBACK along with everything else `SET LOCAL`.
+ *
+ * Without this the silo depends on WHICH USER `DATABASE_URL` names, because a
+ * superuser — or any role that owns the schema — bypasses row level security
+ * entirely, FORCE included. The string `docker compose` hands out by default
+ * is exactly such a user, so the development environment trains the broken
+ * configuration with perfect fidelity, and the failure has no symptom: every
+ * page renders, with every seller's rows.
+ *
+ * Found by the §7.7.1 canary fixture, which saw one seller's bytes in
+ * another's search response the first time it ran.
+ *
+ * This is defence in depth, not the primary control — G4(a) still owes a boot
+ * assertion that refuses to start when the connection user owns the schema.
+ */
+const dropPrivilege = sql`SET LOCAL ROLE crm_app`
+
+/**
  * Runs `fn` inside one transaction, with session context established by the
  * engine before `fn` can issue a single statement.
  *
@@ -57,6 +76,8 @@ export async function withTenant<T>(
     if (scope === undefined) {
       throw new Error('app.begin_request returned no scope')
     }
+
+    await tx.execute(dropPrivilege)
     return fn(tx, scope)
   })
 }
@@ -72,6 +93,7 @@ export async function withTenant<T>(
 export async function withSystemWork<T>(tenantId: string, fn: (tx: Tx) => Promise<T>): Promise<T> {
   return db.transaction(async (tx) => {
     await tx.execute(sql`SELECT app.begin_system_work(${tenantId}::uuid)`)
+    await tx.execute(dropPrivilege)
     return fn(tx)
   })
 }
