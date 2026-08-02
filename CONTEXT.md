@@ -49,6 +49,18 @@ Evidencia completa: [`docs/sprint-0/g0-us-region.md`](docs/sprint-0/g0-us-region
 - **Dos aserciones más que agregó la suite:** un supervisor obtiene lectura global **pero la escritura le sigue siendo rechazada** (`USING` pasa, `WITH CHECK` falla — esa asimetría *es* el modelo de autorización, y es lo que hace que el caso del supervisor sea 403 y no un not-found), y el enum `user_role` tiene **exactamente tres etiquetas**, la forma mecánica de "no hay constructor de roles ni matriz de permisos".
 - **También pendiente:** el trigger que rechaza `is_demo=true` en producción (necesita `system_constant`, que aún no existe) y la validación de `display_tz` en `app_user`.
 
+### 🧭 SPRINT 1 — El shell de navegación (2026-08-02)
+`app/routes/ui/shell.tsx` como layout, `app/routes/api/sign-out.ts`, `/` ahora redirige.
+
+Tres pantallas sin forma de ir de una a otra son tres prototipos, no un producto. El shell trae **encabezado con las pantallas, quién sos, el rol si no sos vendedor, y salir**. La redirección de no-autenticado vive **en el layout, una sola vez**, en vez de repetida por pantalla.
+
+🔴 **Un bug que sólo aparece haciendo clic: el sign out daba 405 Method Not Allowed.** Un `<Form method="post">` **sin `action`** postea a la **ruta activa**, y un layout **no tiene path propio** — así que el request resolvió a `/`, que tiene loader y no action. Corregido con una ruta dedicada `/sign-out`, que además es la forma más honesta: terminar una sesión es una operación, no una propiedad del marco donde viven las pantallas.
+
+**Verificado de punta a punta:** entrar → navegar entre My Day y Earnings con el shell persistente → salir → y confirmar que `/my-day` y `/earnings` **redirigen a `/sign-in`** estando fuera.
+
+- **Lección de método:** los primeros dos clics en "Sign out" fallaron porque el dev server todavía no había recogido la ruta nueva. **Casi lo diagnostico como un bug de código.** Mirar la red antes de teorizar fue lo que lo separó.
+- `/` dejó de ser la pantalla de fundación de la Fase 6 y ahora redirige a **My Day** si hay sesión, a `/sign-in` si no. Los tokens que esa pantalla existía para probar ahora los cargan pantallas que un vendedor usa de verdad, que es una prueba más fuerte.
+
 ### 🌅 SPRINT 1 · ITEM 8 — My Day (2026-08-02)
 `app/routes/api/my-day.ts`, `app/routes/ui/my-day.tsx`, seed extendido. Cuatro secciones con conteo en el encabezado: **Needs outcome · Today's appointments · Due now · Later today**.
 

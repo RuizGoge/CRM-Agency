@@ -1,4 +1,4 @@
-import { index, route, type RouteConfig } from '@react-router/dev/routes'
+import { index, layout, route, type RouteConfig } from '@react-router/dev/routes'
 
 /**
  * Two trees, and the split is load-bearing (docs/05-architecture.md Part III):
@@ -12,11 +12,16 @@ import { index, route, type RouteConfig } from '@react-router/dev/routes'
  */
 export default [
   index('routes/ui/home.tsx'),
-  // The one UI route allowed to serve board data as SSR HTML — see the note in
-  // the module for why it is this one and only this one.
   route('sign-in', 'routes/ui/sign-in.tsx'),
-  route('earnings', 'routes/ui/leaderboard.tsx'),
-  route('my-day', 'routes/ui/my-day.tsx'),
+
+  // Everything a seller works inside sits under one shell, which is also where
+  // the signed-out redirect lives — once, rather than repeated per screen.
+  layout('routes/ui/shell.tsx', [
+    route('my-day', 'routes/ui/my-day.tsx'),
+    route('earnings', 'routes/ui/leaderboard.tsx'),
+  ]),
+
+  route('sign-out', 'routes/api/sign-out.ts'),
   route('api/leaderboard', 'routes/api/leaderboard.ts'),
   route('api/my-day', 'routes/api/my-day.ts'),
   // better-auth mounts its whole surface under one splat. See the note in the
