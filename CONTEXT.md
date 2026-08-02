@@ -49,6 +49,22 @@ Evidencia completa: [`docs/sprint-0/g0-us-region.md`](docs/sprint-0/g0-us-region
 - **Dos aserciones más que agregó la suite:** un supervisor obtiene lectura global **pero la escritura le sigue siendo rechazada** (`USING` pasa, `WITH CHECK` falla — esa asimetría *es* el modelo de autorización, y es lo que hace que el caso del supervisor sea 403 y no un not-found), y el enum `user_role` tiene **exactamente tres etiquetas**, la forma mecánica de "no hay constructor de roles ni matriz de permisos".
 - **También pendiente:** el trigger que rechaza `is_demo=true` en producción (necesita `system_constant`, que aún no existe) y la validación de `display_tz` en `app_user`.
 
+### 📅 SPRINT 1 · ITEM 6 — Calendario y recordatorios (2026-08-01)
+Migraciones **0014–0015**, `app/db/schema/calendar.ts`, **12 tests**. Total: **98**.
+
+**El tema del módulo: un recordatorio es un artefacto legal, no una comodidad.** Tiene que disparar una vez, en el instante correcto, en una zona horaria que no se pueda reescribir después — y cuando no dispara, la razón tiene que sobrevivir.
+
+🎯 **Resuelto el riesgo residual #2 de §9.6, que tiene filo legal y no sólo operativo.** Ordenar los jobs sólo por `fire_at` a través de todos los tenants deja que la tormenta de recuperación de **un** tenant **hambree los recordatorios T-1h de todos los demás** — y un recordatorio que dispara tarde puede disparar **fuera de la ventana legal de llamada**. Vecino ruidoso con un demandante adjunto. `scheduled_job_claim` usa `DISTINCT ON (tenant_id)`: cada tenant recibe su job más viejo antes de que ninguno reciba un segundo. **Probado por mutación:** quitando la equidad, el tenant tranquilo queda fuera del primer lote detrás de una cola de 60.
+
+- **`UNIQUE (tenant_id, kind, idempotency_key) WHERE canceled_at IS NULL`** — un solo índice parcial carga **toda** la idempotencia por episodio del producto: el recordatorio T-1h, el episodio de enfriamiento y la escalada de actividad. Reagendar cancela e inserta, así que **existe exactamente un job vivo por (sujeto, kind)** y un segundo encolado es imposible, no meramente improbable. La fila superseded se retiene: es la evidencia de qué se agendó y cuándo dejó de estarlo.
+- **`skipped` es estado terminal de primera clase, no un error.** Eso es exactamente lo que permite que el ensayo SMS-dark pase sin que ningún camino falle, y es la prueba de que un recordatorio fue **omitido y no perdido**.
+- **`meeting.contact_timezone` es SNAPSHOT, nunca un join.** Una edición posterior del contacto no debe mover la hora local de una reunión pasada — ni, mucho peor, cambiar retroactivamente si un recordatorio que ya salió era legal. Con test.
+- **`needs_outcome` es predicado derivado, nunca columna**, así que no puede quedar rancio entre que la reunión termina y que un job lo note.
+- **La UNA actividad:** `app.task` es vista `security_invoker` sobre `activity WHERE type='task'` — el nombre existe para quien lo llame, sin un segundo objeto y **sin una segunda fuente de verdad para `last_activity_at`**.
+- Dos CHECK que valen: una tarea **exige** `due_at` (sin él My Day no tiene dónde ponerla) y **todo trabajo creado por una máquina debe poder decir por qué existe** (`source_event_name`), que es lo que deja a un vendedor preguntar "¿por qué está esto en mi lista hoy?" y obtener respuesta.
+- **La intención de agendado la escriben sólo definers.** `crm_app` no tiene INSERT ni puede tocar `status`/`fire_at`/`terminal_reason`. Leer sí, para que My Day explique por qué se omitió algo; **cambiar esa respuesta, no.**
+- ⏳ **Debido:** cablear pg-boss al claim. Hoy existe la capa de dominio (intención, idempotencia, estados terminales, equidad); falta el proceso que la consuma.
+
 ### 🎯 SPRINT 1 · ITEM 5 — Pipeline y el gate de cierre (2026-08-01) · Opus · alto
 Migraciones **0012–0013**, `app/db/schema/pipeline.ts`, **16 tests**. Total: **86**.
 
