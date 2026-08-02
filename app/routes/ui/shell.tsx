@@ -67,6 +67,7 @@ export default function Shell({ loaderData }: Route.ComponentProps): React.JSX.E
 
           <nav aria-label="Main" style={{ display: 'flex', gap: 'var(--space-1)' }}>
             <Tab to="/my-day">My Day</Tab>
+            <Tab to="/board">Pipeline</Tab>
             <Tab to="/earnings">Earnings</Tab>
           </nav>
 

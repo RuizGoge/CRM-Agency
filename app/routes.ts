@@ -18,10 +18,12 @@ export default [
   // the signed-out redirect lives — once, rather than repeated per screen.
   layout('routes/ui/shell.tsx', [
     route('my-day', 'routes/ui/my-day.tsx'),
+    route('board', 'routes/ui/board.tsx'),
     route('earnings', 'routes/ui/leaderboard.tsx'),
   ]),
 
   route('sign-out', 'routes/api/sign-out.ts'),
+  route('api/board', 'routes/api/board.ts'),
   route('api/leaderboard', 'routes/api/leaderboard.ts'),
   route('api/my-day', 'routes/api/my-day.ts'),
   // better-auth mounts its whole surface under one splat. See the note in the

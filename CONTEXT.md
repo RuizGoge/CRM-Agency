@@ -49,6 +49,19 @@ Evidencia completa: [`docs/sprint-0/g0-us-region.md`](docs/sprint-0/g0-us-region
 - **Dos aserciones más que agregó la suite:** un supervisor obtiene lectura global **pero la escritura le sigue siendo rechazada** (`USING` pasa, `WITH CHECK` falla — esa asimetría *es* el modelo de autorización, y es lo que hace que el caso del supervisor sea 403 y no un not-found), y el enum `user_role` tiene **exactamente tres etiquetas**, la forma mecánica de "no hay constructor de roles ni matriz de permisos".
 - **También pendiente:** el trigger que rechaza `is_demo=true` en producción (necesita `system_constant`, que aún no existe) y la validación de `display_tz` en `app_user`.
 
+### 📋 SPRINT 1 — El pipeline kanban, y el camino del dinero VISIBLE (2026-08-02)
+`app/routes/api/board.ts`, `app/routes/ui/board.tsx`, seed con tarjetas abiertas.
+
+✅ **CAMINO DEL DINERO PROBADO DE PUNTA A PUNTA EN PANTALLA.** Moví "Ruth Alvarez" a Closed Won con **$185 mensuales** y observé, en una sola acción de UI: la move-sheet pidió el valor **porque el escenario es de tipo `earning`** (no por su nombre) → `×12` anualizado **en el servidor** en centavos enteros → `stage_move` escribió transición y ledger **en una transacción** → la proyección se mantuvo → **la columna pasó de $9,029.88 a $11,249.88** → y el **tablero público** mostró a Renata en **$11,249.88** después de la ventana de undo. `$185 × 12 = $2,220`, exacto.
+
+- **La move-sheet se construyó PRIMERO, como manda G12**, y es server-rendered: funciona sin JavaScript, es alcanzable por teclado y por tecnologías de asistencia. **El drag se ata después y sólo a ≥1024px con puntero fino** — así, si el drag falla, el producto sigue funcionando y el fallo queda confinado a una superficie.
+- **El gate se ve donde ocurre:** "Closed Won" muestra valor + unidad (**sin default preseleccionado** — una unidad sin elegir es cómo una prima mensual se convierte en anual en silencio); "Closed Lost" muestra motivo.
+- El `action` sólo traduce la excepción de la base a copy accionable. **No puede dejar pasar un movimiento malo ni queriendo**, porque el gate vive en el `CHECK`.
+- Los totales por columna los **suma la base**; el cliente nunca suma dinero.
+- El seed incluye a propósito tarjetas **sin valor**: un tablero donde todas las tarjetas ya están calificadas demuestra el gate no disparando nunca.
+- ⚠️ **Tensión de precedencia sin resolver, anotada y no tapada:** `CLAUDE.md` dice *"exactamente UNA ruta de `routes/ui/**` puede servir datos de tablero como HTML SSR"*. Hoy el leaderboard **y** el kanban tienen loader. El kanban es el que carga el presupuesto de LCP con 500 leads, así que probablemente sea él quien deba quedarse con el slot. **Requiere pasar `precedence-checker` antes de decidir.**
+- ⏳ Debido: drag ≥1024px, undo optimista de 5 s, y el encabezado de columna aprieta el total contra la columna siguiente.
+
 ### 🧭 SPRINT 1 — El shell de navegación (2026-08-02)
 `app/routes/ui/shell.tsx` como layout, `app/routes/api/sign-out.ts`, `/` ahora redirige.
 

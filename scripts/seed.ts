@@ -142,6 +142,7 @@ async function main(): Promise<void> {
   }
 
   await seedMyDay()
+  await seedOpenPipeline()
 
   console.log(`\nDone. Sign in at /earnings with any of the demo addresses.`)
   console.log(`Password for all of them: ${PASSWORD}`)
@@ -198,6 +199,52 @@ async function seedMyDay(): Promise<void> {
        'Send the IUL illustration', clock_timestamp() + interval '4 hours', 'human')`
 
   console.log(`  ${seller.name}: My Day seeded (2 meetings, 2 callbacks)`)
+}
+
+/**
+ * Live cards for the pipeline board.
+ *
+ * Deliberately includes one with no deal value: that is the card the win gate
+ * refuses, and a board where every card is already qualified demonstrates the
+ * gate never firing.
+ */
+async function seedOpenPipeline(): Promise<void> {
+  const seller = SELLERS[0]
+  if (!seller) return
+
+  const stages = await client<{ id: string; name: string }[]>`
+    SELECT id, name FROM app.stage
+    WHERE tenant_id = ${TENANT} AND owner_user_id = ${seller.id} AND stage_type = 'open'
+    ORDER BY sort_order`
+
+  const leads = [
+    ['Ruth Alvarez', 'New Lead'],
+    ['Curtis Vance', 'New Lead'],
+    ['Alma Betancourt', 'Quoted'],
+    ['Wendell Pike', 'Quoted'],
+  ] as const
+
+  for (const [name, stageName] of leads) {
+    const stage = stages.find((s) => s.name === stageName)
+    if (!stage) continue
+
+    const [contact] = await client<{ id: string }[]>`
+      INSERT INTO app.contact (tenant_id, owner_user_id, full_name, created_via)
+      VALUES (${TENANT}, ${seller.id}, ${name}, 'lead_intake')
+      RETURNING id`
+
+    await client`
+      INSERT INTO app.opportunity
+        (tenant_id, owner_user_id, contact_id, pipeline_id, stage_id, current_stage_type,
+         created_from, stage_entered_at, last_activity_at)
+      SELECT ${TENANT}, ${seller.id}, ${contact?.id ?? null}, p.id, ${stage.id}, 'open',
+             'lead_intake',
+             clock_timestamp() - (random() * 12 || ' days')::interval,
+             clock_timestamp() - (random() * 9 || ' days')::interval
+      FROM app.pipeline p WHERE p.tenant_id = ${TENANT} AND p.owner_user_id = ${seller.id}`
+  }
+
+  console.log(`  ${seller.name}: ${leads.length} open cards on the board`)
 }
 
 main()
