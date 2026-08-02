@@ -1,0 +1,87 @@
+{
+  "$about": [
+    "Sprint-0 Gate 11. Every number here was MEASURED, never chosen from a document.",
+    "",
+    "Errata E6 (rank 1) struck the approved 250 KB bundle number because it and the",
+    "approved 2.0 s TTI are mutually unsatisfiable, and ruled: register the ratchet",
+    "NAME with direction monotonic_down and NO VALUE ROW until the gate measures.",
+    "Until this file existed the null-budget build failure E6 calls 'the only gate",
+    "before then' did not exist anywhere in the tree — the build was green because",
+    "nothing measured, not because anything passed.",
+    "",
+    "Direction is monotonic_down on every row: a number here may be TIGHTENED freely",
+    "and LOOSENED only deliberately. The engine half of that (ref.ci_ratchet, 05c",
+    "10.0.1) is NOT built yet, so today loosening a value is still a file edit. That",
+    "is stated rather than implied."
+  ],
+  "budgets": [
+    {
+      "id": "P12",
+      "name": "perf.P12_initial_js_gzip",
+      "title": "Initial JS, pipeline route",
+      "tier": "pre-merge",
+      "metric": "initial_js_gzip",
+      "route": "/board",
+      "unit": "bytes",
+      "direction": "monotonic_down",
+      "value": 128000,
+      "measured": 108086,
+      "measured_on": "2026-08-02",
+      "note": [
+        "Measured from the client module graph, then cross-checked against a real",
+        "browser on both Playwright profiles: 105.6 KB gzip over 10 files, identical",
+        "to the byte. The graph computation is what runs here — it needs no browser,",
+        "no database and no session, and /board redirects when signed out.",
+        "",
+        "Headroom is ~18% over the measurement, deliberately not zero. This budget",
+        "exists to catch a REGRESSION — the shape of it being the 147 KB gzip",
+        "better-auth 'identity' chunk reaching a seller-facing route — not to fail",
+        "the build the next time a screen gains a component."
+      ]
+    },
+    {
+      "id": "P13",
+      "name": "perf.P13_initial_css_gzip",
+      "title": "Initial CSS, pipeline route",
+      "tier": "pre-merge",
+      "metric": "initial_css_gzip",
+      "route": "/board",
+      "unit": "bytes",
+      "direction": "monotonic_down",
+      "value": 16384,
+      "measured": 2368,
+      "measured_on": "2026-08-02",
+      "note": [
+        "2.3 KB today for the whole design system, so the headroom looks large in",
+        "relative terms and is not. Three of the thirteen modules have any UI at all;",
+        "the token layers and the screens still to come land here."
+      ]
+    },
+    {
+      "id": "P20",
+      "name": "perf.P20_mobile_tti_pipeline",
+      "title": "Mobile time-to-interactive, /pipeline",
+      "tier": "nightly",
+      "metric": "lighthouse_tti_ms",
+      "route": "/board",
+      "unit": "ms",
+      "direction": "monotonic_down",
+      "value": null,
+      "ceiling": 3000,
+      "measured": null,
+      "blocked_on": [
+        "The nightly Lighthouse tier does not exist, and neither does the perf-500",
+        "fixture (500 cards) this must be measured against. Gate 12 needs the same",
+        "fixture, so the two are cheaper together than apart.",
+        "",
+        "Per 05-architecture.md 8.1 the measured value rounded up to the next 100 ms",
+        "becomes the budget, with 3000 ms as a ceiling that measurement cannot",
+        "exceed. This row is therefore a DECLARED HOLE, visible and machine-readable,",
+        "rather than a number nobody measured.",
+        "",
+        "GATE 11 IS HALF CLOSED. The bundle half is measured and enforced; the",
+        "time-to-interactive half is not."
+      ]
+    }
+  ]
+}

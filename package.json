@@ -26,7 +26,8 @@
     "db:seed": "tsx scripts/seed.ts",
     "db:jobs": "tsx scripts/install-jobs.ts",
     "worker": "tsx --env-file-if-exists=.env scripts/worker.ts",
-    "verify": "npm run typecheck && npm run lint && npm run format:check && npm run test",
+    "perf": "npm run build && tsx scripts/check-perf-budgets.ts",
+    "verify": "npm run typecheck && npm run lint && npm run format:check && npm run test && npm run perf",
     "prepare": "husky"
   },
   "dependencies": {

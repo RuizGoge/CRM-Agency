@@ -9,7 +9,10 @@ export default defineConfig({
   resolve: { tsconfigPaths: true },
   test: {
     environment: 'node',
-    include: ['app/**/*.test.ts', 'tests/integration/**/*.test.ts'],
+    // `scripts/**` is here for the Gate 11 budget wiring, which guards a gate
+    // that lives in a script rather than in the app. Keeping its test next to
+    // what it guards beats filing it under integration, which it is not.
+    include: ['app/**/*.test.ts', 'scripts/**/*.test.ts', 'tests/integration/**/*.test.ts'],
     // E2E belongs to Playwright; it must never run under Vitest.
     exclude: ['node_modules/**', 'build/**', 'tests/e2e/**'],
     // Drops and rebuilds `crm_test`, then applies the real migration files.

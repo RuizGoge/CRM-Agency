@@ -110,7 +110,11 @@ A story is done when: all states are built · permissions enforced **server-side
 
 API p95 < 300 ms · global search < 200 ms · LCP < 1.5 s with 500 leads · interaction feedback < 100 ms · drag at 60 fps with no long task over 50 ms.
 
-The front-end bundle and TTI budgets are **deliberately unset** until Sprint-0 Gate 8 measures them: the approved numbers (250 KB gzip and 2.0 s TTI) are mutually unsatisfiable, and the measurement fixes the number, not the aspiration. Until then a null budget fails the build.
+The approved numbers (250 KB gzip and 2.0 s TTI) are **mutually unsatisfiable**, so errata E6 struck them: the measurement fixes the number, not the aspiration. **The gate that measures is Sprint-0 Gate 11**, not Gate 8 — G13 published that correction and this line used to carry the old one.
+
+- **Bundle: MEASURED and enforced (2026-08-02).** `perf-budgets.json` carries P12 (initial JS, pipeline route) and P13 (initial CSS), checked by `npm run perf` inside `npm run verify`. The measurement was 108 KB gzip against a struck 250 KB.
+- **TTI: still unset.** P20 is declared with a null value and blocked on the nightly Lighthouse tier and the `perf-500` fixture. **Gate 11 is half closed.**
+- **A null budget in an enforced tier fails the build, and now that is true rather than merely written.** Until 2026-08-02 no such check existed anywhere in the tree — the build was green because nothing measured. Every row is `monotonic_down`: tighten freely, loosen deliberately. Moving the loosening refusal into Postgres (`ref.ci_ratchet`, `05c` §10.0.1) is **not built yet**, so today loosening a value is still a file edit.
 
 ## Workflow
 

@@ -120,14 +120,25 @@ describe('resolve_identity is reachable without session context', () => {
   it('answers even though app_user is unreadable with no context, and skips the deactivated', async () => {
     // Proves the definer property. A plain SELECT here would be denied by the
     // policy and return zero rows — a login that silently never resolves.
+    //
+    // BOTH subqueries carry `tenant_id`, and that is not decoration. Every table
+    // in this schema has the composite primary key `(tenant_id, id)`, so `WHERE
+    // id = ?` is NOT a unique lookup — two tenants may legitimately hold the same
+    // id, and the design says so. These lookups used to omit it, and the suite
+    // failed intermittently with `more than one row returned by a subquery used
+    // as an expression` the moment `job-dispatch.test.ts` — which seeds the very
+    // same uuid under a different tenant and deletes nothing — happened to run
+    // first. The intermittency was file ORDER; the defect was the query.
     const [row] = await sql<{ user_id: string }[]>`
       SELECT user_id FROM app.resolve_identity(
-        (SELECT auth_user_id FROM app.app_user WHERE id = ${SEAT_ACTIVE}))`
+        (SELECT auth_user_id FROM app.app_user
+          WHERE tenant_id = ${TENANT} AND id = ${SEAT_ACTIVE}))`
     expect(row?.user_id).toBe(SEAT_ACTIVE)
 
     const retired = await sql<{ user_id: string }[]>`
       SELECT user_id FROM app.resolve_identity(
-        (SELECT auth_user_id FROM app.app_user WHERE id = ${SEAT_RETIRED}))`
+        (SELECT auth_user_id FROM app.app_user
+          WHERE tenant_id = ${TENANT} AND id = ${SEAT_RETIRED}))`
     expect(retired).toEqual([])
   })
 })
