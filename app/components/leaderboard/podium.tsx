@@ -37,6 +37,7 @@ export function Podium({ top }: { top: readonly BoardRow[] }): React.JSX.Element
               display: 'flex',
               flexDirection: 'column',
               alignItems: 'center',
+              justifyContent: 'flex-end',
               gap: 'var(--space-2)',
             }}
           >
@@ -82,34 +83,51 @@ export function Podium({ top }: { top: readonly BoardRow[] }): React.JSX.Element
               {format(fromWireString(row.totalCents))}
             </span>
 
+            {/* A fixed-height well with the bar sitting at its bottom, so all
+                three list items are the same overall height and the names and
+                amounts land on ONE baseline. Sizing the bar itself was not
+                enough: with different bar heights the labels above them step,
+                and the top three stop reading as a group — which is the only
+                thing a podium is for. */}
             <div
               style={{
                 width: '100%',
-                height: HEIGHTS[slot],
-                borderRadius: 'var(--radius-md) var(--radius-md) 0 0',
-                background:
-                  row.rank === 1 ? 'var(--color-action-money-bg)' : 'var(--color-surface-3)',
-                border: '1px solid var(--color-border-subtle)',
-                borderBottom: 'none',
+                height: '7rem',
                 display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
+                alignItems: 'flex-end',
               }}
             >
-              {/* Labelled, because a bare "2" read aloud after a name and an
-                  amount is ambiguous — and because the step's height carries
-                  the same information visually and carries none at all here. */}
-              <span
-                aria-label={`Rank ${row.rank}`}
+              <div
                 style={{
-                  fontSize: 'var(--type-2xl)',
-                  fontWeight: 'var(--font-weight-bold)',
-                  color:
-                    row.rank === 1 ? 'var(--color-action-money-fg)' : 'var(--color-text-secondary)',
+                  width: '100%',
+                  height: HEIGHTS[slot],
+                  borderRadius: 'var(--radius-md) var(--radius-md) 0 0',
+                  background:
+                    row.rank === 1 ? 'var(--color-action-money-bg)' : 'var(--color-surface-3)',
+                  border: '1px solid var(--color-border-subtle)',
+                  borderBottom: 'none',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
                 }}
               >
-                {row.rank}
-              </span>
+                {/* Labelled, because a bare "2" read aloud after a name and an
+                  amount is ambiguous — and because the step's height carries
+                  the same information visually and carries none at all here. */}
+                <span
+                  aria-label={`Rank ${row.rank}`}
+                  style={{
+                    fontSize: 'var(--type-2xl)',
+                    fontWeight: 'var(--font-weight-bold)',
+                    color:
+                      row.rank === 1
+                        ? 'var(--color-action-money-fg)'
+                        : 'var(--color-text-secondary)',
+                  }}
+                >
+                  {row.rank}
+                </span>
+              </div>
             </div>
           </li>
         )

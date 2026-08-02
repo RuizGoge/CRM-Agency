@@ -158,19 +158,24 @@ function Column({ column }: { column: BoardColumn }): React.JSX.Element {
         gap: 'var(--space-3)',
       }}
     >
-      <header style={{ display: 'flex', alignItems: 'baseline', gap: 'var(--space-2)' }}>
-        <h2 style={{ fontSize: 'var(--type-sm)', fontWeight: 'var(--font-weight-semibold)' }}>
-          {column.name}
-        </h2>
-        <span style={{ fontSize: 'var(--type-xs)', color: 'var(--color-text-tertiary)' }}>
-          {column.cards.length}
-        </span>
+      {/* The total sits BELOW the name rather than flush right. Pushed right it
+          lands against the next column's heading, and two adjacent columns
+          read as one run-on line. */}
+      <header style={{ display: 'grid', gap: 'var(--space-1)', minHeight: 'var(--space-10)' }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 'var(--space-2)' }}>
+          <h2 style={{ fontSize: 'var(--type-sm)', fontWeight: 'var(--font-weight-semibold)' }}>
+            {column.name}
+          </h2>
+          <span style={{ fontSize: 'var(--type-xs)', color: 'var(--color-text-tertiary)' }}>
+            {column.cards.length}
+          </span>
+        </div>
+
         {/* Summed by the database. The client never adds money. */}
         {column.totalCents !== '0' ? (
           <span
             className="money"
             style={{
-              marginLeft: 'auto',
               fontSize: 'var(--type-xs)',
               fontWeight: 'var(--font-weight-semibold)',
               color: earning ? 'var(--color-success-text)' : 'var(--color-text-secondary)',

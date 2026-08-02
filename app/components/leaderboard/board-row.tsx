@@ -21,9 +21,15 @@ export function BoardRow({ row }: { row: Row }): React.JSX.Element {
         gap: 'var(--space-4)',
         padding: 'var(--space-3) var(--space-4)',
         borderRadius: 'var(--radius-md)',
-        background: self ? 'var(--color-selected-bg)' : 'transparent',
-        // A left rail rather than colour alone: the self row must be findable
-        // without relying on hue (WCAG 1.4.1).
+        // Every row gets a surface, not just the viewer's. Without this the
+        // rows below the podium float in whitespace and read as unfinished
+        // next to the one that happens to be highlighted.
+        background: self ? 'var(--color-selected-bg)' : 'var(--color-surface-1)',
+        border: `1px solid ${
+          self ? 'var(--color-action-primary-bg)' : 'var(--color-border-subtle)'
+        }`,
+        // A left rail as well as colour: the viewer's own row must be findable
+        // without relying on hue alone (WCAG 1.4.1).
         boxShadow: self ? 'inset 3px 0 0 0 var(--color-action-primary-bg)' : undefined,
       }}
     >

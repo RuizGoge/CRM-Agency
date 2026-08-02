@@ -49,6 +49,12 @@ Evidencia completa: [`docs/sprint-0/g0-us-region.md`](docs/sprint-0/g0-us-region
 - **Dos aserciones más que agregó la suite:** un supervisor obtiene lectura global **pero la escritura le sigue siendo rechazada** (`USING` pasa, `WITH CHECK` falla — esa asimetría *es* el modelo de autorización, y es lo que hace que el caso del supervisor sea 403 y no un not-found), y el enum `user_role` tiene **exactamente tres etiquetas**, la forma mecánica de "no hay constructor de roles ni matriz de permisos".
 - **También pendiente:** el trigger que rechaza `is_demo=true` en producción (necesita `system_constant`, que aún no existe) y la validación de `display_tz` en `app_user`.
 
+### ✨ SPRINT 1 — Pulido de las tres superficies (2026-08-02)
+- ✅ **El gate WCAG de foco visible SE CUMPLE.** Primero reporté que no había anillo de foco en ninguna parte; **estaba equivocado**. Mis tabulaciones sintéticas nunca entraban al documento (`activeElement` era `BODY`). Con el foco realmente dentro, `:focus-visible` del reset dibuja su outline de 2px. **Lección: verificar que la herramienta hizo lo que creo antes de reportar un defecto.**
+- **Filas del leaderboard con superficie propia.** Antes sólo la fila del propio vendedor tenía fondo, así que las de abajo del podio flotaban en blanco y se leían sin terminar al lado.
+- **El total de columna del kanban pasó abajo del nombre.** Empujado a la derecha aterrizaba contra el encabezado de la columna siguiente, y dos columnas se leían como una sola línea corrida.
+- **Podio alineado a una línea base.** Dimensionar la barra no alcanzaba: con alturas distintas, las etiquetas de arriba se escalonan. Hizo falta un pozo de altura fija con la barra apoyada abajo, así los tres ítems miden lo mismo y nombres y montos caen en una sola línea. **Un podio existe para leerse como grupo; escalonado no cumple su única función.**
+
 ### 📋 SPRINT 1 — El pipeline kanban, y el camino del dinero VISIBLE (2026-08-02)
 `app/routes/api/board.ts`, `app/routes/ui/board.tsx`, seed con tarjetas abiertas.
 
