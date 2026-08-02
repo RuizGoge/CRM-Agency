@@ -49,6 +49,27 @@ Evidencia completa: [`docs/sprint-0/g0-us-region.md`](docs/sprint-0/g0-us-region
 - **Dos aserciones más que agregó la suite:** un supervisor obtiene lectura global **pero la escritura le sigue siendo rechazada** (`USING` pasa, `WITH CHECK` falla — esa asimetría *es* el modelo de autorización, y es lo que hace que el caso del supervisor sea 403 y no un not-found), y el enum `user_role` tiene **exactamente tres etiquetas**, la forma mecánica de "no hay constructor de roles ni matriz de permisos".
 - **También pendiente:** el trigger que rechaza `is_demo=true` en producción (necesita `system_constant`, que aún no existe) y la validación de `display_tz` en `app_user`.
 
+### 🧨 P6 medía el DEV SERVER, y Closed Lost por fin se puede usar (2026-08-02)
+`playwright.config.ts` (dos servidores), `scripts/seed.ts` (+7 razones de pérdida), `tests/e2e/lost-gate.spec.ts`. **27 e2e** (+1); 134 de unit/integración sin cambios.
+
+🔴 **EL HALLAZGO MÁS IMPORTANTE DE LA SESIÓN, y salió de un cambio hecho por otro motivo. El gate de performance estaba midiendo el servidor de desarrollo de Vite.**
+
+Cuando puse `reuseExistingServer: false` —por la razón correcta, cerrar el falso verde del mutation testing— la Puerta 12 se cayó de **6 de 6 verdes a 1 de 4**, con long tasks de 54 a 89 ms. La causa no era el producto: antes se reutilizaba un dev server **caliente**, y ahora cada corrida pagaba las transformaciones de uno **frío**. Un dev server de Vite entrega módulos sin minificar, el cliente de HMR, source maps y transformaciones bajo demanda. **Nada de eso lo baja un vendedor.** P12 ya medía el build de producción; que P6 midiera `npm run dev` era la incoherencia.
+
+- ✅ **Contra el build de producción el resultado es otro: `max = 16,8 ms`, o sea CERO frames perdidos**, p95 16,8 ms, cero long tasks, **5 de 5 verdes**. Los 33,3 ms de base contra un límite de 34 —que yo había llamado "no es holgura, es suerte"— **eran enteramente el dev server**. Ahora hay 2× de holgura real.
+- **Dos servidores, y el segundo no es comodidad:** los specs funcionales siguen contra `npm run dev` (que es lo que hace el CI y lo que da errores legibles); el de performance corre contra `npm run build && npm start` en el puerto 3001.
+- 🎯 **Dientes reconfirmados por el camino nuevo:** 60 ms de bloqueo por `dragenter` → rojo (max 50,1 · long task 64). Revertido → verde con max 16,8.
+- **`npm start` NO lee `.env`** (sólo `npm run dev`, vía Vite), así que hay que pasarle el entorno explícito. **Lo atraparon en el acto las propias negativas de arranque G4(a) y JOBS002** — el mecanismo funcionando.
+- **Al servidor de medición se le quita el rol `worker` a propósito:** un tick del despachador cayendo en medio del drag es ruido en el único número que ese perfil existe para producir.
+
+🔴 **Y CLOSED LOST DEJA DE SER INUSABLE.** El seed no creaba **ni una** fila en `app.lost_reason`. El selector "Why?" es `required`, la puerta de pérdida es un `CHECK` (`current_stage_type <> 'lost' OR lost_reason_id IS NOT NULL`), y sin opciones **la base rechaza todo movimiento a una etapa perdida**. Nada del producto estaba roto: faltaba el dato del que depende, y **toda la suite pasaba igual porque ningún test había intentado perder un trato jamás**.
+
+- **7 razones sembradas**, con `code` como clave de reporte y `label` como texto humano — renombrar una etiqueta no puede mover un número, la misma regla que ata las puertas a `stage_type` y no al nombre de la etapa.
+- **A nivel TENANT, no por vendedor:** cada vendedor configura sus etapas (D4), pero el reporte compara motivos de pérdida en toda la agencia, y una lista por vendedor volvería incomparable el único número que un dueño quiere.
+- 🎯 **Probado por mutación con el estado exacto en que estaba el demo:** desactivando las razones, rojo con *"Closed Lost is unusable with no loss reasons seeded"*.
+- ⚠️ **Una aserción mía mal planteada, corregida:** un `<option>` dentro de un `<select>` cerrado **no es "visible"** para Playwright, así que `toBeVisible()` fallaba sobre un selector que funciona perfecto. Lo que importa es la cantidad, no la visibilidad. Y se selecciona **por etiqueta y no por índice**, porque el índice 0 es el placeholder deshabilitado que existe justo para que ningún motivo quede preseleccionado.
+- ⚠️ **Trampa de herramienta anotada: Playwright BORRA `test-results/` al arrancar.** Tenía ahí un script de restauración y se lo llevó a mitad de un mutation test, dejando el demo con las razones desactivadas. **No usar `test-results/` como scratch.**
+
 ### 🏁 PUERTA 12 CERRADA — el drag medido a 60 fps con 500 tarjetas (2026-08-02)
 `tests/e2e/fixtures/perf-500.ts`, `tests/e2e/drag-perf.spec.ts`, perfil `dnd-ci`, `perf-budgets.json` (P6), `pipeline-columns.tsx`. **26 e2e** (+1); 134 de unit/integración sin cambios.
 
@@ -711,7 +732,7 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 | 9 | Simulacro de restauración | ⬜ no empezado |
 | 10 | Los 5000 ms en cuatro representaciones | ✅ **CERRADA.** Las cuatro existen —TS · CSS · predicado SQL de la proyección · claim de la celebración— y el test de deriva compara **valores, nunca nombres**, incluida la aserción de que `celebrate_once` no menciona `projection_reveal_delay_ms` |
 | 11 | Bundle y primer paint medidos | 🟡 **MITAD CERRADA.** Bundle **medido y aplicado**: P12 = 108.086 bytes gzip contra un presupuesto de 128.000, P13 = 2.368 contra 16.384, en `perf-budgets.json` vía `npm run perf` dentro de `verify`. **El fallo por presupuesto nulo que E6 exige ahora existe** — antes no estaba en ninguna parte. **Falta:** P20 (TTI móvil), bloqueado por el tier nocturno de Lighthouse y el fixture perf-500. **Y falta el ancla fuera del árbol:** `ref.ci_ratchet` (05c §10.0.1) no está construido, así que aflojar sigue siendo editar un archivo |
-| 12 | Drag a 60 fps con 500 tarjetas | ✅ **CERRADA.** Perfil `dnd-ci` (2× CPU throttle) sobre el fixture `perf-500`: **p95 16,8 ms · max 33,3 ms · cero long tasks**, contra p95≤20 / frame≤34 / longtask≤50. El fixture se assertea antes de medir, y el gate está probado con dientes (bloqueo de 60 ms → las tres aserciones rojas) |
+| 12 | Drag a 60 fps con 500 tarjetas | ✅ **CERRADA.** Perfil `dnd-ci` (2× CPU throttle) sobre `perf-500`, **contra el BUILD DE PRODUCCIÓN**: **p95 16,8 ms · max 16,8 ms (cero frames perdidos) · cero long tasks**, contra p95≤20 / frame≤34 / longtask≤50. El fixture se assertea antes de medir, y el gate está probado con dientes (bloqueo de 60 ms → las tres aserciones rojas) |
 | 13 | Publicar las contradicciones | ✅ `docs/sprint-0/g13-published-contradictions.md` |
 
 ### ▶️ LO SIGUIENTE — ya no hay un orden fijado
@@ -721,7 +742,7 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 **Recomendación de por dónde seguir, en este orden:**
 
 1. ~~**Arrancar el worker DENTRO del proceso web.**~~ ✅ **HECHO el 2026-08-02** — ver la sección de la topología plegable más arriba. La decisión que este ítem pedía tomar y no descubrir quedó tomada: **sin esquema de pg-boss el proceso se niega a arrancar**, y por lo tanto **`npm run db:jobs` es requisito de `npm run dev`**.
-2. **`lost_reason` en el seed.** El selector "Why?" está vacío, así que **Closed Lost es inusable en el demo**. Lo confirman los e2e, no sólo la observación.
+2. ~~**`lost_reason` en el seed.**~~ ✅ **HECHO el 2026-08-02** — 7 razones sembradas y `tests/e2e/lost-gate.spec.ts` lo sostiene, probado por mutación.
 3. ~~**Puerta 11 — medir bundle y TTI.**~~ 🟡 **MITAD HECHA el 2026-08-02** (ver arriba). Lo que queda de ella son dos piezas separables:
    - **3a · `ref.ci_ratchet` en Postgres** (`05c` §10.0.1): rol `crm_ci` con INSERT/SELECT, trigger que rechaza el aflojamiento con `AP002`, append-only por el mismo trigger de sentencia que el ledger. **Es lo que convierte "el build se pone rojo" en "nadie lo afloja sin una migración".** No depende de nadie y es la mitad que este proyecto llamaría mecanismo de verdad.
    - **3b · P20 (TTI móvil)**, que necesita el tier nocturno de Lighthouse y el fixture **perf-500**.

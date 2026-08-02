@@ -136,6 +136,8 @@ async function main(): Promise<void> {
 
   await refuseToSeedTwice()
 
+  await seedLostReasons()
+
   for (const seller of SELLERS) {
     const email = `${emailLocalPart(seller.name)}@demo.test`
 
@@ -214,6 +216,44 @@ async function main(): Promise<void> {
 
   console.log(`\nDone. Sign in at /earnings with any of the demo addresses.`)
   console.log(`Password for all of them: ${PASSWORD}`)
+}
+
+/**
+ * The tenant's loss reasons.
+ *
+ * WITHOUT THESE, CLOSED LOST IS UNUSABLE. The move sheet's "Why?" select is
+ * populated from this table, the win/loss gate is a CHECK constraint
+ * (`current_stage_type <> 'lost' OR lost_reason_id IS NOT NULL`), and an empty
+ * select means the database refuses every move into a lost stage. Nothing was
+ * broken in the product — a whole column of the demo simply could not be used,
+ * which is the kind of hole that only shows up when somebody clicks.
+ *
+ * TENANT-SCOPED, not per seller: sellers configure their own stages (ruling D4),
+ * but reporting compares loss reasons across the agency, so a per-seller list
+ * would make the one number an owner actually wants uncomparable.
+ *
+ * `code` is the reporting key and `label` is what a human reads. Renaming a
+ * label must never move a number, which is the same rule that binds the win and
+ * loss gates to `stage_type` rather than to a stage's name.
+ */
+const LOST_REASONS = [
+  { code: 'price', label: 'Premium too high', order: 1 },
+  { code: 'competitor', label: 'Bought from another agent', order: 2 },
+  { code: 'underwriting', label: 'Declined in underwriting', order: 3 },
+  { code: 'unresponsive', label: 'Stopped responding', order: 4 },
+  { code: 'not_interested', label: 'Not interested', order: 5 },
+  { code: 'timing', label: 'Not the right time', order: 6 },
+  { code: 'bad_contact', label: 'Wrong or disconnected number', order: 7 },
+] as const
+
+async function seedLostReasons(): Promise<void> {
+  for (const reason of LOST_REASONS) {
+    await client`
+      INSERT INTO app.lost_reason (tenant_id, code, label, sort_order)
+      VALUES (${TENANT}, ${reason.code}, ${reason.label}, ${reason.order})
+      ON CONFLICT (tenant_id, code) DO NOTHING`
+  }
+  console.log(`  ${LOST_REASONS.length} loss reasons`)
 }
 
 /**
