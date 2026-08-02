@@ -173,7 +173,11 @@ export default tseslint.config(
             'set_config(..., false) is SESSION-scoped and survives the transaction. The third argument is is_local and must be true — this is the invariant that makes a transaction-mode pooler safe.',
         },
         {
-          selector: 'TemplateElement[value.raw=/\\bSET\\s+(?!LOCAL\\b)/]',
+          // Targets `SET ROLE` and `SET app.<guc>` specifically. An earlier,
+          // broader version matched the SET clause of every UPDATE statement —
+          // a guard that flags correct code gets disabled, which is worse than
+          // no guard at all.
+          selector: 'TemplateElement[value.raw=/\\bSET\\s+(?!LOCAL\\b)(ROLE\\b|app\\.)/i]',
           message:
             'Use SET LOCAL. A bare SET is session-scoped and leaks across transactions on a pooled connection.',
         },

@@ -49,6 +49,28 @@ Evidencia completa: [`docs/sprint-0/g0-us-region.md`](docs/sprint-0/g0-us-region
 - **Dos aserciones más que agregó la suite:** un supervisor obtiene lectura global **pero la escritura le sigue siendo rechazada** (`USING` pasa, `WITH CHECK` falla — esa asimetría *es* el modelo de autorización, y es lo que hace que el caso del supervisor sea 403 y no un not-found), y el enum `user_role` tiene **exactamente tres etiquetas**, la forma mecánica de "no hay constructor de roles ni matriz de permisos".
 - **También pendiente:** el trigger que rechaza `is_demo=true` en producción (necesita `system_constant`, que aún no existe) y la validación de `display_tz` en `app_user`.
 
+### 💰 SPRINT 1 · ITEM 3 — La espina dorsal del dinero (2026-08-01) · Opus · máximo
+Migraciones **0006–0009**, `app/db/schema/earnings.ts`, **15 tests nuevos**. Total: **59**.
+
+**Tres defectos de mi propio `harden()` del ítem 1, encontrados leyendo `05b` §674-712 contra lo que 0000 realmente generaba:**
+1. 🔴 **El trigger de inmutabilidad era por FILA. La spec exige por SENTENCIA sobre `UPDATE OR DELETE OR TRUNCATE`.** Un `DELETE ... WHERE false` no dispara trigger de fila, y **`TRUNCATE` saltea triggers de fila Y el privilegio DELETE por completo**. Probado por mutación: con el trigger viejo, **el `TRUNCATE` pasó y vació el ledger** — la pérdida total y permanente que todo el diseño existe para prevenir.
+2. `append_only_*` generaba `WITH CHECK (owner = current_user)`. La spec exige **`WITH CHECK (false)`**: el rol de la app no escribe el ledger por ninguna vía.
+3. Las tablas append-only recibían `GRANT INSERT`. Ahora **no reciben DML alguno**: `crm_app` sobre `earnings_ledger` tiene exactamente `SELECT`.
+
+**Trampa de precedencia atrapada:** `05b` §678 exige `CHECK (delta_cents <> 0)`, pero la **errata E3** (rango 1) dice que `projection_repair` lleva `delta_cents = 0`. **Gana la errata** — seguir el texto viejo habría hecho imposible insertar toda reparación de proyección. La restricción quedó `delta_cents <> 0 OR entry_type = 'projection_repair'`.
+
+**`policy_class` dejó de ser ENUM y pasó a `text`.** No es workaround: **drizzle-kit aplica TODAS las migraciones pendientes en UNA transacción**, y `ALTER TYPE ... ADD VALUE` no permite usar la etiqueta nueva hasta que esa transacción commitee. O sea que "una migración agrega una clase, la siguiente clasifica una tabla con ella" **es irrejecutable, y falla en el DEPLOY** — después de la revisión, en el único camino que nadie mira. Exactamente el modo de falla que este proyecto no absorbe. Sin `CHECK` de valores válidos a propósito: sería una segunda lista que mantener de acuerdo con la primera, y `harden()` ya levanta HR002 nombrando la clase.
+
+**Lo construido:** `earnings_ledger` (append-only, delta firmado, exactly-once por `source_event_id`, tres period keys coherentes por CHECK) · `leaderboard_projection` (agregado mantenido; el tablero nunca suma el ledger) · **`app.ledger_append()` como única puerta de escritura** · `app.annualize()` · `app.leaderboard_read()` con la ventana de undo excluida · `ref.timing_constant` con **los dos intervalos que nunca comparten nombre** (`undo_deadline_ms` 5000, `projection_reveal_delay_ms` 5500).
+
+**La segunda entrega del mismo `source_event_id` es camino de ÉXITO, no error:** devuelve el id existente con `was_duplicate = true`, el total no se mueve y no se le muestra nada al vendedor. Doble tap, reintento del proveedor y replay caen todos ahí.
+
+🎯 **Un test pasaba VACUAMENTE y lo detecté.** `leaderboard_read` es definer y scopea por `app.current_tenant()`; llamándolo desde la conexión cruda devuelve **cero filas**, así que dos aserciones comparaban 0 con 0 y pasaban por la razón equivocada. Reescrito para correr dentro de `withTenant`.
+
+⚠️ **Corregí una guarda de lint que estaba MAL.** Mi regex de `SET` pelado matcheaba el `SET` de `UPDATE tabla SET columna` — así escrita habría bloqueado todo `UPDATE` del proyecto. Acotada a `SET ROLE` y `SET app.<guc>`. **Una guarda que marca código correcto termina desactivada, y eso es peor que no tenerla.**
+
+⏳ **Pendiente de G3 que no se puede cerrar todavía:** la transacción del gate de cierre como unidad atómica (necesita `opportunity`/`stage`, ítem 5) y `idle_in_transaction_session_timeout` verificado bajo un proceso muerto a mitad del gate.
+
 ### 🔐 SPRINT 1 · ITEM 2 (mitad) — Contexto de scope por unidad de trabajo (2026-08-01)
 `0004…` no: migración **`0003_begin_request`** + `app/db/client.ts` + guardas de ESLint + **11 tests**. Total de la suite: **37**.
 

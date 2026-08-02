@@ -43,6 +43,34 @@
       "when": 1785635617907,
       "tag": "0005_auth_bridge",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1785636764100,
+      "tag": "0006_policy_classes",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1785636766419,
+      "tag": "0007_harden_append_only",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1785636916177,
+      "tag": "0008_earnings_ledger",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1785636950811,
+      "tag": "0009_ledger_append",
+      "breakpoints": true
     }
   ]
 }
