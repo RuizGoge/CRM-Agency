@@ -37,6 +37,27 @@ const SELLERS = [
   { id: '00000000-0000-7000-8000-00000000ab05', name: 'Tomás Guerra', wins: [] },
 ] as const
 
+/**
+ * Fold a display name into the local part of an email address.
+ *
+ * Found by signing in as Tomás Guerra and failing: the first seed produced
+ * `tomás@demo.test`, better-auth accepted the sign-up, and then the login form
+ * refused to submit it forever. `<input type="email">` validates against the
+ * HTML5 grammar, which is ASCII-only before the `@`, so the account existed
+ * and no human could ever reach it — `validity.typeMismatch` was true and the
+ * browser simply declined to POST, with no error the page could show.
+ *
+ * The demo tenant is the one that runs in front of a customer, and a seat
+ * nobody can sign into is the worst possible moment to discover that.
+ */
+function emailLocalPart(name: string): string {
+  return (name.split(' ')[0] ?? 'user')
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '') // strip combining accents
+    .replace(/[^a-zA-Z0-9._-]/g, '')
+    .toLowerCase()
+}
+
 const client = postgres(URL_, { max: 1, onnotice: () => {} })
 
 async function main(): Promise<void> {
@@ -48,7 +69,7 @@ async function main(): Promise<void> {
     ON CONFLICT (id) DO NOTHING`
 
   for (const seller of SELLERS) {
-    const email = `${seller.name.split(' ')[0]?.toLowerCase() ?? 'user'}@demo.test`
+    const email = `${emailLocalPart(seller.name)}@demo.test`
 
     let authUserId: string | null = null
     try {

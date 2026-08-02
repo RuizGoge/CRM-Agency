@@ -72,7 +72,15 @@ Los centavos de Renata sobreviven exactos — en coma flotante eso sería `9029.
 - **ETag derivado del cuerpo renderizado, a propósito.** El valor público es dependiente del tiempo (las entradas dentro de la ventana de undo se excluyen), así que un ETag puramente derivado de escrituras respondería 304 mientras el número visible cambia al envejecer una entrada pendiente. Formas más baratas existen; ninguna puede perder esa propiedad.
 - **`sign-in` con un solo mensaje de error** para dirección equivocada y contraseña equivocada — dos mensajes son un oráculo de enumeración de cuentas. Y dice la verdad sobre el reset: *"An admin can set a new one for you."*
 - ⚠️ **Patrón que ya me costó tres veces: los UUID de prueba deben ser HEX.** `dev1`, `s1`, `t1` no lo son.
-- ⏳ **Debido:** la celebración (confetti tras la ventana de undo), el auto-rank con vecinos (patrón top10+2), y `npm run test:e2e` con axe-core.
+
+#### 🔴 Dos defectos que SÓLO aparecieron mirando la pantalla (migración 0017 + fix del seed)
+Ninguno de los dos lo habría atrapado un test escrito desde la especificación, porque la especificación describe el ranking y **no dice nada sobre quién falta**.
+
+1. **Un vendedor con cero ventas no estaba en el tablero. Ausente, no en $0.** El board joineaba DESDE `leaderboard_projection`, y sin fila de ledger no hay fila de proyección. En un tablero cuyo propósito entero es motivar, **el vendedor con menos para celebrar era el único que no podía encontrarse**. Corregido invirtiendo el join: se parte del roster y se hace `LEFT JOIN` a los totales. Sólo `role = 'seller'` — supervisores y admins no pueden escribir en el libro de un vendedor, así que ponerlos en $0 para siempre se leería como último puesto y no como "no compite".
+2. **El seed generaba `tomás@demo.test` y el propio formulario de login lo rechaza.** `<input type="email">` valida contra la gramática HTML5, que es **ASCII-only antes del `@`** — `validity.typeMismatch = true` y el navegador simplemente **no hace el POST, sin ningún error que la página pueda mostrar**. Peor: **better-auth aceptó el alta**, así que el servidor admite una dirección que el cliente estructuralmente no puede enviar. El seed ahora pliega acentos. **Es el tenant que se muestra en un demo comercial: una cuenta en la que nadie puede entrar es el peor momento para descubrirlo.**
+
+- ⏳ **Debido, observado en pantalla y no corregido todavía:** las filas fuera del podio no tienen contenedor (la fila propia sí, porque está resaltada, así que las demás se ven sin terminar al lado); **no hay encabezado, navegación ni cerrar sesión en ninguna parte** — la pantalla es una isla; y las líneas base de nombre/monto del podio quedan desparejas.
+- ⏳ **También debido:** la celebración (confetti tras la ventana de undo), el patrón top10+2 con vecinos, y `npm run test:e2e` con axe-core.
 
 ### 📅 SPRINT 1 · ITEM 6 — Calendario y recordatorios (2026-08-01)
 Migraciones **0014–0015**, `app/db/schema/calendar.ts`, **12 tests**. Total: **98**.
