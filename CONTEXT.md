@@ -49,6 +49,28 @@ Evidencia completa: [`docs/sprint-0/g0-us-region.md`](docs/sprint-0/g0-us-region
 - **Dos aserciones más que agregó la suite:** un supervisor obtiene lectura global **pero la escritura le sigue siendo rechazada** (`USING` pasa, `WITH CHECK` falla — esa asimetría *es* el modelo de autorización, y es lo que hace que el caso del supervisor sea 403 y no un not-found), y el enum `user_role` tiene **exactamente tres etiquetas**, la forma mecánica de "no hay constructor de roles ni matriz de permisos".
 - **También pendiente:** el trigger que rechaza `is_demo=true` en producción (necesita `system_constant`, que aún no existe) y la validación de `display_tz` en `app_user`.
 
+### ⚙️ `ref.ci_ratchet` — el presupuesto deja de poder aflojarse editando un archivo (2026-08-02)
+Migración **0022**, `tests/integration/ci-ratchet.test.ts`. **15 tests nuevos.** Total: **149**.
+
+`perf-budgets.json` ya pone el build en rojo, que es mecanismo de verdad. Lo que **no** era es incaminable: aflojar un número ahí es editar un archivo, y la regla fundacional nombra al actor contra el que hay que diseñar — *"Claude lo escribe y nadie lee el diff"*. Esto mueve el rechazo al motor.
+
+🔴 **TRAMPA DE PRECEDENCIA, y era de las caras: construí §11.3, NO §10.0.1.** El texto de §10.0.1 pone `direction` como columna de la fila de valor y ofrece un brazo `frozen_set`. **§11.3 tacha las dos cosas**, y las dos razones son el punto entero:
+- **Una dirección elegida por quien escribe la fila más nueva la elige el atacante.** Ahora vive en `ref.ci_ratchet_name`, inmutable y keyed por nombre; cambiar un brazo exige **dropear un trigger protegido**, no editar una fila.
+- **`frozen_set` era superset-only** — el brazo equivocado para toda lista que protegía. *"El modelo edita el literal"* reconstruido como *"el modelo inserta una fila"*. El vocabulario correcto es `monotonic_down · monotonic_up · pinned · shrink_only · sealed_set`.
+
+**Construir §10.0.1 primero y "corregirlo después" habría dejado el guard invertido en producción en el medio.**
+
+- **Seis rechazos, cada uno con su SQLSTATE** para que un build rojo diga *cuál* garantía se violó: `AP002` (monotonic_down), `AP003` (up), `AP004` (pinned), `AP005` (shrink_only), `AP006` (sealed_set), `AP007` (nombre sin brazo registrado), `AP008` (forma de fila que no corresponde al brazo).
+- ✅ **Los cinco brazos probados por los DOS lados.** Un brazo que siempre rechaza pasa un test ingenuo y se termina borrando la primera vez que bloquea algo legítimo; uno que nunca rechaza pasa el mismo test para siempre.
+- **La suite corre como el DUEÑO a propósito** — la credencial que *puede* debilitar cosas. Probar el trigger con un rol restringido no diría nada sobre el caso que importa. `UPDATE`, `DELETE WHERE false` y `TRUNCATE` levantan `AP001` incluso para el migrador.
+- 🎯 **Y la aserción que vale sola:** `INSERT` de 400000 sobre `perf.P12` → **`AP002: perf.P12_initial_js_gzip loosened from 128000 to 400000`**. Ese es exactamente el paseo que esta tabla existe para frenar.
+- **`crm_ci` se crea `NOINHERIT` y SIN contraseña ni LOGIN**, igual que `crm_app`: una credencial en una migración es una credencial en el repositorio, en la imagen y en cada clon. Tiene `INSERT, SELECT` sobre los valores y **`SELECT` solo** sobre los brazos — el CI registra lo que midió y **nunca puede reclasificar qué significa una medición**.
+- **E6 queda satisfecha, no anticipada:** los cuatro nombres registrados con su brazo y su justificación (≥20 caracteres por `CHECK`), y **`perf.P20` sin fila de valor** porque nada lo midió todavía. Un test asegura que ese hueco siga visible.
+- 🔬 **Una mutación quedó VERDE y la anoto en vez de taparla.** Cambié el trigger para comparar contra la última fila en vez de `min(value_num)` y los 15 tests siguieron pasando. **La razón es que bajo `monotonic_down` los dos números son el mismo por inducción**: toda inserción aceptada es ≤ al mínimo, así que la última fila *es* el mínimo. El agregado es defensivo, no load-bearing, y sólo difiere si alguna fila aterriza sin el trigger. **El test que decía probar esa distinción afirmaba una propiedad que la regla vuelve inalcanzable — reescrito para decir lo que sí prueba.**
+- ⚠️ **LO QUE ESTO TODAVÍA NO HACE, dicho claro:** el checker `check-perf-budgets.ts` **sigue comparando sólo contra el archivo**. Que lea el ratchet exige la credencial de `crm_ci` en el CI, y eso exige el remoto que todavía no existe. Hoy la garantía es: *el motor rechaza el aflojamiento* — probado, con 15 tests. Falta: *el CI no puede correr con un archivo que discrepe del motor.*
+
+⚠️ **DEUDA DE HIGIENE ENCONTRADA AL PASAR: la cadena de snapshots de Drizzle está desenganchada desde 0018.** Las migraciones **0019 y 0020 alteraron tablas** (constraints y la columna `claimed_at`) sin actualizar `meta/*_snapshot.json`, y 0019–0022 son SQL escrito a mano. **Consecuencia: `npm run db:generate` compararía contra un estado cuatro migraciones viejo** y podría emitir un diff que re-agrega o dropea cosas. No es un problema hoy porque nadie lo corrió; **es una trampa cargada para la próxima sesión que cambie una tabla vía Drizzle.**
+
 ### 🧨 P6 medía el DEV SERVER, y Closed Lost por fin se puede usar (2026-08-02)
 `playwright.config.ts` (dos servidores), `scripts/seed.ts` (+7 razones de pérdida), `tests/e2e/lost-gate.spec.ts`. **27 e2e** (+1); 134 de unit/integración sin cambios.
 
@@ -744,7 +766,7 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 1. ~~**Arrancar el worker DENTRO del proceso web.**~~ ✅ **HECHO el 2026-08-02** — ver la sección de la topología plegable más arriba. La decisión que este ítem pedía tomar y no descubrir quedó tomada: **sin esquema de pg-boss el proceso se niega a arrancar**, y por lo tanto **`npm run db:jobs` es requisito de `npm run dev`**.
 2. ~~**`lost_reason` en el seed.**~~ ✅ **HECHO el 2026-08-02** — 7 razones sembradas y `tests/e2e/lost-gate.spec.ts` lo sostiene, probado por mutación.
 3. ~~**Puerta 11 — medir bundle y TTI.**~~ 🟡 **MITAD HECHA el 2026-08-02** (ver arriba). Lo que queda de ella son dos piezas separables:
-   - **3a · `ref.ci_ratchet` en Postgres** (`05c` §10.0.1): rol `crm_ci` con INSERT/SELECT, trigger que rechaza el aflojamiento con `AP002`, append-only por el mismo trigger de sentencia que el ledger. **Es lo que convierte "el build se pone rojo" en "nadie lo afloja sin una migración".** No depende de nadie y es la mitad que este proyecto llamaría mecanismo de verdad.
+   - ~~**3a · `ref.ci_ratchet` en Postgres**~~ ✅ **HECHO el 2026-08-02** (migración 0022, 15 tests). Construido sobre **§11.3**, que tacha el `frozen_set` y la columna `direction` de §10.0.1. **Falta sólo la mitad de cableado:** que `check-perf-budgets.ts` lea el ratchet, lo que exige la credencial `crm_ci` en el CI y por lo tanto el remoto.
    - **3b · P20 (TTI móvil)**, que necesita el tier nocturno de Lighthouse y el fixture **perf-500**.
 4. ~~**Puerta 12 — el drag a 60 fps con 500 tarjetas.**~~ ✅ **CERRADA el 2026-08-02** (ver arriba). **Y el fixture `perf-500` ya existe**, así que 3b (TTI) hereda lo caro: le falta sólo el tier nocturno de Lighthouse.
 5. **Alcanzabilidad por teclado de la barra de undo.** Vive 5 s y está temprano en el DOM del `main`, pero un teclado que tabula desde el encabezado puede no llegar a tiempo. **axe no mide plazos**, así que esto queda fuera del gate nuevo: hay que medirlo, no suponerlo.
@@ -754,6 +776,7 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 
 ### 🧾 DEUDA TÉCNICA DECLARADA (no perder de vista)
 - **E9 está firmada pero NO implementada:** no existe `ref.capability_probe`. Llega con el módulo Aloware.
+- ⚠️ **Snapshots de Drizzle desenganchados desde 0018.** 0019–0022 son SQL a mano y dos de ellas alteraron tablas sin snapshot. **`npm run db:generate` no es seguro de correr** hasta reconciliarlo: compararía contra un estado cuatro migraciones viejo.
 - **R13 abierto:** `raw_payload_vault` purga por drop de partición mientras `dead_letter` tiene FK hacia ella.
 - **Tensión de precedencia sin resolver:** `CLAUDE.md` dice que **una sola** ruta `routes/ui/**` puede servir datos de tablero como SSR; hoy leaderboard **y** kanban tienen loader. **Pasar `precedence-checker` antes de decidir.**
 - **`lead_source_id` omitido** en `contact` a propósito; llega con el módulo de intake.
