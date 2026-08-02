@@ -49,6 +49,31 @@ Evidencia completa: [`docs/sprint-0/g0-us-region.md`](docs/sprint-0/g0-us-region
 - **Dos aserciones más que agregó la suite:** un supervisor obtiene lectura global **pero la escritura le sigue siendo rechazada** (`USING` pasa, `WITH CHECK` falla — esa asimetría *es* el modelo de autorización, y es lo que hace que el caso del supervisor sea 403 y no un not-found), y el enum `user_role` tiene **exactamente tres etiquetas**, la forma mecánica de "no hay constructor de roles ni matriz de permisos".
 - **También pendiente:** el trigger que rechaza `is_demo=true` en producción (necesita `system_constant`, que aún no existe) y la validación de `display_tz` en `app_user`.
 
+### 🧩 SPRINT 1 — La topología plegable deja de ser una declaración (2026-08-02)
+`app/entry.server.tsx` (revelado), `app/jobs/boot.ts`, `app/jobs/worker.test.ts`, job `e2e` del CI. **7 tests nuevos.** Total: **129**.
+
+El ítem de pg-boss dejó las dos mitades del pliegue —`npm run worker` para el proceso separado, `workerEnabled()` leyendo `PROCESS_ROLES`— y **nada que arrancara el worker dentro del proceso web**. Jorge exigió que los tres procesos sean *configuración de despliegue, no supuesto arquitectónico*; afirmar que se pliega sin haberlo corrido nunca es exactamente lo que este proyecto llama documentación. Ahora corre.
+
+- **`app/entry.server.tsx` existe por UNA razón** y por lo demás es el default del framework: es el único módulo que el proceso web carga una vez al arrancar, sin importar qué ruta se pida. El arranque va a **scope de módulo, no dentro de `handleRequest`** — el worker es propiedad del PROCESO, y arrancarlo en el primer render ataría *si los recordatorios disparan* a *si alguien abrió una página*.
+- **Decisión tomada, no descubierta (Jorge, hoy): sin el esquema de pg-boss el proceso SE NIEGA A ARRANCAR.** Misma postura que G4(a) y por la misma razón: la alternativa no tiene síntoma. Un web que sirve cada página perfectamente y no dispara ninguno de sus recordatorios se ve sano desde todos los ángulos, y **en topología plegada no hay un segundo proceso cuya ausencia alguien note**. Un recordatorio es artefacto legal, no comodidad. Consecuencia asumida y ahora escrita en todos lados: **`npm run db:jobs` es requisito de `npm run dev`.**
+- ✅ **PLIEGUE VERIFICADO CORRIENDO, no en test.** Sembré dos jobs vencidos en el tenant demo (−1 min y −40 min) y **el proceso web** los reclamó y escribió las dos filas terminales: `skipped: sms_disabled` y `dropped: 40m late`. Son **exactamente los mismos dos resultados** que el ítem anterior obtuvo con el worker separado. Eso no cierra la Puerta 5, pero es la primera evidencia real de equivalencia plegado/separado que el proyecto tiene.
+- ✅ **La negativa verificada por los DOS lados, contra el build de producción.** Con el esquema dropeado y el rol `worker` presente: **exit 1** con el mensaje que nombra `npm run db:jobs`. Con `PROCESS_ROLES=web,ingest` y el mismo esquema ausente: **arranca y sirve**. Un guard que dispara siempre se termina borrando; éste tiene su escotilla documentada y probada.
+- ⚠️ **Matiz honesto sobre "se niega a arrancar": el puerto se anuncia ANTES de morir.** `react-router-serve` imprime su URL y el proceso muere a continuación con código 1. Para un deploy es un fallo duro igual, pero no es "nunca escuchó" — y decir lo segundo sería vender más de lo medido.
+- 🔴 **Y un hecho que había que medir: EN DEV EL PLIEGUE ES PEREZOSO.** `npm run dev` imprimió *Local: http://localhost:3000* **sin arrancar el worker**; la línea `[worker] folded…` recién apareció tras el primer request, porque Vite carga `entry.server.tsx` bajo demanda. O sea que en desarrollo la garantía es *"muere en el primer request"*, no *"no levanta"*. En producción sí es al boot, verificado arriba. **Lo supuse al revés y la sonda me corrigió.**
+- **El arranque exitoso IMPRIME una línea.** Sin ella, un worker plegado que corre y uno que nunca arrancó se ven idénticos en consola — y que el pliegue sea observable es el punto entero de este ítem.
+- 🔴 **Filo del CI que esta decisión abría y que ya está cerrado:** el job `e2e` corre `db:migrate` y `db:seed` pero **no** `db:jobs`, y `playwright.config.ts` arranca `npm run dev`. Sin agregar ese paso, **los 25 e2e se habrían puesto rojos en la primera corrida del CI** sobre un servidor que nunca levantó. Agregado con su razón.
+- **Sin handler de SIGTERM/SIGINT, y es decisión y no olvido.** Una muerte abrupta a mitad de despacho **ya es un caso cubierto**: `claimed_at` es un lease, y el lease es deliberadamente más corto que los 15 minutos tras los cuales un recordatorio se descarta. Un hook de apagado que el `process.exit` del dev server puede cortar por la mitad sería una segunda vía más débil hacia una garantía que el lease ya sostiene.
+- **Guard contra HMR:** el flag de arranque vive en `Symbol.for` sobre `globalThis`, no en scope de módulo. Vite re-evalúa el grafo SSR en cada cambio, así que un flag de módulo se resetea y **cada edición arrancaría una segunda instancia de pg-boss** sosteniendo conexiones contra un pool cuyo techo son 8.
+- 🎯 **Los dos tests nuevos probados por mutación.** Sacando la llamada de `entry.server.tsx` → rojo (es la única regresión silenciosa disponible acá: typecheck, lint y todo lo demás quedan verdes mientras la topología vuelve a estar declarada y no cableada). Cambiando el match de rol a `includes` sobre la cadena cruda → rojo con `expected true to be false`, que es el bug clásico: `PROCESS_ROLES=web,workers` arrancaría un despachador que nadie pidió. **Mi primera mutación de ese caso estaba mal planteada y quedó verde; el test no tenía la culpa.**
+- **Lo que los tests NO prueban, dicho en voz alta:** que el worker arranque y despache está verificado **corriendo el proceso**, igual que el ítem anterior. La aserción de cableado es sobre el texto fuente y es débil a propósito.
+- **Cuatro errores de lint del default del framework, corregidos sin desactivar reglas** (`loadContext` sin usar, dos `let` que son `const`, y un `reject` con `unknown`). Ese último se resolvió preservando la identidad del `Error` real en vez de silenciar la regla.
+- ⚠️ **CONSECUENCIA OPERATIVA NUEVA del pliegue: un dev server huérfano ya no es inerte.** Encontré dos procesos node escuchando en :3000 que sobrevivieron a la corrida de Playwright — antes eran inofensivos; **ahora cada uno corre un despachador que tickea cada minuto** contra `crm_dev`. Los maté. **Al terminar de trabajar conviene comprobar que el puerto 3000 quedó libre**, porque un proceso olvidado ahora toca la base sola.
+- 🟡 **UN TEST INTERMITENTE SIN EXPLICAR, anotado y NO tapado — el único punto abierto de este ítem.** `auth-identity.test.ts:123` (`resolve_identity`) falló **dos veces, las dos bajo `git commit`**, mientras **nueve corridas sueltas de `npm run verify` pasaron 129/129** — y después una tercera bajo `git commit` pasó, así que **no es determinista y la correlación con el hook puede ser casualidad de muestra pequeña**. Frecuencia observada: 2 de ~12.
+  - **Hipótesis refutada por medición, no descartada de palabra:** pensé en agotamiento de conexiones (12 archivos × pool de 8 contra `max_connections=100`) y **el pico real fueron 13 de 100** — los pools de `postgres.js` son perezosos.
+  - **Nunca capturé el mensaje**, sólo la línea y un `cachedError` de `postgres.js`. El intento de capturarlo fue la corrida que pasó.
+  - **Sin veredicto: no está arreglado, y que sea mío no está descartado.** Lo único que cambió cerca es que agregué un 12° archivo de test, lo que altera el orden en que vitest corre los archivos. `silo.test.ts` muta grants y políticas de todo el cluster vía `harden()`, así que una dependencia de orden latente es candidata plausible y **no verificada**.
+  - **Si vuelve: capturar el mensaje completo ANTES de reintentar.** Un test de identidad que falla a veces es un test de identidad que falla.
+
 ### 🎉 SPRINT 1 — La celebración, y la PUERTA 10 CERRADA (2026-08-02)
 Migración **0021**, `app/modules/earnings/celebration.ts`, `app/components/board/celebration.tsx`, `app/routes/api/celebrate.ts`, **8 tests de integración + 3 e2e**. Totales: **122** y **25 e2e**.
 
@@ -634,7 +659,7 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 | 2 | Aloware contra la cuenta real | 🔴 bloqueado, es de Jorge |
 | 3 | Camino del dinero | ✅ mayormente — append-only por trigger de sentencia (incluye TRUNCATE), exactly-once, transacción del gate atómica. **Falta:** proceso muerto a mitad del gate sin dejar lock |
 | 4 | Silo de punta a punta | 🟡 **(a) cerrado** (se niega a arrancar si el usuario puede saltear RLS). El resto lo cubre la suite de silo salvo el contexto heredado entre job y request en la misma conexión pooleada |
-| 5 | Equivalencia plegado/separado | ⬜ no empezado |
+| 5 | Equivalencia plegado/separado | 🟡 **el pliegue EXISTE y corrió.** El worker arranca dentro del proceso web (`app/jobs/boot.ts`) y produjo **las mismas dos filas terminales** que el proceso separado — `skipped: sms_disabled` y `dropped: 40m late`. Falta lo que da nombre a la puerta: equivalencia **bajo carga y en los bordes**, no en un caso feliz |
 | 6 | Tormenta de 20.000 webhooks | ⬜ no empezado |
 | 7 | SSE detrás del proxy | ⬜ no empezado |
 | 8 | pg-boss bajo estrés de versión | ⬜ no empezado |
@@ -650,13 +675,14 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 
 **Recomendación de por dónde seguir, en este orden:**
 
-1. **Arrancar el worker DENTRO del proceso web.** Hoy la topología plegable está **declarada y no cableada**: `npm run worker` corre el proceso separado y `workerEnabled()` lee `PROCESS_ROLES`, pero nada arranca el worker en el web. Jorge exigió que los tres procesos sean *configuración de despliegue, no supuesto arquitectónico*, y afirmar que se pliega sin haberlo cableado es exactamente lo que este proyecto llama documentación. **Ojo:** hacerlo vuelve `npm run db:jobs` un requisito para `npm run dev`, y eso hay que decidirlo, no descubrirlo.
+1. ~~**Arrancar el worker DENTRO del proceso web.**~~ ✅ **HECHO el 2026-08-02** — ver la sección de la topología plegable más arriba. La decisión que este ítem pedía tomar y no descubrir quedó tomada: **sin esquema de pg-boss el proceso se niega a arrancar**, y por lo tanto **`npm run db:jobs` es requisito de `npm run dev`**.
 2. **`lost_reason` en el seed.** El selector "Why?" está vacío, así que **Closed Lost es inusable en el demo**. Lo confirman los e2e, no sólo la observación.
 3. **Puerta 11 — medir bundle y TTI.** Fija los dos presupuestos que hoy **no tienen número** y por eso rompen el build (E6/R7). Es la puerta que desbloquea más cosas y no depende de nadie más.
 4. **Puerta 12 — el drag a 60 fps con 500 tarjetas.** El drag existe; falta la mitad que le da nombre a la puerta. El estado sólo cambia en `dragenter`/`dragleave` y nunca en `dragover`, que es condición necesaria y no la medición.
 5. **Alcanzabilidad por teclado de la barra de undo.** Vive 5 s y está temprano en el DOM del `main`, pero un teclado que tabula desde el encabezado puede no llegar a tiempo. **axe no mide plazos**, así que esto queda fuera del gate nuevo: hay que medirlo, no suponerlo.
 6. **Re-evaluación en vivo del drag al cruzar 1024 px.** El listener de `matchMedia` es estándar pero **no está verificado**: la emulación de viewport por CDP no dispara `resize` ni `change`, así que en el navegador de la herramienta sólo se puede observar la evaluación inicial (que sí está verificada de los dos lados).
 7. **Tensión de precedencia sin resolver:** `CLAUDE.md` dice que **una sola** ruta `routes/ui/**` puede servir datos de tablero como SSR; hoy leaderboard **y** kanban tienen loader. **Pasar `precedence-checker` antes de decidir.**
+8. **Puerta 5 — equivalencia plegado/separado.** Ya no arranca de cero: el mismo despachador produjo **las mismas dos filas terminales** en las dos topologías (ver arriba). Lo que falta es lo que da nombre a la puerta — que sean equivalentes **bajo carga y en los bordes**, no en un caso feliz.
 
 ### 🧾 DEUDA TÉCNICA DECLARADA (no perder de vista)
 - **E9 está firmada pero NO implementada:** no existe `ref.capability_probe`. Llega con el módulo Aloware.
@@ -671,11 +697,15 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 ```bash
 npm run db:up      # Docker Postgres 18 — puede necesitar abrir Docker Desktop a mano
 npm run db:migrate
-npm run db:jobs    # instala el esquema de pg-boss COMO MIGRADOR (nunca en el arranque)
+npm run db:jobs    # NO ES OPCIONAL. Instala el esquema de pg-boss COMO MIGRADOR.
+                   # Sin esto `npm run dev` se niega a arrancar (JOBS002), porque
+                   # PROCESS_ROLES incluye "worker" y el worker se pliega adentro.
 npm run db:seed    # crea el tenant demo Y fija la contraseña dev de crm_app
-npm run dev        # http://localhost:3000
-npm run worker     # opcional: el despachador de recordatorios, proceso aparte
+npm run dev        # http://localhost:3000 — el worker corre DENTRO de este proceso
+npm run worker     # sólo para la topología SEPARADA. Con el default plegado no hace
+                   # falta: `npm run dev` ya despacha, y lo dice al arrancar.
 ```
+⚠️ **Si `npm run dev` muere con `JOBS002`, falta `npm run db:jobs`** — el mensaje lo dice y nombra el comando. Para servir la web sin worker: `PROCESS_ROLES=web,ingest`.
 Entrar con `renata@demo.test` / `demo-password-1234`. Otros: `priya@`, `marcus@`, `dana@`, `tomas@` (este último con **cero ventas** a propósito: es el caso que probó que el tablero debía incluirlo).
 
 Hace falta un `.env` (copiar de `.env.example`; está en `.gitignore`, así que un clon nuevo no lo trae y sin él la app **no arranca**, por diseño de G4(a)).
@@ -686,9 +716,11 @@ npm run db:reset && npm run db:up && npm run db:migrate && npm run db:seed
 ```
 `db:down` **no** alcanza — deja el volumen y las filas vuelven.
 
-⚠️ **El tenant demo de esta máquina está DERIVADO y conviene resetearlo antes de mostrarlo.** Las primeras corridas del e2e —antes de que cada spec creara su propia tarjeta— cerraron ventas del demo: Renata quedó en **$89.549,88** en vez de los **$9.029,88** sembrados, con 7 tarjetas en Closed Won y una ya celebrada (que por diseño **no se puede volver a celebrar, nunca**). No es un defecto del producto; es residuo de pruebas. El comando de arriba lo deja como recién sembrado.
+✅ **El tenant demo de esta máquina fue RESETEADO el 2026-08-02 y está limpio.** Renata vuelve a marcar **$9.029,88**. (Venía de **$89.549,88** por residuo de corridas viejas del e2e.)
 
-⚠️ **ESTE REPOSITORIO NO TIENE REMOTO.** `git remote -v` está vacío: todo el trabajo vive en un solo disco y **el CI de GitHub Actions no se ha ejecutado nunca**, porque no hay dónde empujar. Las dos consecuencias son distintas y las dos importan: no hay copia, y **el gate que existe para que una segunda persona vea el build en rojo todavía no se lo ha visto nadie**.
+⚠️ **Pero el demo se vuelve a derivar cada vez que corrés `npm run test:e2e`, y eso es por diseño.** `celebration.spec.ts` lo dice en su propio encabezado: cerrar un trato *es* lo que ese spec prueba y no existe versión que no toque el ledger, así que **cada corrida deja una venta real de $310 × 12 = $3.720** en el vendedor con el que entra. El ledger es append-only y **no hay job de recomputo**, por diseño. **Antes de un demo comercial, reseteá** con el bloque de arriba; el CI corre el e2e contra su propia base efímera, así que allá no importa.
+
+⚠️ **ESTE REPOSITORIO SIGUE SIN REMOTO** — pendiente de Jorge al 2026-08-02. **Decidido:** va a GitHub bajo `RuizGoge`, **privado** (los repos privados igual tienen cuota gratuita de Actions; el control de costo sigue siendo la ausencia de método de pago, §9.4.1). Falta sólo el paso manual: crear el repo **vacío** en github.com/new —sin README, sin .gitignore, sin licencia, porque cualquiera de los tres fuerza un merge antes del primer push— y después `git remote add origin <url> && git push -u origin master`. El workflow ya dispara sobre `[master, main]`, así que no hace falta renombrar la rama. **Hasta que eso pase: no hay copia fuera de este disco, y el CI de GitHub Actions nunca se ejecutó** — o sea que *"el build se pone rojo"* sigue sin haberlo visto nadie más que esta máquina.
 
 ### Decisiones abiertas que Jorge confirma cuando quiera (ninguna bloquea la escritura; van con mi recomendación): propiedad del registro 10DLC (agencia del cliente vs nuestra); grabación de llamadas si el aviso no se dispara en el two-legged → *reco: desactivar a nivel de cuenta*; retención de payloads crudos → *reco: 60 días*; atajos de una tecla → *reco: apagados por defecto los primeros 30 días*; Sentry Team USD 26 pre-aprobado para activar el día del primer incidente; confirmar que sin email no hay reset de contraseña autogestionado; y si habrá una 2ª persona con acceso en 12 meses (**+USD 25/mes planos** — corregido en G0 desde el "+USD 51" que decía antes; Render reemplazó sus planes de workspace el 2026-04-23 y Pro dejó de cobrar por asiento. La prohibición de §9.4.5 no cambia, solo su aritmética).
 4. **Sprint 0 — primer ítem, antes de crear ningún recurso:** verificar región EE.UU. en el plan de hosting a contratar. Si falla, la decisión de stack se da vuelta hacia Rails/DigitalOcean.

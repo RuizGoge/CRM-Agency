@@ -122,6 +122,16 @@ jobs:
 
       - run: npm run db:migrate
 
+      # REQUIRED, not optional, since the worker folds into the web process.
+      # playwright.config.ts starts `npm run dev`, and that process now refuses
+      # to boot when it carries the "worker" role and pg-boss has no schema —
+      # the same posture as G4(a). Without this step every e2e test goes red on
+      # a web server that never came up.
+      #
+      # As the MIGRATOR, never at start: the worker runs with migrate:false so a
+      # library cannot issue DDL under the application's credential.
+      - run: npm run db:jobs
+
       # Also sets crm_app's password out of band — deliberately not in a
       # migration, which would put a credential in the repository and in every
       # clone. It refuses to run twice, which on a fresh CI database is moot
