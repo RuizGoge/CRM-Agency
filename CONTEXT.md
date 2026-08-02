@@ -672,7 +672,9 @@ Entrar con `renata@demo.test` / `demo-password-1234`. Otros: `priya@`, `marcus@`
 - Fuente de datos para resolver zona horaria del lead (tabla zip→tz vs código de área): decidir en Fase 5.
 - El chip de contacto reciente quedó azul (no ámbar) para no degradar la señal de bloqueo — confirmar con quien lleve la narrativa de cumplimiento.
 
-### D7–D9 abiertas
+### ~~D7–D9 abiertas~~ — RESUELTAS (2026-07-31). Texto histórico, no un pendiente.
+> ⚠️ **Esta sección decía "abiertas" mientras la línea 454 las daba por resueltas, y las dos estuvieron vivas a la vez.** Marcado el 2026-08-02. Lo que manda es la resolución: **D7 sí** (selector de período sobre un solo tablero) · **D8 no** (el ledger arranca en el go-live; la historia va como saldos iniciales de admin, auditados) · **D9** se verifica en el spike de Aloware y, si el aviso legal no se dispara, se desactiva la grabación a nivel de cuenta. Abajo queda el razonamiento original.
+
 - **D7 · Selector de período en el ranking** (Today/Week/Month/All-time, default All-time). *Reco: adoptar* — el tablero all-time el día 1 son 50 filas de $0 y el demo muere; `period_key` ya está en cada fila del ledger. Es un filtro, no un segundo tablero.
 - **D8 · ¿Las ventas históricas importadas escriben en el ledger?** *Reco: NO* — el ledger arranca en el go-live y el tablero se rotula honestamente ("Desde el lanzamiento"). Si quieres historia, va como saldos iniciales ingresados por admin y auditados.
 - **D9 · Grabación de llamadas:** Aloware graba a nivel de CUENTA y no está verificado si el aviso legal se dispara en la llamada por API. CA/FL/PA/IL/WA/MA exigen consentimiento de ambas partes. *Reco:* verificar en el spike; si no se dispara, **desactivar grabación a nivel de cuenta** para el MVP.
