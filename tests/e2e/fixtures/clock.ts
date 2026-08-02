@@ -32,3 +32,23 @@ export async function expectText(target: Locator, text: string): Promise<void> {
 export async function expectUrl(page: Page, pattern: RegExp): Promise<void> {
   await expect.poll(() => page.url(), { timeout: 10_000 }).toMatch(pattern)
 }
+
+/**
+ * The board is loaded AND hydrated. Anchor for every "this must not appear"
+ * assertion.
+ *
+ * `expectCount(x, 0)` passes the instant it sees zero, which a page that has
+ * not rendered yet also satisfies — so an absence assertion made too early
+ * passes for the wrong reason and would go on passing if the thing it forbids
+ * started appearing. Caught by writing a reload test that passed before the
+ * reload had finished.
+ *
+ * `[data-drag]` is the anchor: the attribute is absent until the drag effect has
+ * run and then reads `on` or `off`. Its PRESENCE means React mounted and ran
+ * effects — the state in which a celebration would have appeared if it were
+ * going to — and it says so on both profiles, unlike anything that only exists
+ * where drag is armed.
+ */
+export async function expectBoardSettled(page: Page): Promise<void> {
+  await expect.poll(() => page.locator('main [data-drag]').count(), { timeout: 10_000 }).toBe(1)
+}

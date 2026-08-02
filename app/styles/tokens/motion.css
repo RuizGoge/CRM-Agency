@@ -13,6 +13,10 @@
   --duration-base: 200ms;
   --duration-slow: 320ms;
   --duration-deliberate: 480ms;
+  /* The confetti fall. Longer than any other duration here because it is the
+   * one animation whose job is to be watched rather than to get out of the way,
+   * and it is MOTION — the reduced-motion block removes it entirely. */
+  --duration-celebration: 2200ms;
 
   --ease-standard: cubic-bezier(0.2, 0, 0.2, 1);
   --ease-entrance: cubic-bezier(0, 0, 0.2, 1);
@@ -56,6 +60,46 @@
   .undo-window-rail {
     animation-duration: var(--time-undo-window) !important;
   }
+
+  /* Confetti is MOVEMENT, so it goes — the whole point of this block. The card
+   * that names the sale and the amount is FEEDBACK, so it stays, and it stays
+   * for the same duration everyone else gets. A seller who asked their OS for
+   * less motion still has to learn that the money landed. */
+  .confetti-piece {
+    display: none;
+  }
+}
+
+/* Falls the height of the viewport once and stops. No loop: a celebration that
+ * keeps going is a notification, and this is a moment. */
+@keyframes confetti-fall {
+  from {
+    transform: translateY(0) rotate(0deg);
+    opacity: 1;
+  }
+  to {
+    transform: translateY(105vh) rotate(540deg);
+    opacity: 0;
+  }
+}
+
+.confetti-piece {
+  animation: confetti-fall var(--duration-celebration) var(--ease-exit) forwards;
+}
+
+@keyframes celebration-card-in {
+  from {
+    transform: scale(0.92);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.celebration-card {
+  animation: celebration-card-in var(--duration-slow) var(--ease-spring) both;
 }
 
 /* Draws --time-undo-window. Nothing else may use it: a second caller would be

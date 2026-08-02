@@ -289,9 +289,16 @@ describe('the two intervals are never given one name', () => {
     expect(Number(declared)).toBe(UNDO_WINDOW_MS)
     expect(row?.undo).toBe(UNDO_WINDOW_MS)
 
-    // The fourth representation, the celebration scheduler, does not exist yet.
-    // When it does it belongs in this assertion — noted here rather than in a
-    // document, because this is the file that would have caught it.
+    // The FOURTH representation: the celebration claim. Gate 10 asked for the
+    // number to agree in four places and this is the last of them.
+    const [claim] = await sql<{ src: string }[]>`
+      SELECT prosrc AS src FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'app' AND p.proname = 'celebrate_once'`
+    expect(claim?.src).toContain('undo_deadline_ms')
+    // And NOT the other one. E7/NEW-1: the branch that reaches for the public
+    // projection's guard here is the branch that silently refuses every
+    // celebration, and a drift test comparing names would stay green through it.
+    expect(claim?.src).not.toContain('projection_reveal_delay_ms')
   })
 
   it('keeps the reveal delay exactly one guard interval above the undo window', async () => {

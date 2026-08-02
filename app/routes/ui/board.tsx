@@ -1,11 +1,23 @@
 import { sql } from 'drizzle-orm'
-import { Form, Link, redirect, useFetcher, useNavigate, useSearchParams } from 'react-router'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  Form,
+  Link,
+  NavigationType,
+  redirect,
+  useFetcher,
+  useNavigate,
+  useNavigationType,
+  useSearchParams,
+} from 'react-router'
 
+import { Celebration } from '~/components/board/celebration'
 import { PipelineColumns } from '~/components/board/pipeline-columns'
 import { UndoBar } from '~/components/board/undo-bar'
 import { withTenant } from '~/db'
 import { requireIdentity } from '~/lib/auth/identity'
 import { MoneyError, parseUserAmount } from '~/lib/money/money'
+import { CelebrationToken } from '~/modules/earnings/celebration'
 import { readPipeline, type BoardColumn, type PipelinePayload } from '~/routes/api/board'
 
 import type { Route } from './+types/board'
@@ -16,11 +28,22 @@ export function meta(_: Route.MetaArgs) {
 
 interface LoaderData extends PipelinePayload {
   readonly lostReasons: ReadonlyArray<{ id: string; label: string }>
+  /**
+   * Everything the celebration renders, delivered with the board itself.
+   *
+   * Ruling P2.4: nothing is fetched at T+5,000 ms, so the +/-100 ms window of
+   * D3-05 has no network on its render path. Present only for a win that has
+   * not been celebrated yet — the `celebrated_at IS NULL` half of "once per
+   * opportunity, forever", with the other half enforced by the claim.
+   */
+  readonly celebration: { opportunityId: string; contactName: string; annualCents: string } | null
 }
 
 export async function loader({ request }: Route.LoaderArgs): Promise<LoaderData> {
   const identity = await requireIdentity(request)
-  const [pipeline, lostReasons] = await Promise.all([
+  const justMoved = new URL(request.url).searchParams.get('moved') ?? ''
+
+  const [pipeline, lostReasons, celebration] = await Promise.all([
     readPipeline(request),
     withTenant(identity, async (tx) => {
       const rows = await tx.execute<{ id: string; label: string }>(
@@ -30,8 +53,37 @@ export async function loader({ request }: Route.LoaderArgs): Promise<LoaderData>
       )
       return [...rows]
     }),
+    justMoved === ''
+      ? Promise.resolve(null)
+      : withTenant(identity, async (tx) => {
+          // Owner-scoped by the policy AND explicitly, like every other read on
+          // this screen: the policy is the floor, not the answer.
+          //
+          // Bound to `current_stage_type = 'earning'` and never to a stage
+          // name. Renaming a column must change nothing here, exactly as it
+          // changes nothing at the gate.
+          const rows = await tx.execute<{ id: string; name: string; cents: string }>(
+            sql`SELECT o.id,
+                       coalesce(c.full_name, 'Unnamed lead') AS name,
+                       o.premium_annual_cents::text AS cents
+                  FROM app.opportunity_live o
+                  LEFT JOIN app.contact c
+                    ON c.tenant_id = o.tenant_id AND c.id = o.contact_id
+                 WHERE o.tenant_id = app.current_tenant()
+                   AND o.owner_user_id = app.current_user_id()
+                   AND o.id = ${justMoved}::uuid
+                   AND o.current_stage_type = 'earning'
+                   AND o.celebrated_at IS NULL
+                   AND o.premium_annual_cents IS NOT NULL`,
+          )
+          const row = rows[0]
+          return row
+            ? { opportunityId: row.id, contactName: row.name, annualCents: row.cents }
+            : null
+        }),
   ])
-  return { ...pipeline, lostReasons }
+
+  return { ...pipeline, lostReasons, celebration }
 }
 
 function field(form: FormData, name: string): string {
@@ -194,6 +246,50 @@ export default function Board({ loaderData, actionData }: Route.ComponentProps) 
   const movedCard = movedTo?.cards.find((k) => k.id === movedId)
   const back = backId ? loaderData.columns.find((c) => c.id === backId) : undefined
 
+  // The celebration, armed only by a MOVE and never by a page load.
+  //
+  // `useNavigationType()` answers Pop on a fresh document — a reload, a
+  // restored tab, a bookmark. The payload survives all three because it is
+  // loader data; the confetti does not, and that is US-9.8's "not replayed"
+  // obtained structurally rather than by remembering. The wrapping into a
+  // CelebrationToken is what stops it being persisted from here on.
+  const navigationType = useNavigationType()
+  const payload = loaderData.celebration
+
+  // CAPTURED at the moment the window closes, never derived from the live
+  // loader payload — and that difference is a defect this had.
+  //
+  // The claim POSTs through a fetcher, and a fetcher submission revalidates the
+  // route. Revalidation re-runs the loader, `celebrated_at` is no longer NULL
+  // by then, `celebration` comes back null, and the confetti UNMOUNTED ABOUT
+  // TWO HUNDRED MILLISECONDS AFTER IT APPEARED. On screen it was a flash. The
+  // e2e assertion had passed because it polled inside that flash.
+  //
+  // Holding the token in state is also what the ruling means by "lives only in
+  // that page's memory": once taken, it does not depend on anything the server
+  // says next.
+  const [celebrating, setCelebrating] = useState<CelebrationToken | null>(null)
+
+  // The bar's effect must not see a new callback on every render, or it clears
+  // and restarts the five seconds it is counting. So what the callback reads
+  // lives in a ref, and the callback itself never changes identity.
+  const armed = useRef<{ payload: typeof payload; navigationType: typeof navigationType }>({
+    payload,
+    navigationType,
+  })
+  useEffect(() => {
+    armed.current = { payload, navigationType }
+  }, [payload, navigationType])
+
+  const onWindowClosed = useCallback(() => {
+    const { payload: p, navigationType: nav } = armed.current
+    // `useNavigationType()` answers Pop on a fresh document — a reload, a
+    // restored tab, a bookmark. The payload survives all three because it is
+    // loader data; the confetti does not, and that is US-9.8's "not replayed"
+    // obtained structurally rather than by remembering.
+    if (!p || nav === NavigationType.Pop) return
+    setCelebrating(new CelebrationToken(p.opportunityId, p.contactName, p.annualCents))
+  }, [])
   return (
     <main style={{ padding: 'var(--space-8) var(--space-6)' }}>
       <h1
@@ -264,8 +360,14 @@ export default function Board({ loaderData, actionData }: Route.ComponentProps) 
           toStageName={movedTo.name}
           backStageId={back.id}
           backStageName={back.name}
+          onWindowClosed={onWindowClosed}
         />
       ) : null}
+
+      {/* One timer, and it is the bar's. Undo or Dismiss unmount the bar, its
+          cleanup clears the timeout, and this never renders — which is the
+          whole of "no undo was taken in this page session". */}
+      {celebrating ? <Celebration token={celebrating} /> : null}
     </main>
   )
 }

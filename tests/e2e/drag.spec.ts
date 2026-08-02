@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 
-import { expectCount, expectText, expectUrl } from './fixtures/clock'
+import { createOpenCard, removeCard, type FixtureCard } from './fixtures/board-data'
+import { expectBoardSettled, expectCount, expectText, expectUrl } from './fixtures/clock'
 import { signIn } from './fixtures/seller'
 
 /**
@@ -23,9 +24,8 @@ import { signIn } from './fixtures/seller'
  * Every test that drags waits for this first — it is not a convenience.
  */
 async function dragArmed(page: Page): Promise<void> {
-  await expect
-    .poll(() => page.locator('main article[draggable="true"]').count(), { timeout: 10_000 })
-    .toBeGreaterThan(0)
+  await expectBoardSettled(page)
+  await expect(page.locator('main [data-drag]')).toHaveAttribute('data-drag', 'on')
 }
 
 test.describe('drag is bound only on a wide screen with a fine pointer', () => {
@@ -39,9 +39,20 @@ test.describe('drag is bound only on a wide screen with a fine pointer', () => {
     const total = await cards.count()
     expect(total).toBeGreaterThan(0)
 
+    // A POSITIVE assertion in both directions. `expectCount(draggable, 0)` was
+    // the earlier form and it passed the instant it saw zero — which a page that
+    // has not hydrated also satisfies, so the mobile case would have gone on
+    // passing if drag started appearing on phones. `data-drag` is absent until
+    // the effect decides, so waiting for it and then reading it cannot pass
+    // early.
+    await expectBoardSettled(page)
+    const armed = page.locator('main [data-drag]')
+
     if (testInfo.project.name === 'desktop-ci') {
+      await expect(armed).toHaveAttribute('data-drag', 'on')
       await expectCount(draggable, total)
     } else {
+      await expect(armed).toHaveAttribute('data-drag', 'off')
       await expectCount(draggable, 0)
     }
 
@@ -76,6 +87,8 @@ test.describe('a wide screen with a COARSE pointer is not a desktop', () => {
     expect(total).toBeGreaterThan(0)
     expect(await page.evaluate(() => window.matchMedia('(pointer: fine)').matches)).toBe(false)
 
+    await expectBoardSettled(page)
+    await expect(page.locator('main [data-drag]')).toHaveAttribute('data-drag', 'off')
     await expectCount(page.locator('main article[draggable="true"]'), 0)
     await expectCount(page.getByRole('link', { name: 'Move' }), total)
   })
@@ -88,54 +101,64 @@ test.describe('a drop is the same gated move as any other', () => {
   // profile would look the same as one nobody wrote.
   const desktopOnly = 'drag exists only on the desktop profile'
 
+  // A card of its own, so this spec never depends on how many the demo has
+  // left. Removed afterwards, so it never becomes one of them.
+  let card: FixtureCard
+
+  // `test.info()` rather than the hook's testInfo parameter: Playwright
+  // requires the first argument to be an object pattern and the lint rule
+  // forbids an empty one, so the two rules only agree on taking neither.
+  test.beforeEach(async () => {
+    if (test.info().project.name !== 'desktop-ci') return
+    card = await createOpenCard('Drag fixture')
+  })
+
+  test.afterEach(async () => {
+    if (test.info().project.name !== 'desktop-ci') return
+    await removeCard(card)
+  })
+
   test('drops onto an open stage, and offers the undo', async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== 'desktop-ci', desktopOnly)
     await signIn(page)
     await page.goto('/board')
     await dragArmed(page)
 
-    // Which of the two open columns currently holds a card is DISCOVERED, not
-    // assumed. Earlier versions pinned "New Lead" as the source and went red
-    // the moment the suite had moved every card out of it — the tests share one
-    // demo tenant, so a fixed starting column is a fixed expiry date.
+    // The spec's OWN card, located by its name. Discovering "whichever open
+    // column has cards" was the previous form and it was still a bet on shared
+    // state — the fixture removes the bet entirely.
     //
-    // Both are open stages, which is what keeps this drop off the append-only
-    // ledger: a suite that runs on every push must not credit money it cannot
-    // take back.
-    const openColumns = ['New Lead', 'Quoted'] as const
-    const populated: string[] = []
-    for (const name of openColumns) {
-      if ((await page.getByRole('region', { name }).locator('article').count()) > 0) {
-        populated.push(name)
-      }
-    }
-    const sourceName = populated[0]
-    expect(sourceName, 'the demo needs a card in an open column').toBeDefined()
-    const targetName = openColumns.find((n) => n !== sourceName)
-    expect(targetName).toBeDefined()
+    // Both columns are open stages, which is what keeps this drop off the
+    // append-only ledger: a suite that runs on every push must not credit money
+    // it cannot take back.
+    const contact = card.contactName
+    const source = page.locator('main article').filter({ hasText: contact }).first()
+    await expect(source).toBeVisible()
 
-    const origin = page.getByRole('region', { name: sourceName ?? '' })
-    const target = page.getByRole('region', { name: targetName ?? '' })
+    const sourceName = 'New Lead'
+    const targetName = 'Quoted'
+    const origin = page.getByRole('region', { name: sourceName })
+    const target = page.getByRole('region', { name: targetName })
+    await expect(origin).toContainText(contact)
 
-    const source = origin.locator('article').first()
-    const contact = ((await source.locator('span').first().textContent()) ?? '').trim()
-
-    // Dropped on the ZONE, not the section. `dragTo` aims at the centre of
-    // whatever it is given, and a section's centre drifts into the header once
-    // the column is short — which is how this went red after the suite had
-    // moved most cards to one side. The zone is also the element that actually
-    // carries the handler.
-    await source.dragTo(target.locator('> div'))
+    // Dropped on the ZONE at a FIXED POINT, not on the section at its centre.
+    // `dragTo` aims at the centre of whatever it is given, and a column's
+    // centre moves with how many cards it holds: too few and it drifts into the
+    // header, too many and it drifts past the fold, where the scroll needed to
+    // reach it breaks the drag. Both failures looked like "the drop handler
+    // does not work". The zone is also the element that actually carries the
+    // handler.
+    await source.dragTo(target.locator('> div'), { targetPosition: { x: 24, y: 24 } })
 
     await expectUrl(page, /[?&]moved=/)
-    await expectText(page.locator('[role="status"]'), `Moved ${contact} to ${targetName ?? ''}.`)
+    await expectText(page.locator('[role="status"]'), `Moved ${contact} to ${targetName}.`)
     await expect(target).toContainText(contact)
     await expect(origin).not.toContainText(contact)
 
     // A drop earns the same undo as the sheet does. It is the same POST to the
     // same gated function, so this is the assertion that they did not quietly
     // become two paths.
-    await expectCount(page.getByRole('button', { name: `Undo — back to ${sourceName ?? ''}` }), 1)
+    await expectCount(page.getByRole('button', { name: `Undo — back to ${sourceName}` }), 1)
   })
 
   test('lights the column the card would land in', async ({ page }, testInfo) => {
@@ -200,8 +223,11 @@ test.describe('a drop is the same gated move as any other', () => {
     // A drop carries no deal value, and the database refuses an earning move
     // without one. The sheet appearing is the gate showing up where it applies
     // — not a fallback after a refusal the seller had to read first.
-    const source = page.locator('main article').first()
-    await source.dragTo(page.getByRole('region', { name: 'Closed Won' }).locator('> div'))
+    const source = page.locator('main article').filter({ hasText: card.contactName }).first()
+    await expect(source).toBeVisible()
+    await source.dragTo(page.getByRole('region', { name: 'Closed Won' }).locator('> div'), {
+      targetPosition: { x: 24, y: 24 },
+    })
 
     await expectCount(page.getByRole('dialog'), 1)
     await expectCount(page.getByRole('dialog').locator('input[name="premium"]'), 1)

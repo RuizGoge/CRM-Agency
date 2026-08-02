@@ -26,6 +26,7 @@ export default [
   route('api/board', 'routes/api/board.ts'),
   route('api/leaderboard', 'routes/api/leaderboard.ts'),
   route('api/my-day', 'routes/api/my-day.ts'),
+  route('api/celebrate', 'routes/api/celebrate.ts'),
   // better-auth mounts its whole surface under one splat. See the note in the
   // module for why this is the one resource route outside the endpoint factory.
   route('api/auth/*', 'routes/api/auth.ts'),

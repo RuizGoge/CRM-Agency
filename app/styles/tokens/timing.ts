@@ -23,6 +23,24 @@ export const UNDO_WINDOW_MS = 5_000
  *  It is NOT part of the celebration claim deadline. */
 export const UNDO_PROJECTION_GUARD_MS = 500
 
+/** How long AFTER the undo window a celebration may still be claimed.
+ *
+ *  This is what turns "not replayed tomorrow" into a WHERE clause: a tab left
+ *  open overnight, a restored session or a bfcache resume can all run the
+ *  client timer again, and each is refused by `app.celebrate_once` rather than
+ *  by asking the client to remember. A third interval, and like the other two
+ *  it never shares a name with them. */
+export const CELEBRATION_CLAIM_GRACE_MS = 30_000
+
+/** How long the celebration stays on screen.
+ *
+ *  A DIFFERENT job from the two above and therefore a different name. Ruling
+ *  P2.1 governs when the celebration FIRES — one timer, the undo window's own.
+ *  This governs how long it then stays, which is the same kind of decision the
+ *  undo toast's lifetime is, and an overlay that never leaves is clutter parked
+ *  over the middle of the board. */
+export const CELEBRATION_VISIBLE_MS = 4_000
+
 /** Leaderboard and notifications. Visible tab only: stops on `visibilitychange`,
  *  fires immediately on refocus. */
 export const POLL_FAST_MS = 5_000

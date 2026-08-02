@@ -38,7 +38,14 @@ export function PipelineColumns({
   /** Rendered mid-flight, so the card reads as in-progress rather than done. */
   pendingCardId: string | null
 }): React.JSX.Element {
-  const [dragEnabled, setDragEnabled] = useState(false)
+  // THREE states, not two. `null` means "not decided yet", and the difference
+  // is load-bearing for the tests: `data-drag` is absent until the effect has
+  // run, so waiting for the ATTRIBUTE proves hydration finished and its VALUE
+  // is the answer. With a plain boolean, "drag is off" and "the page has not
+  // rendered yet" produce the same DOM, and an assertion that drag is off
+  // passes before the page exists — which is a test that would go on passing
+  // if drag started appearing on phones.
+  const [dragEnabled, setDragEnabled] = useState<boolean | null>(null)
   const [draggingId, setDraggingId] = useState<string | null>(null)
   const [overStageId, setOverStageId] = useState<string | null>(null)
 
@@ -75,6 +82,7 @@ export function PipelineColumns({
 
   return (
     <div
+      data-drag={dragEnabled === null ? undefined : dragEnabled ? 'on' : 'off'}
       style={{
         display: 'flex',
         gap: 'var(--space-4)',
@@ -133,10 +141,10 @@ export function PipelineColumns({
               // dragover fires continuously; the state only changes on enter
               // and leave. Re-rendering the board on every dragover event is
               // how a drag stops holding 60fps.
-              onDragOver={dragEnabled ? (e) => e.preventDefault() : undefined}
-              onDragEnter={dragEnabled ? () => setOverStageId(column.id) : undefined}
+              onDragOver={dragEnabled === true ? (e) => e.preventDefault() : undefined}
+              onDragEnter={dragEnabled === true ? () => setOverStageId(column.id) : undefined}
               onDragLeave={
-                dragEnabled
+                dragEnabled === true
                   ? (e) => {
                       // Only when the pointer leaves the column itself, not
                       // when it crosses a card inside it.
@@ -147,7 +155,7 @@ export function PipelineColumns({
                   : undefined
               }
               onDrop={
-                dragEnabled
+                dragEnabled === true
                   ? (e) => {
                       e.preventDefault()
                       handleDrop(column)
@@ -199,7 +207,7 @@ export function PipelineColumns({
                   <Card
                     key={card.id}
                     card={card}
-                    draggable={dragEnabled}
+                    draggable={dragEnabled === true}
                     dragging={draggingId === card.id}
                     pending={pendingCardId === card.id}
                     onDragStart={(e) => {

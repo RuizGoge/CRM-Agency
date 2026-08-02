@@ -49,6 +49,32 @@ Evidencia completa: [`docs/sprint-0/g0-us-region.md`](docs/sprint-0/g0-us-region
 - **Dos aserciones más que agregó la suite:** un supervisor obtiene lectura global **pero la escritura le sigue siendo rechazada** (`USING` pasa, `WITH CHECK` falla — esa asimetría *es* el modelo de autorización, y es lo que hace que el caso del supervisor sea 403 y no un not-found), y el enum `user_role` tiene **exactamente tres etiquetas**, la forma mecánica de "no hay constructor de roles ni matriz de permisos".
 - **También pendiente:** el trigger que rechaza `is_demo=true` en producción (necesita `system_constant`, que aún no existe) y la validación de `display_tz` en `app_user`.
 
+### 🎉 SPRINT 1 — La celebración, y la PUERTA 10 CERRADA (2026-08-02)
+Migración **0021**, `app/modules/earnings/celebration.ts`, `app/components/board/celebration.tsx`, `app/routes/api/celebrate.ts`, **8 tests de integración + 3 e2e**. Totales: **122** y **25 e2e**.
+
+**Construido sobre el ruling P2 de Fase 5, y una trampa de precedencia atrapada al leerlo.** El texto de mecanismo de P2.1 llama a `app.undo_window()` — **esa función no existe y no debe existir**: la errata E7/NEW-1 la tachó porque un nombre que significa dos duraciones **rechaza en silencio toda celebración en una rama y revela en la otra una venta deshecha en un tablero público**. Las erratas le ganan a Part I. El claim usa `undo_deadline_ms`; el guard de 500 ms es de la proyección pública y nunca de esto.
+
+- **Un solo timer, y es el de la barra de undo.** No hay job de pg-boss, no hay reloj del servidor, no hay segundo cronómetro. Un job encolado en un proceso plegado no sostiene los ±100 ms que pide D3-05, **y un confeti que llega tarde dispara después de que el vendedor siguió con lo suyo, que es peor que no tener confeti**. El único modo de falla posible es *sin* confeti, nunca *tarde*.
+- **`app.celebrate_once` son cuatro rechazos en UNA sentencia condicional:** *demasiado pronto* (la ventana sigue abierta — celebrar algo que todavía puede deshacerse), *demasiado tarde* (pasada la gracia de 30 s: "no se repite mañana" es un `WHERE`, no disciplina del cliente), **reversado** (la pesadilla que la Puerta 10 nombra: *toda la oficina viendo confeti por una venta cancelada* — y **la migración 0019 hizo que la reversa NOMBRE la entrada que cancela**, así que es una comprobación exacta y no una adivinanza sobre un total), y *concurrente* (un UPDATE condicional es atómico: dos reclamantes, un ganador, sin lock ni retry).
+- **El ancla es el ledger, no una columna `won_at`** — que no existe. La entrada `sale` es la misma fila y el mismo reloj que el tablero público retiene, así que **el confeti y la revelación pública no pueden discrepar sobre cuándo ocurrió la venta.** Desviación anotada, no silenciosa.
+- **El token es una CLASE cuyo `toJSON` lanza.** P2.5 pide un tipo no serializable, y un objeto plano produciría `{}` en silencio — que es exactamente cómo un reload tres horas después dispara confeti por una venta que nadie acaba de hacer. Cruza el cable una vez como payload plano y se **envuelve al llegar**; la restricción es sobre *persistirlo*, no sobre transmitirlo. Con test.
+- **Un reload dentro de la ventana no repite nada**, y es estructural: `useNavigationType()` responde `Pop` en un documento nuevo. El payload sobrevive al reload porque es loader data; el token no. **Probado por mutación:** sacando ese gate, sólo el test del reload se pone rojo.
+
+🔴 **EL DEFECTO, y sólo se veía en pantalla: la celebración se borraba sola ~200 ms después de aparecer.** El claim va por un `fetcher`, un envío de fetcher **revalida la ruta**, el loader revalidado ya no ofrece celebración para una venta que acaba de registrar, y el confeti se desmontaba. **En pantalla era un flash. El e2e estaba en verde porque miró una sola vez, dentro del flash.** Corregido capturando el token en estado **en el instante en que la ventana cierra**, que además es lo que el ruling quiere decir con *"vive sólo en la memoria de esa página"*: una vez tomado, no depende de lo que el servidor diga después. La aserción que lo habría atrapado ahora existe: **sigue ahí un segundo real después**.
+
+- ✅ **VERIFICADO EN PANTALLA con muestreo cada 200 ms:** barra a los **207 ms** sin celebración → a los **5.212 ms** la barra se va y aparece **"SOLD · $2,399.88 · Beatriz Nuñez"** con 24 piezas de confeti → a los **9.217 ms** se retira. `$199.99 × 12 = $2,399.88` exacto, que es el número que en coma flotante daría `2399.8799999`. Y el claim quedó registrado **5.136 ms después de la venta**: pasada la ventana, dentro de la gracia.
+- **También verificado sin querer: "una vez por oportunidad, para siempre".** Mi primera prueba en pantalla no mostró confeti — la tarjeta ya había sido celebrada en una corrida anterior del e2e. Comportamiento correcto, comprobado por accidente.
+- **`reduced-motion`: el confeti es MOVIMIENTO y se va; la tarjeta que dice el monto es FEEDBACK y se queda**, con la misma duración que recibe todo el mundo. Ese bloque quita movimiento, nunca feedback.
+- 🏁 **PUERTA 10 CERRADA.** Los 5000 ms viven ahora en cuatro representaciones —TypeScript, CSS, el predicado SQL de la proyección pública y el claim de la celebración— y el test de deriva **compara valores, nunca nombres**, incluida la aserción de que `celebrate_once` **no** menciona `projection_reveal_delay_ms`.
+
+#### 🔴 La suite e2e se estaba comiendo a sí misma
+**Cada spec movía tarjetas hacia adelante y ninguno las devolvía, y el spec de celebración cierra ventas a propósito.** Cada corrida dejaba el tenant demo con menos tarjetas abiertas que la anterior: tras un puñado, "New Lead" y "Quoted" quedaron vacías, el spec de drag falló con *"the demo needs a card in an open column"* y el de celebración se quedó sin nada que ganar. **La suite tenía un número finito de corridas adentro y nada lo decía.** Es la misma lección que fijar una columna de partida, un nivel más arriba.
+
+- **Cada spec que necesita una tarjeta ahora se la crea y la borra** (`tests/e2e/fixtures/board-data.ts`), así el tenant demo termina cada corrida como empezó. **El ledger y las transiciones se quedan**: son append-only por trigger de sentencia, y un fixture que pudiera borrarlos sería el agujero que todo el diseño cierra.
+- ⚠️ **Y un FALSO VERDE encontrado y cerrado: `expectCount(x, 0)` pasa apenas ve cero — y una página que todavía no renderizó también lo cumple.** El test del reload pasaba *antes de que el reload terminara*, y el test móvil del drag habría seguido pasando **si el drag empezara a aparecer en teléfonos**. Ahora el tablero expone `data-drag` con **tres** estados (ausente hasta que el efecto decide, luego `on`/`off`), así que toda aserción de ausencia espera primero un ancla positiva y las del drag son aserciones positivas en los dos sentidos.
+- **Otra trampa de `dragTo`:** apunta al **centro** de lo que se le da, y el centro de una columna se mueve con cuántas tarjetas tiene — pocas y se corre al encabezado, muchas y se pasa del pliegue, donde el scroll necesario rompe el drag. Los dos fallos se veían como *"el handler de drop no funciona"*. Ahora se suelta en un **punto fijo** de la zona.
+- Suite corrida tres veces seguidas, verde las tres.
+
 ### ⏰ SPRINT 1 — pg-boss cableado, y un "claim" que no clameaba nada (2026-08-02)
 Migración **0020**, `app/jobs/**`, `app/modules/calendar/dispatch.ts`, `scripts/install-jobs.ts` + `scripts/worker.ts`, **8 tests nuevos**. Total: **114**.
 
@@ -592,12 +618,12 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 | 4 | Contactos + dedupe | ✅ fixture de colisión con canario a nivel de bytes |
 | 5 | Pipeline + ambos gates | ✅ gates como CHECK; `stage_move` atómico |
 | 6 | Calendario + recordatorios | ✅ dominio **y** despachador: pg-boss cableado, claim con lease, 15-min drop y SMS-dark |
-| 7 | Leaderboard público | 🟡 tablero sí, **con el undo ya honrado**; **falta la celebración** |
+| 7 | Leaderboard público | ✅ tablero, undo honrado **y celebración** |
 | 8 | My Day | ✅ |
 | 9 | Aloware | 🔴 **bloqueado por la Puerta 11** — necesita la cuenta real |
 | 10 | Datos demo | 🟡 siembra por el camino real y ya **se niega a duplicarse**; **faltan las aserciones DEMO-01..10** y los `lost_reason` |
 
-**Extra, no planificado:** shell de navegación, CI en GitHub Actions, aserción de arranque G4(a), **undo de 5 s**, **el test de deriva de la Puerta 10**, **el gate de axe-core con su job de CI**, **el drag de escritorio** y **el despachador de jobs**.
+**Extra, no planificado:** shell de navegación, CI en GitHub Actions, aserción de arranque G4(a), **undo de 5 s**, **el test de deriva de la Puerta 10**, **el gate de axe-core con su job de CI**, **el drag de escritorio**, **el despachador de jobs** y **la celebración**.
 
 ### 🔴 SPRINT 0 — estado real de la escalera
 
@@ -613,7 +639,7 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 | 7 | SSE detrás del proxy | ⬜ no empezado |
 | 8 | pg-boss bajo estrés de versión | ⬜ no empezado |
 | 9 | Simulacro de restauración | ⬜ no empezado |
-| 10 | Los 5000 ms en cuatro representaciones | 🟡 **el test de deriva EXISTE** y compara valores (TS · CSS · SQL) más la relación `reveal = undo + guard`. Falta la 4ª representación: el scheduler de la celebración, que aún no se construyó |
+| 10 | Los 5000 ms en cuatro representaciones | ✅ **CERRADA.** Las cuatro existen —TS · CSS · predicado SQL de la proyección · claim de la celebración— y el test de deriva compara **valores, nunca nombres**, incluida la aserción de que `celebrate_once` no menciona `projection_reveal_delay_ms` |
 | 11 | Bundle y primer paint medidos | ⬜ **fija los dos presupuestos que hoy no tienen número** (E6/R7) |
 | 12 | Drag a 60 fps con 500 tarjetas | 🟡 **el drag existe** y está atado a `>=lg` + `pointer: fine`, con e2e en los dos perfiles. **Falta la mitad que da nombre a la puerta: medirlo a 60 fps con 500 tarjetas.** El estado sólo cambia en `dragenter`/`dragleave`, nunca en `dragover` — condición necesaria, no la medición |
 | 13 | Publicar las contradicciones | ✅ `docs/sprint-0/g13-published-contradictions.md` |
@@ -624,7 +650,7 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 2. ~~**axe-core bajo `test:e2e`**~~ ✅ **HECHO (2026-08-02).** 16 tests, seis superficies, dos perfiles, job propio en CI. Detalle arriba.
 3. ~~**Drag ≥1024px con puntero fino**~~ ✅ **HECHO (2026-08-02).** Hereda el undo por el mismo camino y registra `kanban_drag`. Detalle arriba. **Lo que NO cierra: la Puerta 12** — falta medir 60 fps con 500 tarjetas.
 4. ~~**Cablear pg-boss**~~ ✅ **HECHO (2026-08-02).** Detalle arriba. **Pendiente asociado:** arrancar el worker dentro del proceso web (topología plegada), hoy sólo corre separado.
-5. **Celebración** tras la ventana de undo. **Cierra la Puerta 10 del todo**: es la cuarta representación de los 5000 ms y el test de deriva ya tiene el lugar donde debe entrar.
+5. ~~**Celebración**~~ ✅ **HECHA (2026-08-02).** Cerró la Puerta 10: cuarta representación de los 5000 ms. Detalle arriba.
 6. **`lost_reason` en el seed** — hoy el selector "Why?" está vacío y Closed Lost es inusable en el demo. **Confirmado por los e2e**, no sólo observado.
 7. **Alcanzabilidad por teclado de la barra de undo** — vive 5 s y está temprano en el DOM del `main`, pero un teclado que tabula desde el encabezado puede no llegar a tiempo. axe **no mide plazos**, así que esto queda fuera del gate nuevo: hay que medirlo, no suponerlo.
 

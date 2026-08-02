@@ -29,21 +29,39 @@ export function UndoBar({
   toStageName,
   backStageId,
   backStageName,
+  onWindowClosed,
 }: {
   opportunityId: string
   contactName: string
   toStageName: string
   backStageId: string
   backStageName: string
+  /**
+   * Fired when the window CLOSES on its own — the celebration hangs off this
+   * and off nothing else.
+   *
+   * Ruling P2.1: the celebration has exactly one timer and it is this one. A
+   * second clock started elsewhere would drift from the bar the seller is
+   * watching, and D3-05 asks for the confetti between T+4,900 and T+5,100 ms.
+   *
+   * It does NOT fire when the seller undoes or dismisses: both of those unmount
+   * the bar, the cleanup clears the timeout, and "no undo was taken in this page
+   * session" becomes a fact about React's lifecycle rather than a flag someone
+   * has to remember to check.
+   */
+  onWindowClosed?: () => void
 }): React.JSX.Element | null {
   const [visible, setVisible] = useState(true)
 
   useEffect(() => {
     // UNDO_WINDOW_MS, never a literal and never shortened by reduced motion:
     // the window is a product promise, not an animation.
-    const timer = setTimeout(() => setVisible(false), UNDO_WINDOW_MS)
+    const timer = setTimeout(() => {
+      setVisible(false)
+      onWindowClosed?.()
+    }, UNDO_WINDOW_MS)
     return () => clearTimeout(timer)
-  }, [])
+  }, [onWindowClosed])
 
   if (!visible) return null
 

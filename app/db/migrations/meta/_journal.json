@@ -148,6 +148,13 @@
       "when": 1785740000000,
       "tag": "0020_job_dispatch",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1785745000000,
+      "tag": "0021_celebrate_once",
+      "breakpoints": true
     }
   ]
 }
