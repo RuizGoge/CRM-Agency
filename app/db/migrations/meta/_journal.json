@@ -22,6 +22,13 @@
       "when": 1785630394535,
       "tag": "0002_context_and_harden",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1785633266223,
+      "tag": "0003_begin_request",
+      "breakpoints": true
     }
   ]
 }

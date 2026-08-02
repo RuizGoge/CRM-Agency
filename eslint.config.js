@@ -69,4 +69,69 @@ export default tseslint.config(
       ],
     },
   },
+
+  // ---------------------------------------------------------------------------
+  // DATA-ACCESS GUARD — Sprint 1.2.
+  //
+  // The connection pool is module-private inside app/db/client.ts, and the only
+  // supported way into the database is withTenant / withSystemWork via `~/db`.
+  // A query issued outside that envelope runs with no session context: the
+  // policies make it return zero rows rather than another seller's book, but a
+  // surface that silently renders nothing is its own defect. This makes the
+  // shortcut unavailable rather than discouraged.
+  // ---------------------------------------------------------------------------
+  {
+    files: ['app/**/*.ts', 'app/**/*.tsx'],
+    ignores: ['app/db/**'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['**/db/client', '~/db/client', '**/app/db/client'],
+              message:
+                'Import { withTenant } from "~/db". The pool is module-private; reaching past it means a unit of work with no session context.',
+            },
+            {
+              group: ['postgres', 'drizzle-orm/postgres-js'],
+              message:
+                'Only app/db/** may construct a database connection. Application code uses withTenant from "~/db".',
+            },
+          ],
+        },
+      ],
+    },
+  },
+
+  // ---------------------------------------------------------------------------
+  // SESSION-CONTEXT GUARD — Sprint 1.2.
+  //
+  // set_config(key, value, true) scopes the setting to the current transaction
+  // and resets it at COMMIT. With `false`, or with a bare SET, the setting is
+  // SESSION-scoped and survives — so a transaction-mode pooler hands the next
+  // client a connection still carrying the previous seller's identity. The
+  // pages render perfectly, just with the wrong rows, and nothing errors.
+  //
+  // app/db/migrations/** is ignored globally: migrations legitimately use
+  // `SET search_path` inside SECURITY DEFINER functions.
+  // ---------------------------------------------------------------------------
+  {
+    files: ['app/**/*.ts', 'app/**/*.tsx', 'tests/**/*.ts'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: 'TemplateElement[value.raw=/set_config\\s*\\([^)]*,\\s*false\\s*\\)/i]',
+          message:
+            'set_config(..., false) is SESSION-scoped and survives the transaction. The third argument is is_local and must be true — this is the invariant that makes a transaction-mode pooler safe.',
+        },
+        {
+          selector: 'TemplateElement[value.raw=/\\bSET\\s+(?!LOCAL\\b)/]',
+          message:
+            'Use SET LOCAL. A bare SET is session-scoped and leaks across transactions on a pooled connection.',
+        },
+      ],
+    },
+  },
 )

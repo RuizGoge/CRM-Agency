@@ -5,7 +5,13 @@
  * and rebuilt on every run, so a test that leaves state behind cannot make the
  * next run pass for the wrong reason.
  */
-const DEV_URL = process.env['DATABASE_URL'] ?? 'postgresql://crm:crm@localhost:5432/crm_dev'
+// DEV_DATABASE_URL wins so that this stays correct after vitest.config.ts has
+// pointed DATABASE_URL at the test database — the derivation below is then
+// idempotent rather than circular.
+const DEV_URL =
+  process.env['DEV_DATABASE_URL'] ??
+  process.env['DATABASE_URL'] ??
+  'postgresql://crm:crm@localhost:5432/crm_dev'
 
 export const TEST_DB = 'crm_test'
 

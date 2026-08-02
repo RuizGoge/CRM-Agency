@@ -49,6 +49,19 @@ Evidencia completa: [`docs/sprint-0/g0-us-region.md`](docs/sprint-0/g0-us-region
 - **Dos aserciones más que agregó la suite:** un supervisor obtiene lectura global **pero la escritura le sigue siendo rechazada** (`USING` pasa, `WITH CHECK` falla — esa asimetría *es* el modelo de autorización, y es lo que hace que el caso del supervisor sea 403 y no un not-found), y el enum `user_role` tiene **exactamente tres etiquetas**, la forma mecánica de "no hay constructor de roles ni matriz de permisos".
 - **También pendiente:** el trigger que rechaza `is_demo=true` en producción (necesita `system_constant`, que aún no existe) y la validación de `display_tz` en `app_user`.
 
+### 🔐 SPRINT 1 · ITEM 2 (mitad) — Contexto de scope por unidad de trabajo (2026-08-01)
+`0004…` no: migración **`0003_begin_request`** + `app/db/client.ts` + guardas de ESLint + **11 tests**. Total de la suite: **37**.
+
+- **`app.begin_request(tenant_id, user_id)` es un definer, no TypeScript, y ahí está el punto: el que llama NO puede elegir su scope — no hay parámetro para eso.** Le pasás quién sos; el motor lee `app_user.role` y decide qué significa (`seller`→`owner`, `supervisor`→`tenant_read`, `admin`→`tenant_admin`). Si el scope fuera un argumento, cada ruta, job y consumidor de webhook estaría a un literal equivocado de auto-concederse lectura de todo el tenant, y nada se pondría rojo.
+- **`CTX001`, el detector de contexto filtrado.** Como todo se fija con `set_config(..., true)`, encontrar contexto ya puesto al empezar una unidad de trabajo significa una de dos cosas: alguien usó un `SET` pelado (que sobrevive a la transacción) o **el pooler está en modo sesión y nos entregó una conexión con la identidad de otro vendedor**. Levanta excepción en el **primer** request filtrado en vez de renderizar páginas perfectas con las filas equivocadas.
+- **`CTX002`** rechaza usuario inexistente o desactivado, **sin decir cuál de las dos mitades estaba mal**.
+- **El pool es privado del módulo.** Única puerta: `withTenant` / `withSystemWork` vía `~/db`. `fn` recibe sólo el handle de transacción, así que **no puede ejecutar nada antes de que el contexto esté fijado** — es estructural, no disciplina.
+- **Dos guardas nuevas de build:** importar `~/db/client`, `postgres` o `drizzle-orm/postgres-js` desde fuera de `app/db/**` **rompe el lint**; y `set_config(..., false)` o un `SET` pelado en cualquier template literal también. `prepare: false` fijo en el pool, porque los prepared statements no sobreviven a un pooler en modo transacción.
+- 🎯 **Probado por mutación otra vez.** Desactivé el detector `CTX001` y el test se puso rojo: `begin_request` devolvía `"owner"` tranquilamente sobre una conexión envenenada. Revertido.
+- **Hallazgo que va a importar después:** Drizzle envuelve el error del driver en `"Failed query: …"` y deja el de Postgres en `cause`. **El borde de rutas que mapee SQLSTATE a status HTTP tiene que recorrer esa cadena**, o un `42501` (el 403 del supervisor) llega disfrazado de 500 sin clasificar.
+- ⚠️ **Falta la otra mitad del ítem 2: `better-auth`** — login, sesión y de dónde sale el `SessionIdentity`. Hoy la identidad se le pasa a `withTenant` desde el test; falta quién la emite.
+- **Deuda menor:** el `max` del pool (8) es **provisional** y lo fija G1(d) contra el techo medido con 2× de holgura. Hoy G1(a) sigue sin medir.
+
 ### 🟡 G1 PARCIALMENTE CERRADO — 2026-08-01
 Sonda contra `postgres:18-alpine` local (server **18.4**). Evidencia: [`docs/sprint-0/g1-platform-probe.md`](docs/sprint-0/g1-platform-probe.md).
 
