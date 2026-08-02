@@ -2,7 +2,7 @@ import { drizzle } from 'drizzle-orm/postgres-js'
 import { migrate } from 'drizzle-orm/postgres-js/migrator'
 import postgres from 'postgres'
 
-import { ADMIN_URL, TEST_DB, TEST_URL } from './urls'
+import { ADMIN_URL, APP_ROLE_PASSWORD, OWNER_URL, TEST_DB } from './urls'
 
 /**
  * Builds the integration database from zero, once per run.
@@ -39,11 +39,16 @@ export async function setup(): Promise<void> {
     await admin.end()
   }
 
-  const sql = postgres(TEST_URL, { max: 1, onnotice: () => {} })
+  const sql = postgres(OWNER_URL, { max: 1, onnotice: () => {} })
   try {
     // The same migration files the production deploy runs. Nothing about the
     // schema under test is constructed by the test itself.
     await migrate(drizzle(sql), { migrationsFolder: 'app/db/migrations' })
+
+    // The migration grants crm_app LOGIN and no password, on purpose. This is
+    // the out-of-band step, and here it is a dev-only literal; production sets
+    // it in the provider's console.
+    await sql.unsafe(`ALTER ROLE crm_app WITH PASSWORD '${APP_ROLE_PASSWORD}'`)
   } finally {
     await sql.end()
   }

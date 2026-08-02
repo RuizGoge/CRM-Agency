@@ -1,0 +1,68 @@
+name: verify
+
+# The pre-merge tier.
+#
+# Until now `npm run verify` ran only on Jorge's machine, through the
+# pre-commit hook. This project's founding rule is that a guarantee is a
+# mechanism or it is nothing — "the build goes red" was not true anywhere a
+# second person could see, which made every gate in the repository local
+# folklore. This is the build.
+#
+# Cost control is the ABSENCE of a payment method on the GitHub account, by
+# design (§9.4.1): exhausting the free quota is a blackout, not a bill. That
+# is why this tier stays deliberately small and the heavy suites are meant to
+# land on a nightly tier rather than here.
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+# A second push supersedes the first. A queue of stale runs is how a 2,000
+# minute budget disappears without anyone deciding to spend it.
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        # Same major as production, and the same image the local compose file
+        # uses. The integration suite asserts engine behaviour — FORCE RLS,
+        # statement triggers, a uuid opclass for GIN — so a different major
+        # here would be testing a different product.
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: crm
+          POSTGRES_PASSWORD: crm
+          POSTGRES_DB: crm_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U crm -d crm_dev"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      DEV_DATABASE_URL: postgresql://crm:crm@localhost:5432/crm_dev
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      # Typecheck, lint, format and the whole test suite — unit and
+      # integration. The integration tier builds `crm_test` from the real
+      # migration files and refuses to skip when no database is reachable, so
+      # a workflow that lost its service block goes red rather than green.
+      - run: npm run verify

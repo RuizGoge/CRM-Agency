@@ -127,6 +127,13 @@
       "when": 1785642783568,
       "tag": "0017_board_includes_everyone",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1785645286082,
+      "tag": "0018_app_role_login",
+      "breakpoints": true
     }
   ]
 }

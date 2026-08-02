@@ -1,7 +1,6 @@
 import { sql } from 'drizzle-orm'
 import postgres from 'postgres'
 
-import { withTenant } from '../app/db'
 import { auth } from '../app/lib/auth/server'
 
 /**
@@ -16,7 +15,18 @@ import { auth } from '../app/lib/auth/server'
  *   npm run db:up && npm run db:migrate && npm run db:seed
  */
 
-const URL_ = process.env['DATABASE_URL'] ?? 'postgresql://crm:crm@localhost:5432/crm_dev'
+/**
+ * The OWNER credential, not the application's. Seeding writes rows that RLS
+ * would refuse — a tenant before any user exists, a user before any session —
+ * so it goes through the migrator policy, exactly as migrations do.
+ */
+const URL_ =
+  process.env['MIGRATION_DATABASE_URL'] ??
+  process.env['DEV_DATABASE_URL'] ??
+  'postgresql://crm:crm@localhost:5432/crm_dev'
+
+/** Dev-only, and set here rather than in a migration on purpose. */
+const APP_ROLE_PASSWORD = 'crm_app_dev_only'
 const TENANT = '00000000-0000-7000-8000-00000000de01'
 const PASSWORD = 'demo-password-1234'
 
@@ -62,6 +72,18 @@ const client = postgres(URL_, { max: 1, onnotice: () => {} })
 
 async function main(): Promise<void> {
   console.log('Seeding development tenant…')
+
+  // The out-of-band step the migration deliberately leaves undone. Production
+  // does this in the provider's console; a credential in a migration is a
+  // credential in the repository and in every clone.
+  await client.unsafe(`ALTER ROLE crm_app WITH PASSWORD '${APP_ROLE_PASSWORD}'`)
+
+  // Imported AFTER the password exists, not at the top of the file. `~/db`
+  // opens its pool and runs the G4(a) boot assertion at module load, so a
+  // static import here would connect as crm_app before crm_app could log in —
+  // and the boot guard would take the seed down for the right reason at the
+  // wrong moment.
+  const { withTenant } = await import('../app/db')
 
   await client`
     INSERT INTO app.tenant (id, name, business_tz)
