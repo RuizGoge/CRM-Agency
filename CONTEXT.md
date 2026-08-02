@@ -49,6 +49,21 @@ Evidencia completa: [`docs/sprint-0/g0-us-region.md`](docs/sprint-0/g0-us-region
 - **Dos aserciones más que agregó la suite:** un supervisor obtiene lectura global **pero la escritura le sigue siendo rechazada** (`USING` pasa, `WITH CHECK` falla — esa asimetría *es* el modelo de autorización, y es lo que hace que el caso del supervisor sea 403 y no un not-found), y el enum `user_role` tiene **exactamente tres etiquetas**, la forma mecánica de "no hay constructor de roles ni matriz de permisos".
 - **También pendiente:** el trigger que rechaza `is_demo=true` en producción (necesita `system_constant`, que aún no existe) y la validación de `display_tz` en `app_user`.
 
+### ♿ SPRINT 1 — axe-core bajo `test:e2e`: el gate de WCAG deja de ser una declaración (2026-08-02)
+`tests/e2e/a11y.spec.ts` + `undo-window.spec.ts` + `fixtures/`, `playwright.config.ts`, job `e2e` en CI. **16 tests e2e** (8 casos × dos perfiles) sobre los **106** de unit/integración.
+
+**`test:e2e` era un script de `package.json` sin un solo test detrás.** WCAG 2.1 AA con cero hallazgos serios o críticos está declarado como gate en `CLAUDE.md`; hasta hoy estaba declarado y nada más. **Un gate que nadie puede ver ponerse rojo es documentación.**
+
+- **Seis superficies escaneadas, en los dos perfiles:** sign-in (fuera de sesión), My Day, el tablero, **la move-sheet** (que es el camino universal, así que tiene que ser alcanzable en móvil antes que en escritorio), el leaderboard público y **la barra de undo**.
+- **Acotado a `serious` y `critical` a propósito.** Los buckets `minor`/`moderate` de axe traen reglas consultivas que una pantalla puede incumplir siendo perfectamente usable; meterlos hace el número ruidoso, y **a un gate ruidoso se le sube el umbral**. Los dos que quedan son los que significan que un vendedor con lector de pantalla o con teclado no puede hacer la cosa.
+- 🎯 **Verde a la primera es sospechoso, así que lo muté.** Puse `--color-text-link-inverse` en el valor que ya había medido como reprobado (2,03:1) y el gate se puso **rojo con `color-contrast`, nombrando el elemento**. Revertido.
+- 🔴 **Flakiness estructural encontrada y cerrada: todos los tests entran al MISMO tenant demo y varios mueven una tarjeta.** Con workers en paralelo —y los dos perfiles corren concurrentes— se pisan el tablero: un test movió la tarjeta cuya move-sheet otro acababa de abrir, y el segundo recibió el rechazo en vez de la barra. **`fullyParallel: false`, `workers: 1`**, con la razón escrita. Un tenant por test compraría el paralelismo de vuelta; no vale la pena todavía, y **un gate de accesibilidad flaky es un gate que se borra en vez de arreglarse**.
+- ⚠️ **TRAMPA DE HERRAMIENTA QUE COSTÓ UNA PASADA Y QUEDA ANOTADA: con `page.clock.install()`, el auto-wait de Playwright deja de reintentar.** `expect(locator).toBeVisible()` y `waitForSelector` **hacen su poll DENTRO de la página**, así que un reloj congelado convierte una aserción de cinco segundos en **una sola comprobación** tomada en el instante en que el click retorna — antes de que aterrice un submit de React Router. Lo que lo volvió difícil de ver: **la misma aserción PASABA en el otro spec**, porque ahí el click ocurría antes de la hidratación y el form se enviaba nativamente (navegación completa, que `click()` sí espera). Dos tests, el mismo código, resultados opuestos, decididos por el timing de hidratación. Cerrado con `tests/e2e/fixtures/clock.ts`: todo espera con **`expect.poll`, que corre desde Node**.
+- **El reloj falso tampoco está perfectamente congelado.** Medido: **filtra ~5 ms de tiempo real por round trip de protocolo**, así que `fastForward(4999)` aterriza *pasados* los 5000 y la barra ya no está. Mi primera versión afirmaba el límite al milisegundo y **fallaba por eso, no por el producto**. Ahora es un **corchete verificado** —se comprueba con `Date.now()` de la página que realmente falta para el plazo— y el comentario dice qué precisión da la herramienta. **El número exacto lo fija el test de deriva; este prueba que la barra en pantalla gasta ese número.**
+- 🎯 **Probado por mutación también:** con la barra a 30 s, rojo.
+- **CI: job `e2e` propio**, con su Postgres, `db:migrate`, `db:seed` y **sólo chromium** (los dos perfiles son Chromium — Desktop Chrome y Pixel 7 — así que bajar firefox y webkit triplica la descarga por cero cobertura). Job separado para que una regresión de accesibilidad y un test unitario roto sean **dos luces rojas distintas**. Sube el reporte de Playwright como artefacto sólo si falla.
+- **Los movimientos de los tests son siempre entre etapas ABIERTAS, y está aserido** (`input[name="premium"]` con count 0), no supuesto. Una suite que corre en cada push **no puede apendear al ledger**: es append-only y sin job de recomputo, así que un test que acredita dinero lo deja acreditado.
+
 ### ↩️ SPRINT 1 — El undo de 5 s, y el defecto que sólo aparece cuando el undo existe (2026-08-02)
 Migración **0019**, `app/components/board/undo-bar.tsx`, `app/routes/ui/board.tsx`, **5 tests nuevos**. Total: **106**.
 
@@ -540,7 +555,7 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 | 9 | Aloware | 🔴 **bloqueado por la Puerta 11** — necesita la cuenta real |
 | 10 | Datos demo | 🟡 siembra por el camino real y ya **se niega a duplicarse**; **faltan las aserciones DEMO-01..10** y los `lost_reason` |
 
-**Extra, no planificado:** shell de navegación, CI en GitHub Actions, aserción de arranque G4(a), **undo de 5 s y el test de deriva de la Puerta 10**.
+**Extra, no planificado:** shell de navegación, CI en GitHub Actions, aserción de arranque G4(a), **undo de 5 s**, **el test de deriva de la Puerta 10** y **el gate de axe-core con su job de CI**.
 
 ### 🔴 SPRINT 0 — estado real de la escalera
 
@@ -564,11 +579,12 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 ### ▶️ LO SIGUIENTE, en orden
 
 1. ~~**Undo optimista de 5 s**~~ ✅ **HECHO (2026-08-02).** El costo que el tablero ya pagaba tiene contraprestación. Detalle arriba.
-2. **axe-core bajo `test:e2e`** — el script existe en `package.json` y **no hay un solo test de Playwright**. WCAG con cero hallazgos serios está declarado como gate. **Nota nueva:** la barra de undo vive 5 s, así que un teclado que tabula desde el encabezado puede no alcanzarla a tiempo — está temprano en el DOM del `main`, pero eso hay que medirlo, no suponerlo.
+2. ~~**axe-core bajo `test:e2e`**~~ ✅ **HECHO (2026-08-02).** 16 tests, seis superficies, dos perfiles, job propio en CI. Detalle arriba.
 3. **Drag ≥1024px con puntero fino** — la move-sheet ya es el camino universal, así que el drag es aditivo y su fallo queda confinado. **Ya hereda el undo**: el drag redirige al mismo `?moved=…&from=…`.
 4. **Cablear pg-boss** al `scheduled_job_claim`.
 5. **Celebración** tras la ventana de undo. **Cierra la Puerta 10 del todo**: es la cuarta representación de los 5000 ms y el test de deriva ya tiene el lugar donde debe entrar.
-6. **`lost_reason` en el seed** — hoy el selector "Why?" está vacío y Closed Lost es inusable en el demo.
+6. **`lost_reason` en el seed** — hoy el selector "Why?" está vacío y Closed Lost es inusable en el demo. **Confirmado por los e2e**, no sólo observado.
+7. **Alcanzabilidad por teclado de la barra de undo** — vive 5 s y está temprano en el DOM del `main`, pero un teclado que tabula desde el encabezado puede no llegar a tiempo. axe **no mide plazos**, así que esto queda fuera del gate nuevo: hay que medirlo, no suponerlo.
 
 ### 🧾 DEUDA TÉCNICA DECLARADA (no perder de vista)
 - **E9 está firmada pero NO implementada:** no existe `ref.capability_probe`. Llega con el módulo Aloware.

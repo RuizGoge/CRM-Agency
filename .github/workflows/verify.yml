@@ -66,3 +66,74 @@ jobs:
       # migration files and refuses to skip when no database is reachable, so
       # a workflow that lost its service block goes red rather than green.
       - run: npm run verify
+
+  # WCAG 2.1 AA with zero serious or critical findings is declared a gate in
+  # CLAUDE.md. A gate that only runs on Jorge's machine is the folklore this
+  # workflow was created to end, so it runs here — but in its own job, so an
+  # accessibility regression and a failing unit test are two different red
+  # lights rather than one.
+  #
+  # Chromium only. Both Playwright profiles are Chromium-based (Desktop Chrome
+  # and Pixel 7), so installing firefox and webkit would triple the browser
+  # download for zero coverage. Cost control on this account is the ABSENCE of
+  # a payment method (§9.4.1) — a minute spent here is a minute the verify job
+  # may not have later in the month.
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: crm
+          POSTGRES_PASSWORD: crm
+          POSTGRES_DB: crm_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U crm -d crm_dev"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      # Two roles here as well as in production. The application connects as
+      # crm_app, so RLS applies because of WHO IS CONNECTED rather than because
+      # withTenant remembered to drop role — G4(a) refuses to boot otherwise,
+      # and that refusal is the point.
+      MIGRATION_DATABASE_URL: postgresql://crm:crm@localhost:5432/crm_dev
+      DEV_DATABASE_URL: postgresql://crm:crm@localhost:5432/crm_dev
+      DATABASE_URL: postgresql://crm_app:crm_app_dev_only@localhost:5432/crm_dev
+      SESSION_SECRET: ci-only-not-a-production-secret
+      APP_URL: http://localhost:3000
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - run: npx playwright install --with-deps chromium
+
+      - run: npm run db:migrate
+
+      # Also sets crm_app's password out of band — deliberately not in a
+      # migration, which would put a credential in the repository and in every
+      # clone. It refuses to run twice, which on a fresh CI database is moot
+      # and on a reused one is the whole point.
+      - run: npm run db:seed
+
+      # playwright.config.ts starts `npm run dev` itself and waits for it.
+      - run: npm run test:e2e
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7

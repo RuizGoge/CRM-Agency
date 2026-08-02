@@ -7,7 +7,23 @@ import { defineConfig, devices } from '@playwright/test'
  */
 export default defineConfig({
   testDir: './tests/e2e',
-  fullyParallel: true,
+
+  // ONE worker, and this is not a performance compromise being apologised for.
+  //
+  // Every test signs into the SAME demo tenant and several of them move a card,
+  // so parallel workers — and the two profiles, which also run concurrently —
+  // fight over the same board. The first run of this suite proved it: one test
+  // moved the card another had just opened a move sheet for, and the second got
+  // the refusal instead of the undo bar. Red, for a reason that had nothing to
+  // do with the product.
+  //
+  // A per-test tenant would buy the parallelism back. It is not worth it yet:
+  // the suite is deliberately small because CI cost control here is the absence
+  // of a payment method (§9.4.1), and a flaky accessibility gate is a gate that
+  // gets deleted rather than fixed.
+  fullyParallel: false,
+  workers: 1,
+
   forbidOnly: !!process.env['CI'],
   retries: 0, // A flaky money test is a failing money test.
   reporter: process.env['CI'] ? [['github'], ['html', { open: 'never' }]] : 'list',
