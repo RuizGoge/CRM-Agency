@@ -644,15 +644,19 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 | 12 | Drag a 60 fps con 500 tarjetas | 🟡 **el drag existe** y está atado a `>=lg` + `pointer: fine`, con e2e en los dos perfiles. **Falta la mitad que da nombre a la puerta: medirlo a 60 fps con 500 tarjetas.** El estado sólo cambia en `dragenter`/`dragleave`, nunca en `dragover` — condición necesaria, no la medición |
 | 13 | Publicar las contradicciones | ✅ `docs/sprint-0/g13-published-contradictions.md` |
 
-### ▶️ LO SIGUIENTE, en orden
+### ▶️ LO SIGUIENTE — ya no hay un orden fijado
 
-1. ~~**Undo optimista de 5 s**~~ ✅ **HECHO (2026-08-02).** El costo que el tablero ya pagaba tiene contraprestación. Detalle arriba.
-2. ~~**axe-core bajo `test:e2e`**~~ ✅ **HECHO (2026-08-02).** 16 tests, seis superficies, dos perfiles, job propio en CI. Detalle arriba.
-3. ~~**Drag ≥1024px con puntero fino**~~ ✅ **HECHO (2026-08-02).** Hereda el undo por el mismo camino y registra `kanban_drag`. Detalle arriba. **Lo que NO cierra: la Puerta 12** — falta medir 60 fps con 500 tarjetas.
-4. ~~**Cablear pg-boss**~~ ✅ **HECHO (2026-08-02).** Detalle arriba. **Pendiente asociado:** arrancar el worker dentro del proceso web (topología plegada), hoy sólo corre separado.
-5. ~~**Celebración**~~ ✅ **HECHA (2026-08-02).** Cerró la Puerta 10: cuarta representación de los 5000 ms. Detalle arriba.
-6. **`lost_reason` en el seed** — hoy el selector "Why?" está vacío y Closed Lost es inusable en el demo. **Confirmado por los e2e**, no sólo observado.
-7. **Alcanzabilidad por teclado de la barra de undo** — vive 5 s y está temprano en el DOM del `main`, pero un teclado que tabula desde el encabezado puede no llegar a tiempo. axe **no mide plazos**, así que esto queda fuera del gate nuevo: hay que medirlo, no suponerlo.
+**Los cinco ítems que este plan traía quedaron HECHOS el 2026-08-02** (undo de 5 s · axe-core bajo `test:e2e` · drag de escritorio · pg-boss cableado · celebración). Cada uno con su detalle más arriba, incluido lo que cada uno destapó. Lo que queda abajo **no está priorizado por nadie todavía** — es una lista, no una secuencia.
+
+**Recomendación de por dónde seguir, en este orden:**
+
+1. **Arrancar el worker DENTRO del proceso web.** Hoy la topología plegable está **declarada y no cableada**: `npm run worker` corre el proceso separado y `workerEnabled()` lee `PROCESS_ROLES`, pero nada arranca el worker en el web. Jorge exigió que los tres procesos sean *configuración de despliegue, no supuesto arquitectónico*, y afirmar que se pliega sin haberlo cableado es exactamente lo que este proyecto llama documentación. **Ojo:** hacerlo vuelve `npm run db:jobs` un requisito para `npm run dev`, y eso hay que decidirlo, no descubrirlo.
+2. **`lost_reason` en el seed.** El selector "Why?" está vacío, así que **Closed Lost es inusable en el demo**. Lo confirman los e2e, no sólo la observación.
+3. **Puerta 11 — medir bundle y TTI.** Fija los dos presupuestos que hoy **no tienen número** y por eso rompen el build (E6/R7). Es la puerta que desbloquea más cosas y no depende de nadie más.
+4. **Puerta 12 — el drag a 60 fps con 500 tarjetas.** El drag existe; falta la mitad que le da nombre a la puerta. El estado sólo cambia en `dragenter`/`dragleave` y nunca en `dragover`, que es condición necesaria y no la medición.
+5. **Alcanzabilidad por teclado de la barra de undo.** Vive 5 s y está temprano en el DOM del `main`, pero un teclado que tabula desde el encabezado puede no llegar a tiempo. **axe no mide plazos**, así que esto queda fuera del gate nuevo: hay que medirlo, no suponerlo.
+6. **Re-evaluación en vivo del drag al cruzar 1024 px.** El listener de `matchMedia` es estándar pero **no está verificado**: la emulación de viewport por CDP no dispara `resize` ni `change`, así que en el navegador de la herramienta sólo se puede observar la evaluación inicial (que sí está verificada de los dos lados).
+7. **Tensión de precedencia sin resolver:** `CLAUDE.md` dice que **una sola** ruta `routes/ui/**` puede servir datos de tablero como SSR; hoy leaderboard **y** kanban tienen loader. **Pasar `precedence-checker` antes de decidir.**
 
 ### 🧾 DEUDA TÉCNICA DECLARADA (no perder de vista)
 - **E9 está firmada pero NO implementada:** no existe `ref.capability_probe`. Llega con el módulo Aloware.
@@ -672,6 +676,8 @@ npm run db:seed    # crea el tenant demo Y fija la contraseña dev de crm_app
 npm run dev        # http://localhost:3000
 npm run worker     # opcional: el despachador de recordatorios, proceso aparte
 ```
+Entrar con `renata@demo.test` / `demo-password-1234`. Otros: `priya@`, `marcus@`, `dana@`, `tomas@` (este último con **cero ventas** a propósito: es el caso que probó que el tablero debía incluirlo).
+
 Hace falta un `.env` (copiar de `.env.example`; está en `.gitignore`, así que un clon nuevo no lo trae y sin él la app **no arranca**, por diseño de G4(a)).
 
 **`db:seed` se niega si la base ya está sembrada**, y tiene razón: sembrar dos veces duplicaba las tarjetas y el total público. Para volver a empezar de verdad:
@@ -679,7 +685,10 @@ Hace falta un `.env` (copiar de `.env.example`; está en `.gitignore`, así que 
 npm run db:reset && npm run db:up && npm run db:migrate && npm run db:seed
 ```
 `db:down` **no** alcanza — deja el volumen y las filas vuelven.
-Entrar con `renata@demo.test` / `demo-password-1234`. Otros: `priya@`, `marcus@`, `dana@`, `tomas@` (este último con **cero ventas** a propósito: es el caso que probó que el tablero debía incluirlo).
+
+⚠️ **El tenant demo de esta máquina está DERIVADO y conviene resetearlo antes de mostrarlo.** Las primeras corridas del e2e —antes de que cada spec creara su propia tarjeta— cerraron ventas del demo: Renata quedó en **$89.549,88** en vez de los **$9.029,88** sembrados, con 7 tarjetas en Closed Won y una ya celebrada (que por diseño **no se puede volver a celebrar, nunca**). No es un defecto del producto; es residuo de pruebas. El comando de arriba lo deja como recién sembrado.
+
+⚠️ **ESTE REPOSITORIO NO TIENE REMOTO.** `git remote -v` está vacío: todo el trabajo vive en un solo disco y **el CI de GitHub Actions no se ha ejecutado nunca**, porque no hay dónde empujar. Las dos consecuencias son distintas y las dos importan: no hay copia, y **el gate que existe para que una segunda persona vea el build en rojo todavía no se lo ha visto nadie**.
 
 ### Decisiones abiertas que Jorge confirma cuando quiera (ninguna bloquea la escritura; van con mi recomendación): propiedad del registro 10DLC (agencia del cliente vs nuestra); grabación de llamadas si el aviso no se dispara en el two-legged → *reco: desactivar a nivel de cuenta*; retención de payloads crudos → *reco: 60 días*; atajos de una tecla → *reco: apagados por defecto los primeros 30 días*; Sentry Team USD 26 pre-aprobado para activar el día del primer incidente; confirmar que sin email no hay reset de contraseña autogestionado; y si habrá una 2ª persona con acceso en 12 meses (**+USD 25/mes planos** — corregido en G0 desde el "+USD 51" que decía antes; Render reemplazó sus planes de workspace el 2026-04-23 y Pro dejó de cobrar por asiento. La prohibición de §9.4.5 no cambia, solo su aritmética).
 4. **Sprint 0 — primer ítem, antes de crear ningún recurso:** verificar región EE.UU. en el plan de hosting a contratar. Si falla, la decisión de stack se da vuelta hacia Rails/DigitalOcean.
