@@ -49,6 +49,17 @@ Evidencia completa: [`docs/sprint-0/g0-us-region.md`](docs/sprint-0/g0-us-region
 - **Dos aserciones más que agregó la suite:** un supervisor obtiene lectura global **pero la escritura le sigue siendo rechazada** (`USING` pasa, `WITH CHECK` falla — esa asimetría *es* el modelo de autorización, y es lo que hace que el caso del supervisor sea 403 y no un not-found), y el enum `user_role` tiene **exactamente tres etiquetas**, la forma mecánica de "no hay constructor de roles ni matriz de permisos".
 - **También pendiente:** el trigger que rechaza `is_demo=true` en producción (necesita `system_constant`, que aún no existe) y la validación de `display_tz` en `app_user`.
 
+### ⌨️ La barra de undo era el ÚLTIMO elemento tabulable de la pantalla (2026-08-02)
+`tests/e2e/undo-keyboard.spec.ts`, `app/routes/ui/board.tsx`. **28 e2e** (+1); 149 de unit/integración sin cambios.
+
+🔴 **MEDIDO, no supuesto — y `CONTEXT.md` decía lo contrario.** La nota anterior afirmaba que la barra estaba *"temprano en el DOM del `main`"*. Se renderizaba **después de `PipelineColumns`**, así que en orden de tabulación quedaba detrás del enlace "Move" de **cada tarjeta del tablero**: **focusable #14 de 15** en el tenant demo. Con las 500 tarjetas de un vendedor real son ~500 pulsaciones, dentro de una ventana que se cierra a los cinco segundos.
+
+**Y axe la aprobaba todo el tiempo.** La barra es focusable, etiquetada y con contraste correcto. **axe lee una instantánea y no tiene noción de PLAZO**, así que *"alcanzable por teclado"* y *"alcanzable mientras existe"* le parecen la misma propiedad. Sólo la segunda es la promesa.
+
+- ✅ **Corregido moviéndola ANTES de las columnas: #14 → #5.** Es `position: fixed`, así que **nada se mueve en pantalla** — el orden del DOM *es* el orden de tabulación, y eso era todo.
+- ⚠️ **DOS instrumentaciones mías equivocadas antes de obtener el número real, las dos reportando algo halagüeño.** Manejar el teclado de verdad devolvió **1 tab**: `document.body.focus()` es un no-op porque `body` no tiene `tabindex`, y —lo que no sabía— **aun con `activeElement` en `BODY` tras un `blur()`, Chromium conserva su *sequential focus navigation starting point* donde ocurrió el último clic**. O sea que la caminata empezaba al lado del botón que buscaba. **Es la segunda vez que este proyecto paga esta lección** (la primera fue el anillo de foco "faltante" que sí existía). Ahora se cuenta el **índice entre los focusables en orden de DOM**, que es el número que experimenta un vendedor y no depende de ninguna de esas peculiaridades.
+- **El tope es 6 y es un gate**, no una observación: sin un número, esto vuelve la próxima vez que alguien agregue una sección arriba del tablero.
+
 ### ⚙️ `ref.ci_ratchet` — el presupuesto deja de poder aflojarse editando un archivo (2026-08-02)
 Migración **0022**, `tests/integration/ci-ratchet.test.ts`. **15 tests nuevos.** Total: **149**.
 
@@ -769,7 +780,7 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
    - ~~**3a · `ref.ci_ratchet` en Postgres**~~ ✅ **HECHO el 2026-08-02** (migración 0022, 15 tests). Construido sobre **§11.3**, que tacha el `frozen_set` y la columna `direction` de §10.0.1. **Falta sólo la mitad de cableado:** que `check-perf-budgets.ts` lea el ratchet, lo que exige la credencial `crm_ci` en el CI y por lo tanto el remoto.
    - **3b · P20 (TTI móvil)**, que necesita el tier nocturno de Lighthouse y el fixture **perf-500**.
 4. ~~**Puerta 12 — el drag a 60 fps con 500 tarjetas.**~~ ✅ **CERRADA el 2026-08-02** (ver arriba). **Y el fixture `perf-500` ya existe**, así que 3b (TTI) hereda lo caro: le falta sólo el tier nocturno de Lighthouse.
-5. **Alcanzabilidad por teclado de la barra de undo.** Vive 5 s y está temprano en el DOM del `main`, pero un teclado que tabula desde el encabezado puede no llegar a tiempo. **axe no mide plazos**, así que esto queda fuera del gate nuevo: hay que medirlo, no suponerlo.
+5. ~~**Alcanzabilidad por teclado de la barra de undo.**~~ ✅ **HECHO el 2026-08-02.** Era el focusable **#14 de 15** — detrás de cada tarjeta. Ahora #5, con tope de 6 aserido.
 6. **Re-evaluación en vivo del drag al cruzar 1024 px.** El listener de `matchMedia` es estándar pero **no está verificado**: la emulación de viewport por CDP no dispara `resize` ni `change`, así que en el navegador de la herramienta sólo se puede observar la evaluación inicial (que sí está verificada de los dos lados).
 7. **Tensión de precedencia sin resolver:** `CLAUDE.md` dice que **una sola** ruta `routes/ui/**` puede servir datos de tablero como SSR; hoy leaderboard **y** kanban tienen loader. **Pasar `precedence-checker` antes de decidir.**
 8. **Puerta 5 — equivalencia plegado/separado.** Ya no arranca de cero: el mismo despachador produjo **las mismas dos filas terminales** en las dos topologías (ver arriba). Lo que falta es lo que da nombre a la puerta — que sean equivalentes **bajo carga y en los bordes**, no en un caso feliz.

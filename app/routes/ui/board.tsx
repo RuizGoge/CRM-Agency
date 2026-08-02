@@ -323,6 +323,32 @@ export default function Board({ loaderData, actionData }: Route.ComponentProps) 
         </p>
       ) : null}
 
+      {/* BEFORE the columns, and the position in this file is the whole point.
+          The bar is `position: fixed`, so nothing about the screen moves — but
+          DOM order IS tab order, and rendered after the board it sat behind
+          every card's "Move" link. Measured at focusable #14 of 15 on the demo
+          tenant; on the 500-card board a real seller has, it is five hundred
+          presses inside a window that closes in five seconds.
+
+          axe passed it the whole time. The bar is focusable, labelled and
+          contrast-checked — axe reads a snapshot and has no concept of a
+          deadline, so "reachable" and "reachable while it exists" looked
+          identical to it.
+
+          Keyed by the card, so a second move remounts the bar and restarts the
+          window rather than inheriting the remains of the first one. */}
+      {movedCard && movedTo && back ? (
+        <UndoBar
+          key={movedCard.id}
+          opportunityId={movedCard.id}
+          contactName={movedCard.contactName}
+          toStageName={movedTo.name}
+          backStageId={back.id}
+          backStageName={back.name}
+          onWindowClosed={onWindowClosed}
+        />
+      ) : null}
+
       <PipelineColumns
         columns={columns}
         pendingCardId={pendingCardId}
@@ -347,20 +373,6 @@ export default function Board({ loaderData, actionData }: Route.ComponentProps) 
           columns={loaderData.columns}
           lostReasons={loaderData.lostReasons}
           error={error}
-        />
-      ) : null}
-
-      {/* Keyed by the card, so a second move remounts the bar and restarts the
-          window rather than inheriting the remains of the first one. */}
-      {movedCard && movedTo && back ? (
-        <UndoBar
-          key={movedCard.id}
-          opportunityId={movedCard.id}
-          contactName={movedCard.contactName}
-          toStageName={movedTo.name}
-          backStageId={back.id}
-          backStageName={back.name}
-          onWindowClosed={onWindowClosed}
         />
       ) : null}
 
