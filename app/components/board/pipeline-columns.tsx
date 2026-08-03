@@ -282,6 +282,19 @@ const Card = memo(function Card({
         padding: 'var(--space-3)',
         background: 'var(--color-surface-1)',
         border: '1px solid var(--color-border-subtle)',
+        // THE HEALTH RAIL — leading edge, full height, and a GRADIENT rather
+        // than a colour (§2.8). Below the threshold it fills from the top at
+        // days-since-touch ÷ cold_threshold_days, so a card at day 5 of 7
+        // already shows most of a rail: a seller watches decay coming instead
+        // of finding it arrived. R6 deleted the two boundaries and kept the
+        // gradient, which is what the old two-tier design was actually buying.
+        //
+        // Painted as a background rather than a border because a border cannot
+        // be partially filled, and the fill IS the second signal.
+        backgroundImage: railFill(card),
+        backgroundRepeat: 'no-repeat',
+        backgroundSize: '3px 100%',
+        backgroundPosition: 'left top',
         borderRadius: 'var(--radius-md)',
         display: 'grid',
         // FIXED, and it is a foundation decision rather than a component one
@@ -305,8 +318,31 @@ const Card = memo(function Card({
         opacity: dragging || pending ? 0.55 : 1,
       }}
     >
-      <span style={{ fontSize: 'var(--type-sm)', fontWeight: 'var(--font-weight-semibold)' }}>
-        {card.contactName}
+      <span
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 'var(--space-2)',
+        }}
+      >
+        <span
+          style={{
+            fontSize: 'var(--type-sm)',
+            fontWeight: 'var(--font-weight-semibold)',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {card.contactName}
+        </span>
+
+        {/* THE SIGNAL SLOT — exactly one, or nothing. The server decides which;
+            a component that picked would be a second precedence order, and §2.4
+            has one. The slot collapses rather than reserving space, because a
+            card this size cannot afford a permanent empty box. */}
+        {card.signal ? <SignalChip signal={card.signal} /> : null}
       </span>
 
       <div
@@ -363,3 +399,81 @@ const Card = memo(function Card({
     </article>
   )
 })
+
+/**
+ * The health rail, drawn as a partial fill from the top.
+ *
+ * `04b` §2.8 calls it *"a two-signal gradient, not a colour"*, and both halves
+ * of that matter for WCAG 1.4.1: the hue says WHICH state and the fill height
+ * says HOW FAR, so a seller who cannot separate amber from grey still reads
+ * the card. A solid 3px border could carry the first signal and never the
+ * second, which is why this is a background image and not a border.
+ *
+ * The healthy rail is deliberately a visible hairline rather than nothing:
+ * §5's contrast matrix grades it 1.29 and marks it *"carries no information by
+ * design"*. A card with no rail at all would make the rail's ABSENCE a third
+ * state, and there are five.
+ */
+function railFill(card: BoardCard): string {
+  const color =
+    card.health === 'blocked' || card.health === 'overdue'
+      ? 'var(--color-rail-blocked)'
+      : card.health === 'fresh'
+        ? 'var(--color-rail-fresh)'
+        : card.health === 'going_cold'
+          ? 'var(--color-rail-cold)'
+          : null
+
+  // A named health state fills the whole edge: it is a verdict, not a slope.
+  if (color !== null) return `linear-gradient(to bottom, ${color} 0 100%)`
+
+  // `ok`, but decaying. This is the gradient R6 kept when it deleted the two
+  // boundaries — the card is on its way to the threshold and says so before it
+  // gets there. `decay` is computed on the server against the tenant's own
+  // cold_threshold_days; the client never sees either number.
+  const filled = Math.round(card.decay * 100)
+  if (filled <= 0) return `linear-gradient(to bottom, var(--color-rail-none) 0 100%)`
+
+  return (
+    `linear-gradient(to bottom, var(--color-rail-cold) 0 ${filled}%, ` +
+    `var(--color-rail-none) ${filled}% 100%)`
+  )
+}
+
+/**
+ * One signal, in two renderings that §2.7 ratifies as one concept.
+ *
+ * The card face carries the ≤16-character chip because the card is 264px wide;
+ * the ACCESSIBLE NAME carries R11's full sentence. A screen-reader user hears
+ * `Going cold — 9 days since last touch` where a sighted seller reads
+ * `Going cold · 9d`, and neither of them ever meets the banned word.
+ */
+function SignalChip({ signal }: { signal: NonNullable<BoardCard['signal']> }): React.JSX.Element {
+  const [fill, text] =
+    signal.kind === 'overdue'
+      ? ['var(--color-danger-fill)', 'var(--color-danger-text)']
+      : signal.kind === 'fresh'
+        ? ['var(--color-info-fill)', 'var(--color-info-text)']
+        : ['var(--color-caution-fill)', 'var(--color-caution-text)']
+
+  return (
+    <span
+      // The full sentence, not the chip: the visible text is an abbreviation
+      // and an abbreviation is not an accessible name.
+      aria-label={signal.full}
+      title={signal.full}
+      style={{
+        flexShrink: 0,
+        padding: '0 var(--space-15)',
+        borderRadius: 'var(--radius-xs)',
+        background: fill,
+        color: text,
+        fontSize: 'var(--type-micro)',
+        fontWeight: 'var(--font-weight-semibold)',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {signal.chip}
+    </span>
+  )
+}

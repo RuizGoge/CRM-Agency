@@ -83,6 +83,18 @@
   --color-money-neutral: var(--p-n-900);
   --color-money-negative: var(--p-n-700);
 
+  /* --- Domain: the card health rail (04b §2.8, ruling R6) -----------------
+   * ONE decay threshold, so one cold colour. R6 deleted the 14-day red tier,
+   * and the sentence that makes that more than tidying is in 04b §1: it frees
+   * red on the card face to mean one thing only — you may not contact this
+   * person. Every pair below is measured against `--color-surface-1` in §5's
+   * contrast matrix; the healthy rail is 1.29 and carries no information by
+   * design, which is why the card also renders no chip in that state. */
+  --color-rail-blocked: var(--p-r-400);
+  --color-rail-fresh: var(--p-b-600);
+  --color-rail-cold: var(--p-a-500);
+  --color-rail-none: var(--p-n-200);
+
   /* --- Feedback: one meaning each, and only one -------------------------- */
   --color-success-fill: var(--p-g-50);
   --color-success-text: var(--p-g-600);

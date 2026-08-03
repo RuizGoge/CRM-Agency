@@ -45,8 +45,22 @@ export const tenant = app.table(
     smsEnabled: boolean('sms_enabled').notNull().default(false),
     reminderKillSwitch: boolean('reminder_kill_switch').notNull().default(false),
 
-    coldThresholdDays: smallint('cold_threshold_days').notNull().default(14),
-    rottingThresholdDays: smallint('rotting_threshold_days').notNull().default(7),
+    /**
+     * THE ONLY DECAY THRESHOLD. Ruling R1.7 (`04-ux-flows.md` Part I, rank 1):
+     * "One threshold: cold_threshold_days, default 7, configurable. There is
+     * no separate 'rot' threshold."
+     *
+     * This table used to carry a SECOND decay threshold beside it, with a
+     * CHECK ordering the two — the pre-R6 two-tier design, encoded exactly.
+     * Migration 0025 drops it and records why; the name is deliberately not
+     * repeated here, because `tests/integration/one-decay-threshold.test.ts`
+     * enforces R2-6 by grep and a live schema file is exactly where a banned
+     * concept would come back first. `04b` §1 gives the consequence that makes
+     * this more than tidying: deleting the 14-day red tier frees red on the
+     * card face to mean one thing only, which is "you may not contact this
+     * person".
+     */
+    coldThresholdDays: smallint('cold_threshold_days').notNull().default(7),
 
     customFieldsEnabled: boolean('custom_fields_enabled').notNull().default(false),
     tagsEnabled: boolean('tags_enabled').notNull().default(false),
@@ -63,7 +77,6 @@ export const tenant = app.table(
   (t) => [
     // Multi-tenant-ready column, pinned to one value today.
     check('tenant_currency_usd', sql`${t.currency} = 'USD'`),
-    check('tenant_rotting_before_cold', sql`${t.rottingThresholdDays} < ${t.coldThresholdDays}`),
     // At most one demo tenant, ever, across all tenants. Known to become a
     // blocker at tenant #2 (§9.6 item 3); correct and load-bearing today.
     uniqueIndex('tenant_single_demo_uidx')

@@ -7,6 +7,33 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 🩺 EL RIEL DE SALUD, Y UN DISEÑO TACHADO QUE SEGUÍA VIVO EN LA BASE (2026-08-03)
+`app/routes/api/board.ts` · `pipeline-columns.tsx` · migración **0025** · `tests/integration/card-health.test.ts` · `one-decay-threshold.test.ts` · `scripts/seed.ts`. **188 → 203 tests · 66 → 69 e2e.**
+
+Lo que le faltaba a `DEMO-07`. La tarjeta rinde ahora **seis de los siete hechos** de `04b` §2.4.
+
+🔴 **EL HALLAZGO, y lo encontré porque el riel necesitaba leer el número: `app.tenant` traía `rotting_threshold_days`, un `cold_threshold_days` con default 14 y un CHECK que forzaba el primero por debajo del segundo.** Eso es **el diseño de dos niveles que R6 borró**, codificado exacto, en la base, desde la migración 0001. La regla que lo prohíbe es de rango 1 y tiene una sola frase — **R1.7**: *"One threshold: `cold_threshold_days`, default 7, configurable. There is no separate 'rot' threshold."*
+
+- **Nadie leía la columna, así que nada podía notarlo.** Los dos defectos que habría producido son silenciosos: el aviso de *going cold* disparando a los **14 días en vez de a los 7** —una semana entera de más sobre la señal que existe para que un lead no se abandone en silencio— y el rojo conservando un segundo significado, que es justo lo que R6 lo borra para evitar. En esta cara de tarjeta el rojo significa *no podés contactar a esta persona*, y un color con dos significados no tiene ninguno.
+- **Migración 0025** dropea la columna y el CHECK, y pone el default en 7. El `UPDATE` de filas existentes está acotado a `= 14` y explicado: un tenant que hubiera *elegido* 14 sería indistinguible de uno que nunca eligió. Hoy es teórico —hay un tenant sembrado y ninguna pantalla de configuración— y por eso corre en una migración que pasó una vez, antes de que esa pantalla exista.
+- ✅ **El check R2-6 de `04b` §9 ahora EXISTE.** Declaraba que *"cualquier string, setting o code path que mencione un `rot_threshold`"* rompe el build; no había nada. Ahora es un test que mira el motor **y** el árbol. 🎯 **Atrapó dos veces mis propios comentarios** —uno en `schema/tenant.ts` y otro en `board.ts`, los dos explicando la eliminación— y las dos veces lo correcto fue reescribir el comentario: un archivo vivo es exactamente donde un concepto prohibido vuelve.
+
+**EL RIEL Y EL SLOT, los dos calculados en el SERVIDOR.** §2.8 da la razón en una frase: el tablero, My Book y My Day tienen que ser **idénticos byte a byte** sobre si un lead se está enfriando, y tres pantallas decidiendo cada una por su cuenta son tres respuestas a una pregunta que el vendedor hace una vez.
+
+- **El riel es un GRADIENTE, no un color.** Debajo del umbral se llena desde arriba en `days_since_touch ÷ cold_threshold_days`: una tarjeta al día 4 de 7 ya muestra el 57% del riel, así que el vendedor **ve venir** el deterioro en vez de encontrárselo. Las dos señales —el tono dice *cuál* estado, la altura dice *cuánto falta*— son requisito de WCAG 1.4.1, no adorno. R6 borró los dos límites y **se quedó con el gradiente**, que es lo que el diseño de dos niveles compraba en realidad.
+- ⚠️ **LOS DOS ÓRDENES DE PRECEDENCIA SON DISTINTOS, a propósito, y parece un bug.** El riel es `blocked > overdue > fresh > going_cold > ok` (§2.8); el slot es `recent contact > fresh > overdue > going cold > needs reply > no next step` (§2.7). Un lead que llegó hace minutos con un callback ya vencido muestra **riel rojo y chip `NEW`** — los dos documentos cumplidos, no uno equivocado. Hay un test que assertea la diferencia justamente para que nadie la "arregle".
+- **Exactamente una señal por tarjeta**, y `signal` es un valor y no un arreglo para que agregar una segunda sea un cambio de tipo que alguien tenga que mirar.
+- **Suprimidas por completo en etapas `earning` y `lost`** (ítem 32 del MVP, no negociable). §2.7 da la consecuencia: *"si no, toda tarjeta está en ámbar el primer lunes y la señal se vuelve empapelado."*
+- ⚠️ **Una lectura de un SILENCIO, marcada como tal en el código:** §2.7 suprime las *señales* en etapas cerradas y §2.8 no dice nada del riel — así que una tarjeta ganada renderizaba un riel azul de *fresh*. Encontrado mirando el tablero. Un riel que dice "llamá ahora" sobre la columna del dinero es desinformación, así que `fresh` y `going_cold` también se suprimen ahí; **`overdue` sobrevive** a propósito, porque una actividad vencida sobre un trato cerrado sigue siendo algo que el vendedor le debe a alguien.
+- **Dos renderizados por señal, que §2.7 ratifica como un solo concepto:** `Going cold · 9d` en la cara (≤16 porque la tarjeta mide 264px) y la frase completa de R11 como nombre accesible. La palabra que R11 prohíbe no aparece en ninguno de los dos — ni en los comentarios, ahora.
+- 🎯 **Probado por mutación por los dos lados:** colapsar la precedencia del slot a la del riel → **2 rojos**; sacar la supresión → **1 rojo** nombrando la tarjeta ganada con su chip de *going cold*.
+
+🔴 **Y LAS EDADES DE LAS TARJETAS DEL DEMO ERAN ALEATORIAS.** `random() * 12 días`, así que el tablero se veía distinto en cada siembra y **ninguna tarjeta estaba garantizada en ningún estado** — el riel no se podía demostrar ni assertear. Peor: todas tenían `created_at` en `now()`, así que con cero intentos **todas computaban `fresh`** y los estados de deterioro eran inalcanzables pasara lo que pasara con `last_activity_at`. Ahora hay **una tarjeta por estado**, con edades fijas: Ruth (fresh) · Curtis (going cold, 9d) · Alma (deteriorándose, 4 de 7 → riel al 57%) · Wendell (vencida hace 3 h).
+
+⚠️ **JOBS003 se probó solo, una sesión después de escribirse.** Volví a encadenar `db:migrate` con el arranque del contenedor y volvió a competir — pero esta vez **pg-boss no se instaló**, así que la base era recuperable con un `db:migrate` y no con un `db:reset`.
+
+⚠️ **Lo que NO tiene la tarjeta, y por qué:** el chip `NEW` **no tictaquea** (§2.7 quiere `NEW 04:12` desde el timestamp del servidor) — diferido a propósito, porque un timer por tarjeta sobre 500 tarjetas es exactamente la forma de regresión que P6 existe para atrapar, y necesita **un** tick compartido y no quinientos. Faltan también el chip de contacto reciente (prioridad 1 por diseño: ping-post vende el mismo consumidor a dos vendedores dentro de la hora) y `needs reply`, los dos esperando Aloware; el estado `blocked` espera la misma puerta; y la segunda mitad de la regla de supresión —nunca sobre tarjetas importadas jamás trabajadas— espera `imported_at` del módulo de intake. **El día que aterrice un CSV, mil tarjetas sin tocar se ponen ámbar a la vez si `signalsSuppressed` no crece esa cláusula.**
+
 ### 🎯 EL RANK-AND-GAP, EL CHECKLIST, Y UNA TRAMPA DE PRECEDENCIA QUE PAGUÉ (2026-08-03)
 `app/components/leaderboard/rank-and-gap.tsx` · `standing-block.tsx` · `empty-copy.ts` · `app/components/home/first-run-checklist.tsx` · `app/routes/api/home-setup.ts` · migración **0024** · `scripts/seed.ts` · `scripts/install-jobs.ts` · `scripts/check-perf-budgets.ts`. **163 → 188 tests · 33 → 66 e2e.**
 
@@ -911,15 +938,15 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 
 ### ▶️ LO SIGUIENTE — sesión del 2026-08-03, cierre
 
-**`master` = `origin/master`. 188 tests · 66 e2e · árbol limpio · demo reseteado.** Los puntos 1, 2, 3, 4 y 6 de la lista anterior están cerrados (ver la entrada del 2026-08-03 arriba).
+**`master` = `origin/master` + commits locales sin empujar. 203 tests · 69 e2e · árbol limpio · demo reseteado.** Los puntos 1, 2, 3, 4 y 6 de la lista anterior están cerrados, y también el riel de salud que abría esta lista (ver las dos entradas del 2026-08-03 arriba).
 
 **Lo que NO depende de nadie — por acá seguir, en este orden:**
 
-1. **La señal de salud de la tarjeta y el slot de señal, con su regla de supresión** — lo único sustantivo que le queda a `DEMO-07`. `04b` §2.8 quiere un enum `health` **calculado en el servidor** (`blocked` > `overdue` > `fresh` > `going_cold` > `ok`) renderizado como un riel de relleno parcial en `days_since_touch ÷ cold_threshold_days`, y §2.4 quiere **exactamente una** señal en el slot por una precedencia de seis pasos. **Cuatro de los cinco estados se computan con datos que ya existen** (`contact.last_touch_at`, actividades vencidas, `first_touch_latency_seconds`); `blocked` necesita la puerta de cumplimiento, que necesita Aloware. El riel de dos señales (color **y** forma) es requisito WCAG 1.4.1, no decoración.
+1. **El reloj `NEW` que tictaquea** — lo que le queda a la señal de la tarjeta, y tiene una restricción de performance escrita: §2.7 quiere `NEW 04:12` contando desde el timestamp del servidor, y un timer **por tarjeta** sobre un tablero de 500 es la forma exacta de regresión que P6 atrapa. Necesita **un** tick compartido que no invalide el `memo` de las 500 tarjetas — probablemente un contexto que sólo consuman las tarjetas `fresh`, o el chip como componente aparte con su propia suscripción.
 2. **P20 (TTI móvil)** — lo único que le falta a la Puerta 11. Necesita Lighthouse y un tier nocturno. **El fixture `perf-500` YA existe**, que era lo caro. ⚠️ Ojo con los minutos de Actions: el control de costo es la ausencia de método de pago (§9.4.1).
 3. **Cerrar el cruce del ratchet en el CI.** El checker ya lee `ref.ci_ratchet` y **falla con `PERF006`** cuando el archivo y el motor discrepan — probado por mutación. Falta sólo lo que no puedo hacer yo: darle a `crm_ci` LOGIN y contraseña **fuera de banda** y poner la cadena como secreto `CI_RATCHET_DATABASE_URL`. Hasta entonces el CI imprime el cuadro de "el cruce no corrió".
 4. **La franja de actividad de hoy** (`day.strip.*`: Dials · Contacts · Appointments set) — lo último de `DEMO-09`, y el único número que se mueve antes de la primera venta. Cuenta desde `call.completed` con cualquier resultado, **así que espera a Aloware**.
-5. **Reconciliar la cadena de snapshots de Drizzle**, desenganchada desde 0018 (ahora 0019–0024 son SQL a mano). `db:generate` se niega (`DBGEN003`), así que no es una trampa; es una tarea pendiente.
+5. **Reconciliar la cadena de snapshots de Drizzle**, desenganchada desde 0018 (ahora 0019–0025 son SQL a mano, y **0025 dropeó una columna**, así que el desfase ya no es sólo aditivo). `db:generate` se niega (`DBGEN003`), así que no es una trampa; es una tarea pendiente.
 
 **Dos DECISIONES DE JORGE, ninguna bloquea lo de arriba:**
 

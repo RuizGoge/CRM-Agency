@@ -487,34 +487,98 @@ async function seedOpenPipeline(): Promise<void> {
     WHERE tenant_id = ${TENANT} AND owner_user_id = ${seller.id} AND stage_type = 'open'
     ORDER BY sort_order`
 
+  /**
+   * ONE CARD PER HEALTH STATE, and the ages are FIXED rather than random.
+   *
+   * They used to be `random() * 12 days`, which meant the board looked
+   * different on every seed and no card was guaranteed to be in any
+   * particular state — so the health rail could not be demonstrated and could
+   * not be asserted. A demo whose most-repeated screen is a dice roll is a
+   * demo that shows something else the morning it matters.
+   *
+   * Every one of these also had `created_at` defaulting to now(), so with zero
+   * attempts EVERY card computed as `fresh` and the decay states were
+   * unreachable no matter what `last_activity_at` said.
+   *
+   *   ageDays      how long ago the lead arrived (the NEW clock's anchor)
+   *   touchedDays  days since the last touch (the decay numerator)
+   *   attempts     dial attempts, which is also what disqualifies `fresh`
+   *   overdueHours an activity already past due, or null
+   */
   const leads = [
-    ['Ruth Alvarez', 'New Lead'],
-    ['Curtis Vance', 'New Lead'],
-    ['Alma Betancourt', 'Quoted'],
-    ['Wendell Pike', 'Quoted'],
+    // Fresh: arrived minutes ago, never dialled. Blue rail, `NEW` in the slot.
+    {
+      name: 'Ruth Alvarez',
+      stage: 'New Lead',
+      ageDays: 0,
+      touchedDays: 0,
+      attempts: 0,
+      overdueHours: null,
+    },
+    // Going cold: past the seven-day threshold. Full amber rail.
+    {
+      name: 'Curtis Vance',
+      stage: 'New Lead',
+      ageDays: 20,
+      touchedDays: 9,
+      attempts: 3,
+      overdueHours: null,
+    },
+    // Decaying but not yet cold — the PARTIAL fill, which is the half of the
+    // gradient a screenshot of a threshold-only design never shows.
+    {
+      name: 'Alma Betancourt',
+      stage: 'Quoted',
+      ageDays: 20,
+      touchedDays: 4,
+      attempts: 2,
+      overdueHours: null,
+    },
+    // Overdue: red rail, and the one state where the rail and the slot say
+    // different things on purpose.
+    {
+      name: 'Wendell Pike',
+      stage: 'Quoted',
+      ageDays: 20,
+      touchedDays: 2,
+      attempts: 5,
+      overdueHours: 3,
+    },
   ] as const
 
-  for (const [name, stageName] of leads) {
-    const stage = stages.find((s) => s.name === stageName)
+  for (const lead of leads) {
+    const stage = stages.find((s) => s.name === lead.stage)
     if (!stage) continue
 
     const [contact] = await client<{ id: string }[]>`
       INSERT INTO app.contact (tenant_id, owner_user_id, full_name, created_via)
-      VALUES (${TENANT}, ${seller.id}, ${name}, 'lead_intake')
+      VALUES (${TENANT}, ${seller.id}, ${lead.name}, 'lead_intake')
       RETURNING id`
 
-    await client`
+    const [opp] = await client<{ id: string }[]>`
       INSERT INTO app.opportunity
         (tenant_id, owner_user_id, contact_id, pipeline_id, stage_id, current_stage_type,
-         created_from, stage_entered_at, last_activity_at)
+         created_from, created_at, stage_entered_at, last_activity_at, attempt_count)
       SELECT ${TENANT}, ${seller.id}, ${contact?.id ?? null}, p.id, ${stage.id}, 'open',
              'lead_intake',
-             clock_timestamp() - (random() * 12 || ' days')::interval,
-             clock_timestamp() - (random() * 9 || ' days')::interval
-      FROM app.pipeline p WHERE p.tenant_id = ${TENANT} AND p.owner_user_id = ${seller.id}`
+             clock_timestamp() - (${lead.ageDays} || ' days')::interval,
+             clock_timestamp() - (${lead.ageDays} || ' days')::interval,
+             clock_timestamp() - (${lead.touchedDays} || ' days')::interval,
+             ${lead.attempts}
+      FROM app.pipeline p WHERE p.tenant_id = ${TENANT} AND p.owner_user_id = ${seller.id}
+      RETURNING id`
+
+    if (lead.overdueHours !== null) {
+      await client`
+        INSERT INTO app.activity
+          (tenant_id, owner_user_id, contact_id, opportunity_id, type, title, due_at, created_by)
+        VALUES (${TENANT}, ${seller.id}, ${contact?.id ?? null}, ${opp?.id ?? null}, 'task',
+                ${`Follow up with ${lead.name.split(' ')[0] ?? lead.name}`},
+                clock_timestamp() - (${lead.overdueHours} || ' hours')::interval, 'human')`
+    }
   }
 
-  console.log(`  ${seller.name}: ${leads.length} open cards on the board`)
+  console.log(`  ${seller.name}: ${leads.length} open cards, one per health state`)
 }
 
 main()

@@ -72,4 +72,96 @@ test.describe('every card is exactly one height', () => {
     await expect(page.locator('main article').first()).toContainText('Not called yet')
     await expect(page.locator('main').getByText('0 attempts')).toHaveCount(0)
   })
+
+  test('draws the health rail, and draws it partially before the threshold', async ({
+    page,
+  }, testInfo) => {
+    test.skip(testInfo.project.name !== 'desktop-ci', 'the rail is one computed style')
+
+    // `04b` §2.8: *"the rail is a two-signal gradient, not a colour"*. Both
+    // halves are WCAG 1.4.1 — the hue says WHICH state and the fill height says
+    // HOW FAR — so a seller who cannot separate amber from grey still reads the
+    // card. A solid border could carry the first signal and never the second.
+    //
+    // The seeded board holds one card per state on purpose; the ages are fixed
+    // rather than random precisely so this can be asserted at all.
+    await signIn(page)
+    await page.goto('/board')
+    await expect(page.getByRole('heading', { name: 'Pipeline' })).toBeVisible()
+
+    const railOf = (name: string): Promise<string> =>
+      page
+        .locator('main article')
+        .filter({ hasText: name })
+        .first()
+        .evaluate((el) => getComputedStyle(el).backgroundImage)
+
+    // Full fills: a named state is a verdict, not a slope.
+    expect(await railOf('Curtis Vance'), 'going cold is not a full amber rail').toMatch(
+      /rgb\(169, 110, 0\).*100%/,
+    )
+    expect(await railOf('Wendell Pike'), 'overdue is not a full red rail').toMatch(
+      /rgb\(225, 85, 85\).*100%/,
+    )
+    expect(await railOf('Ruth Alvarez'), 'a fresh lead is not a blue rail').toMatch(
+      /rgb\(27, 84, 191\)/,
+    )
+
+    // THE GRADIENT. Four days against a seven-day threshold, so the amber stops
+    // partway and the rest is the healthy hairline. A threshold-only design
+    // renders this card identically to an untouched one.
+    const decaying = await railOf('Alma Betancourt')
+    expect(decaying, 'a decaying card shows no partial fill').toMatch(/rgb\(169, 110, 0\)/)
+    const stop = /rgb\(169, 110, 0\)[^,]*?(\d+)%/.exec(decaying)?.[1]
+    expect(Number(stop), `the fill stops at ${stop}%, not partway`).toBeGreaterThan(0)
+    expect(Number(stop), `the fill stops at ${stop}%, which is the full rail`).toBeLessThan(100)
+  })
+
+  test('renders exactly one signal chip per card, and never on a closed deal', async ({
+    page,
+  }, testInfo) => {
+    test.skip(testInfo.project.name !== 'desktop-ci', 'this is a DOM count')
+
+    await signIn(page)
+    await page.goto('/board')
+    await expect(page.getByRole('heading', { name: 'Pipeline' })).toBeVisible()
+
+    // The slot is ONE fixed-width box on a 264px card. Two chips means both
+    // truncate, which §2.5 records as the reason the second attention pill was
+    // deleted rather than shrunk.
+    const cards = page.locator('main article')
+    const count = await cards.count()
+    for (let i = 0; i < count; i++) {
+      const chips = cards.nth(i).locator('span[title]')
+      expect(await chips.count(), `card ${i} renders more than one signal`).toBeLessThanOrEqual(1)
+    }
+
+    // MVP item 32. The seeded won card is twenty days untouched with six
+    // attempts — the loudest going-cold chip the board could produce, on the
+    // one card nobody is working.
+    const won = page.locator('main article').filter({ hasText: 'Lead 1 of Renata Ochoa' }).first()
+    await expect(won).toBeVisible()
+    await expect(won.locator('span[title]')).toHaveCount(0)
+  })
+
+  test('gives a screen reader the sentence, not the abbreviation', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== 'desktop-ci', 'this is copy, and copy renders once')
+
+    // §2.7 resolves R7 against R11 by keeping BOTH renderings: the face carries
+    // `Going cold · 9d` because the card is 264px wide, and the accessible name
+    // carries the full sentence. An abbreviation is not an accessible name —
+    // and the banned word appears in neither.
+    await signIn(page)
+    await page.goto('/board')
+
+    const chip = page
+      .locator('main article')
+      .filter({ hasText: 'Curtis Vance' })
+      .first()
+      .locator('span[title]')
+
+    await expect(chip).toHaveText('Going cold · 9d')
+    await expect(chip).toHaveAttribute('aria-label', 'Going cold — 9 days since last touch')
+    await expect(page.locator('main')).not.toContainText('Rotting')
+  })
 })
