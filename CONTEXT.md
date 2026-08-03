@@ -7,6 +7,31 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### ⛔ EL RELOJ QUE NO ENTRÓ: P6 LO RECHAZÓ DOS VECES, Y EL CAMINO DEJÓ UNA PUERTA (2026-08-03)
+`scripts/client-server-boundary.test.ts`. **203 → 207 tests.** El reloj `NEW` **no se shippeó**, y eso es el resultado, no un pendiente.
+
+**Intenté el reloj que tictaquea de §2.7 (`NEW 04:12` contando desde el timestamp del servidor). Lo construí entero, lo medí, y P6 lo rechazó dos veces. El presupuesto no se toca, así que el reloj no entra.**
+
+🔴 **PRIMERO, UN DEFECTO QUE NO SE PARECÍA EN NADA A SU CAUSA.** Exporté el helper `mmss` desde `app/routes/api/board.ts` —al lado de la derivación que produce el string, que se lee bien y está mal— y lo importé desde un componente. **Esa ruta importa `~/db` y `~/lib/auth/identity`, así que una función arrastró postgres, drizzle y better-auth al bundle del CLIENTE.**
+
+- **Lo que se veía en pantalla: el tablero de 500 tarjetas renderizaba las 500 y después simplemente nunca armaba el drag.** Sin error, sin pantalla en blanco, nada en la consola. La página había mandado un driver de base de datos al navegador y lo seguía parseando. **P6 lo atrapó como un locator que nunca resolvía**, que está lejísimos de *"el módulo equivocado está en el bundle"*.
+- **Diagnosticado por bisección, no por lectura:** `git stash` → P6 verde en HEAD (p95 16,8 · max 33,3 · long task 0) → el problema estaba en lo no commiteado. Después, desactivar sólo el chip fresco **no** lo arregló, lo que descartó el reloj y dejó al import como único sospechoso.
+- ✅ **Y ahí quedó la puerta que sí vale: `client-server-boundary.test.ts`.** Un componente no puede importar un módulo de `~/routes/**` **en runtime**, ni `~/db`, ni `~/lib/auth/*`. Los `import type` siguen permitidos y hay un test que lo dice, para que nadie endurezca la regla hasta romper todas las tarjetas. 🎯 **Probado por mutación con el import exacto que causó esto:** rojo, nombrando archivo, especificador y el arreglo (*"movelo a `app/lib/**`, que no importa nada del servidor"*).
+
+📐 **LOS NÚMEROS DEL RELOJ, medidos y anotados para que el próximo intento no arranque de cero.** El fixture `perf-500` crea sus 500 tarjetas de una vez y sin intentos, así que **las 500 son `fresh`** — el peor caso real, no artificial: un vendedor que acaba de importar su libro tiene exactamente eso.
+
+| Intento | max frame | worst long task | Presupuesto |
+|---|---|---|---|
+| Tictaqueando cada chip | **116,7 ms** | **84,0 ms** | 34 / 50 |
+| Sólo los chips EN PANTALLA (IntersectionObserver compartido) | **50,0 ms** | **53,0 ms** | 34 / 50 |
+| Sin reloj (lo que está en el árbol) | 33,3 ms | **0,0 ms** | 34 / 50 |
+
+- **Dos optimizaciones reales por el camino, las dos insuficientes solas.** El `subscribe` copiaba un arreglo por suscriptor —el patrón que usé para `Notification.permission`, donde hay UN suscriptor— y con 500 eso es O(n²): ~125.000 copias durante la hidratación. Pasado a `Set`. Después, acotar el tick a lo visible bajó de 116,7 a 50,0. **Sigue arriba del presupuesto.**
+- **La conclusión honesta: 500 relojes simultáneos no son viables sin virtualización**, o sin escribir el DOM fuera de React para ese texto. El chip renderiza la forma correcta y no avanza; la próxima tentativa arranca desde esta tabla.
+- ⚠️ **Y una nota de método sobre el propio gate:** una corrida dio `worstLongTask=61 ms` **en HEAD**, con la máquina todavía asentándose después de reiniciar Docker; dos corridas siguientes dieron 0,0. La mediana de 3 protege el `max_frame` pero **no** protege igual al long task. Si aparece rojo ahí sin cambios de código, correrlo de nuevo antes de creerle.
+
+⚠️ **Docker Desktop se cayó solo a mitad de sesión.** El síntoma fue el webServer de Playwright saliendo con código 1 y `ECONNRESET` en :3000 — el dev server anuncia el puerto y **muere en el primer request** cuando no llega a Postgres (el pliegue perezoso en dev, ya anotado). Vale reconocerlo rápido: no es el código.
+
 ### 🩺 EL RIEL DE SALUD, Y UN DISEÑO TACHADO QUE SEGUÍA VIVO EN LA BASE (2026-08-03)
 `app/routes/api/board.ts` · `pipeline-columns.tsx` · migración **0025** · `tests/integration/card-health.test.ts` · `one-decay-threshold.test.ts` · `scripts/seed.ts`. **188 → 203 tests · 66 → 69 e2e.**
 
@@ -938,11 +963,11 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 
 ### ▶️ LO SIGUIENTE — sesión del 2026-08-03, cierre
 
-**`master` = `origin/master` + commits locales sin empujar. 203 tests · 69 e2e · árbol limpio · demo reseteado.** Los puntos 1, 2, 3, 4 y 6 de la lista anterior están cerrados, y también el riel de salud que abría esta lista (ver las dos entradas del 2026-08-03 arriba).
+**`master` = `origin/master` + commits locales sin empujar. 207 tests · 69 e2e · árbol limpio · demo reseteado.** Los puntos 1, 2, 3, 4 y 6 de la lista anterior están cerrados, y también el riel de salud que abría esta lista (ver las dos entradas del 2026-08-03 arriba).
 
 **Lo que NO depende de nadie — por acá seguir, en este orden:**
 
-1. **El reloj `NEW` que tictaquea** — lo que le queda a la señal de la tarjeta, y tiene una restricción de performance escrita: §2.7 quiere `NEW 04:12` contando desde el timestamp del servidor, y un timer **por tarjeta** sobre un tablero de 500 es la forma exacta de regresión que P6 atrapa. Necesita **un** tick compartido que no invalide el `memo` de las 500 tarjetas — probablemente un contexto que sólo consuman las tarjetas `fresh`, o el chip como componente aparte con su propia suscripción.
+1. **El reloj `NEW` que tictaquea** — intentado, medido y **rechazado por P6 dos veces** (ver la entrada de arriba con la tabla). Tictaqueando todo: 116,7 ms / 84 ms. Acotado a lo visible: 50,0 ms / 53,0 ms. Presupuesto: 34 / 50. **No vuelve a intentarse sin virtualización del tablero o sin escribir ese texto en el DOM fuera de React** — y con virtualización el problema se disuelve solo, porque dejan de existir 500 nodos.
 2. **P20 (TTI móvil)** — lo único que le falta a la Puerta 11. Necesita Lighthouse y un tier nocturno. **El fixture `perf-500` YA existe**, que era lo caro. ⚠️ Ojo con los minutos de Actions: el control de costo es la ausencia de método de pago (§9.4.1).
 3. **Cerrar el cruce del ratchet en el CI.** El checker ya lee `ref.ci_ratchet` y **falla con `PERF006`** cuando el archivo y el motor discrepan — probado por mutación. Falta sólo lo que no puedo hacer yo: darle a `crm_ci` LOGIN y contraseña **fuera de banda** y poner la cadena como secreto `CI_RATCHET_DATABASE_URL`. Hasta entonces el CI imprime el cuadro de "el cruce no corrió".
 4. **La franja de actividad de hoy** (`day.strip.*`: Dials · Contacts · Appointments set) — lo último de `DEMO-09`, y el único número que se mueve antes de la primera venta. Cuenta desde `call.completed` con cualquier resultado, **así que espera a Aloware**.
