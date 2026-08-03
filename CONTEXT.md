@@ -848,22 +848,25 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 | 12 | Drag a 60 fps con 500 tarjetas | ✅ **CERRADA.** Perfil `dnd-ci` (2× CPU throttle) sobre `perf-500`, **contra el BUILD DE PRODUCCIÓN**: **p95 16,8 ms · max 16,8 ms (cero frames perdidos) · cero long tasks**, contra p95≤20 / frame≤34 / longtask≤50. El fixture se assertea antes de medir, y el gate está probado con dientes (bloqueo de 60 ms → las tres aserciones rojas) |
 | 13 | Publicar las contradicciones | ✅ `docs/sprint-0/g13-published-contradictions.md` |
 
-### ▶️ LO SIGUIENTE — ya no hay un orden fijado
+### ▶️ LO SIGUIENTE — sesión del 2026-08-02, cierre
 
-**Los cinco ítems que este plan traía quedaron HECHOS el 2026-08-02** (undo de 5 s · axe-core bajo `test:e2e` · drag de escritorio · pg-boss cableado · celebración). Cada uno con su detalle más arriba, incluido lo que cada uno destapó. Lo que queda abajo **no está priorizado por nadie todavía** — es una lista, no una secuencia.
+**El repositorio TIENE REMOTO y el CI corre**: `github.com/RuizGoge/CRM-Agency` (privado). `master` = `origin/master` = `92f3f46`. **163 tests · 33 e2e · árbol limpio · demo reseteado.**
 
-**Recomendación de por dónde seguir, en este orden:**
+**Lo que NO depende de nadie — por acá seguir, en este orden:**
 
-1. ~~**Arrancar el worker DENTRO del proceso web.**~~ ✅ **HECHO el 2026-08-02** — ver la sección de la topología plegable más arriba. La decisión que este ítem pedía tomar y no descubrir quedó tomada: **sin esquema de pg-boss el proceso se niega a arrancar**, y por lo tanto **`npm run db:jobs` es requisito de `npm run dev`**.
-2. ~~**`lost_reason` en el seed.**~~ ✅ **HECHO el 2026-08-02** — 7 razones sembradas y `tests/e2e/lost-gate.spec.ts` lo sostiene, probado por mutación.
-3. ~~**Puerta 11 — medir bundle y TTI.**~~ 🟡 **MITAD HECHA el 2026-08-02** (ver arriba). Lo que queda de ella son dos piezas separables:
-   - ~~**3a · `ref.ci_ratchet` en Postgres**~~ ✅ **HECHO el 2026-08-02** (migración 0022, 15 tests). Construido sobre **§11.3**, que tacha el `frozen_set` y la columna `direction` de §10.0.1. **Falta sólo la mitad de cableado:** que `check-perf-budgets.ts` lea el ratchet, lo que exige la credencial `crm_ci` en el CI y por lo tanto el remoto.
-   - **3b · P20 (TTI móvil)**, que necesita el tier nocturno de Lighthouse y el fixture **perf-500**.
-4. ~~**Puerta 12 — el drag a 60 fps con 500 tarjetas.**~~ ✅ **CERRADA el 2026-08-02** (ver arriba). **Y el fixture `perf-500` ya existe**, así que 3b (TTI) hereda lo caro: le falta sólo el tier nocturno de Lighthouse.
-5. ~~**Alcanzabilidad por teclado de la barra de undo.**~~ ✅ **HECHO el 2026-08-02.** Era el focusable **#14 de 15** — detrás de cada tarjeta. Ahora #5, con tope de 6 aserido.
-6. **Re-evaluación en vivo del drag al cruzar 1024 px.** El listener de `matchMedia` es estándar pero **no está verificado**: la emulación de viewport por CDP no dispara `resize` ni `change`, así que en el navegador de la herramienta sólo se puede observar la evaluación inicial (que sí está verificada de los dos lados).
-7. ~~**Tensión de precedencia sin resolver.**~~ 🟡 **ENUMERADA Y ACOTADA el 2026-08-02.** §1.2 ya elegía ganador (el pipeline) y son **tres** loaders, no dos. Lista blanca + ratchet `shrink_only`: un cuarto es imposible. **Queda la decisión de producto:** cuál de los dos fuera de presupuesto se saca.
-8. **Puerta 5 — equivalencia plegado/separado.** Ya no arranca de cero: el mismo despachador produjo **las mismas dos filas terminales** en las dos topologías (ver arriba). Lo que falta es lo que da nombre a la puerta — que sean equivalentes **bajo carga y en los bordes**, no en un caso feliz.
+1. **El rank-and-gap arriba del pliegue** — `You're #2 · $41,300 · $6,900 behind Dana R.` Es lo que queda de mayor valor del ítem protegido 10; `04-ux-flows.md` §7 lo describe como *"hace todo el pitch antes de que se diga una palabra"*. El dato ya existe: `readBoard` devuelve `self` con `rank` y `totalCents`, y el vecino de arriba está en `rows`. **La brecha se calcula en el SERVIDOR** — el cliente no hace aritmética de dinero, nunca. Actualizar `contracts/protected-list.json` al terminar.
+2. **La lista de primera corrida, cuatro ítems** — la otra mitad del ítem 10.
+3. **Copy vacío distinto por período** en el leaderboard (ítem 9). Hoy distingue all-time de un período; faltan las cuatro líneas propias.
+4. **DEMO-07: la tarjeta kanban con seis hechos.** Rinde tres. Faltan lead source (difiere al módulo de intake), conteo de intentos y la señal de salud con su regla de supresión. **Y la altura fija de tarjeta 120/156, que `05c` ata al ratchet `ui.card_h_*` con brazo `pinned`** — la máquina ya existe (migración 0022), sólo falta registrar el nombre y medir.
+5. **P20 (TTI móvil)** — lo único que le falta a la Puerta 11. Necesita Lighthouse y un tier nocturno. **El fixture `perf-500` YA existe**, que era lo caro. ⚠️ Ojo con los minutos de Actions: el control de costo es la ausencia de método de pago (§9.4.1).
+6. **Cablear el ratchet al checker** — que `check-perf-budgets.ts` lea `ref.ci_ratchet` en vez de sólo el archivo. Necesita la credencial `crm_ci` como secreto del repo, y `crm_ci` se crea `NOLOGIN` sin contraseña a propósito (migración 0022): hay que darle LOGIN y contraseña fuera de banda.
+
+**Dos DECISIONES DE JORGE, ninguna bloquea lo de arriba:**
+
+- **Cuál loader SSR fuera de presupuesto se saca** (`contracts/ui-loader-whitelist.json`). §1.2 sanciona **uno** (el pipeline) y hay **tres**. My Day es el que el registro pide sacar por su propio texto (§1.1 razón 2 lo nombra); el leaderboard cuesta el primer pintado de la pantalla que abre el demo. El motor sólo garantiza que no puedan volverse cuatro.
+- **Si `/earnings` debe ser alcanzable SIN sesión.** El ítem protegido 1 lo llama *"el tablero público"*, pero vive dentro del layout `shell`, que redirige. Hoy una segunda pantalla necesita una cuenta.
+
+**Bloqueado por terceros:** los 4 ítems protegidos que esperan Aloware (Puerta 2 — la cuenta real es de Jorge) y el registro 10DLC (aparcado por decisión de Jorge).
 
 ### 🧾 DEUDA TÉCNICA DECLARADA (no perder de vista)
 - **E9 está firmada pero NO implementada:** no existe `ref.capability_probe`. Llega con el módulo Aloware.
