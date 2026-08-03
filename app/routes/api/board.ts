@@ -16,6 +16,13 @@ export interface BoardCard {
   readonly contactName: string
   readonly premiumCents: string | null
   readonly daysUntouched: number
+  /**
+   * Dial attempts on this deal — element ⑤ of the card anatomy, and half of
+   * the fact `04b` §2.4 says is *"the only thing between this floor and a
+   * harassment claim"*. Rendered as `3 attempts`; zero replaces the whole line
+   * with `Not called yet`, which is a different sentence and not a `0`.
+   */
+  readonly attempts: number
   readonly nextActivity: string | null
 }
 
@@ -54,6 +61,7 @@ export async function readPipeline(request: Request): Promise<PipelinePayload> {
       contact_name: string
       premium_cents: string | null
       days_untouched: number
+      attempts: number
       next_activity: string | null
     }>(sql`
       SELECT o.id,
@@ -62,6 +70,7 @@ export async function readPipeline(request: Request): Promise<PipelinePayload> {
              o.premium_annual_cents::text AS premium_cents,
              greatest(0, extract(day from clock_timestamp()
                - coalesce(o.last_activity_at, o.stage_entered_at))::integer) AS days_untouched,
+             o.attempt_count AS attempts,
              (SELECT a.title FROM app.activity a
                WHERE a.tenant_id = o.tenant_id AND a.opportunity_id = o.id
                  AND a.completed_at IS NULL AND a.canceled_at IS NULL
@@ -82,6 +91,7 @@ export async function readPipeline(request: Request): Promise<PipelinePayload> {
         contactName: row.contact_name,
         premiumCents: row.premium_cents,
         daysUntouched: row.days_untouched,
+        attempts: row.attempts,
         nextActivity: row.next_activity,
       })
       byStage.set(row.stage_id, list)

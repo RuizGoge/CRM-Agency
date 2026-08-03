@@ -44,6 +44,13 @@ body {
   .standing-separator-last {
     display: none;
   }
+
+  /* The other half of ruling N17. Mobile carries 44px targets and mobile type,
+     so the same four rows need 156px — which is why the card height is a
+     foundation decision and not a component's opinion. */
+  :root {
+    --card-h: var(--size-card-h-mobile);
+  }
 }
 
 input,

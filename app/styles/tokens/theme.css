@@ -182,6 +182,14 @@
   --size-card-h: 120px;
   --size-card-h-mobile: 156px;
 
+  /* What a card actually renders at. Desktop by default; reset.css swaps it at
+   * the density breakpoint, which is the only place in this tree that number
+   * is written. Ruling N17 pins both values, and `ui.card_h_desktop` /
+   * `ui.card_h_mobile` are registered in Postgres with the `pinned` arm — so
+   * changing either is a migration that has to restate the number, not an
+   * edit to this line. */
+  --card-h: var(--size-card-h);
+
   /* --- Radii ------------------------------------------------------------- */
   --radius-none: 0;
   --radius-xs: 3px;

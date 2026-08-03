@@ -169,6 +169,13 @@
       "when": 1785745000002,
       "tag": "0023_ui_loader_ratchet",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1785745000003,
+      "tag": "0024_card_height_ratchet",
+      "breakpoints": true
     }
   ]
 }

@@ -284,6 +284,19 @@ const Card = memo(function Card({
         border: '1px solid var(--color-border-subtle)',
         borderRadius: 'var(--radius-md)',
         display: 'grid',
+        // FIXED, and it is a foundation decision rather than a component one
+        // (`04b` R1 scope note): every card is the same height so a column has
+        // a uniform pitch, which is what makes a 500-card board virtualisable
+        // and P6's 60 fps reachable. Ruling N17 fixes the numbers at 120px
+        // desktop / 156px mobile — §2's own mock still draws 112, which is the
+        // THIRD height this document has carried and the one N17 struck.
+        //
+        // `--card-h` switches at the density breakpoint in reset.css, next to
+        // the only other hard-coded breakpoint number in the tree.
+        height: 'var(--card-h)',
+        gridAutoRows: 'min-content',
+        alignContent: 'start',
+        overflow: 'hidden',
         gap: 'var(--space-2)',
         cursor: draggable ? 'grab' : undefined,
         // Mid-flight, not done. The card is already in its new column here —
@@ -313,7 +326,14 @@ const Card = memo(function Card({
           <span>No value yet</span>
         )}
         <span aria-hidden="true">·</span>
-        <span>{card.daysUntouched}d untouched</span>
+        {/* Element ⑤, both halves. §2.4 gives zero attempts its own sentence
+            rather than the number 0 — `Not called yet` is a state a seller
+            acts on, and `0 attempts` is a field they read past. */}
+        <span>
+          {card.attempts === 0
+            ? 'Not called yet'
+            : `${card.daysUntouched}d untouched · ${card.attempts} attempt${card.attempts === 1 ? '' : 's'}`}
+        </span>
       </div>
 
       {card.nextActivity ? (

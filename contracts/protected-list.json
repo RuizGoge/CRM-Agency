@@ -83,9 +83,11 @@
       "status": "partial",
       "test": null,
       "missing": [
-        "The card renders three of the six: annualised premium, days untouched, and the next activity.",
-        "Absent: lead source (lead_source_id is deliberately deferred to the intake module), attempt count, and the health signal with its suppression rule.",
-        "Also unasserted: the fixed card height (120px desktop / 156px mobile) that 05c ties to the ui.card_h_* pinned ratchet."
+        "The card renders four of the seven facts in 04b 2.4: annualised premium, days untouched, the attempt count, and the next activity.",
+        "DONE: the fixed card height. Ruling N17's 120px desktop / 156px mobile is registered in ref.ci_ratchet with the pinned arm (migration 0024) and closed in two halves — card-height.test.ts ties the CSS token to the pinned number and proves AP004 refuses a different one, card-anatomy.spec.ts ties the token to what a browser renders and asserts a uniform column pitch. Neither half alone is the gate. 04b carried three heights (108/92, 112, 120/156) before N17 struck two.",
+        "DONE: the attempt count, with zero rendering as `Not called yet` rather than `0 attempts` — 2.4 gives zero its own sentence because it is a state a seller acts on and `0` is a field they read past.",
+        "Absent: lead source. lead_source_id is deliberately deferred to the intake module, so the chip has no column to read and 2.4 says it is not rendered rather than showing `Unknown`.",
+        "Absent: the health rail and the signal slot with its suppression rule. 2.8 wants a server-computed health enum (blocked > overdue > fresh > going_cold > ok) rendered as a partial-fill gradient, and 2.4 wants EXACTLY ONE signal in the slot by a six-step precedence. Four of the five health states are computable from data that exists today; `blocked` needs the compliance gate, which needs Aloware."
       ]
     },
     {
@@ -112,7 +114,7 @@
       "status": "partial",
       "test": null,
       "missing": [
-        "DONE: the rank-and-gap line above the fold on the seller home ('You're #2 · $9,029.88 · $2,550.12 behind Priya N.'), asserted by rank-and-gap.spec.ts on BOTH profiles — the sentence's shape, its box inside the viewport, and its position ahead of the day's first section. The gap is subtracted on the server; tests/integration/leaderboard-standing.test.ts holds that half, including the tie and the $0 seller.",
+        "DONE: the rank-and-gap line above the fold on the seller home ('You're #2 · $9,029.88 · $2,550.12 to pass Priya N.'), asserted by rank-and-gap.spec.ts on BOTH profiles — the sentence's shape, its box inside the viewport, and its position ahead of the day's first section. The gap is subtracted on the server; tests/integration/leaderboard-standing.test.ts holds that half, including the tie and the $0 seller.",
         "DONE: the persistent 'Demo' chip in the shell, which survives navigation across all three screens, and the seeded-numbers footnote on the board. Both asserted by honest-board.spec.ts, and the seed now sets tenant.is_demo.",
         "DONE: the four-item first-run checklist, asserted by first-run-checklist.spec.ts — the ratified labels in order, the absence of any 'mark done' control, the auto-check reading real data, 44px rows, and the collapse at four of four. CAVEAT, stated rather than hidden: item 1 cannot complete because aloware_number_mapping does not exist, so the collapse is proven against a stubbed setup read, and item 4's granted path is proven against a stubbed Notification object because headless Chromium reports 'denied' whatever the test grants.",
         "DONE earlier: My Day renders its four sections with counts in the header, and the seed is separately tenanted and refuses to run twice.",
