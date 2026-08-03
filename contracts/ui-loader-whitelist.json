@@ -1,0 +1,61 @@
+{
+  "$about": [
+    "The whitelist §1.2 of 05-architecture.md asks for, made real.",
+    "",
+    "§1.1 gives four independent, register-anchored reasons why application data",
+    "must NOT travel through UI-route loaders: the 5000 ms client-held move that",
+    "must produce zero requests when undone; per-block error boundaries that a",
+    "page-level loader cannot express; one shared poll scheduler that",
+    "useRevalidator cannot address selectively; and the sendBeacon flush, which",
+    "posts a Blob to a URL and can only talk to a resource route.",
+    "",
+    "§1.2 then whitelists exactly ONE: the pipeline route's first paint carries",
+    "real board data, because that is what makes LCP reachable with 500 leads.",
+    "'The whitelist is a single-entry versioned file; adding a second entry is a",
+    "PR that touches that file and nothing else.'",
+    "",
+    "THE FILE DID NOT EXIST, so the count drifted with nothing to notice. Three",
+    "data loaders are live where the ruling sanctions one. This file makes that",
+    "visible and scripts/ui-loader-whitelist.test.ts makes a FOURTH impossible to",
+    "add quietly.",
+    "",
+    "`navigation` entries are not part of the count and are not an exemption: a",
+    "loader that resolves identity and redirects carries no application data, so",
+    "none of §1.1's four reasons apply to it."
+  ],
+  "sanctioned": 1,
+  "routes": [
+    {
+      "file": "app/routes/ui/board.tsx",
+      "kind": "data",
+      "status": "whitelisted",
+      "reason": "§1.2's single entry. The pipeline's first paint must carry real board data — it is the screen that carries the LCP budget at 500 leads, and a rendered-but-empty shell pays the SSR cost for nothing. Its loader body is one call to the same readPipeline the /api/board resource route calls, so it is not a second implementation."
+    },
+    {
+      "file": "app/routes/ui/leaderboard.tsx",
+      "kind": "data",
+      "status": "over-budget",
+      "reason": "Calls readBoard directly. It also polls /api/leaderboard client-side, so the loader buys the first paint and nothing else — but that first paint is the demo's opening moment, where DEMO-10 wants rank and gap above the fold inside ten seconds. Removing it makes the first screen a skeleton.",
+      "decision": "OPEN — Jorge's. Either drop the loader and accept a skeleton on the opening screen, or promote this to a second sanctioned entry with the reason written here."
+    },
+    {
+      "file": "app/routes/ui/my-day.tsx",
+      "kind": "data",
+      "status": "over-budget",
+      "reason": "Calls readMyDay directly. This one has the weakest case: §1.1 reason 2 names My Day explicitly — every block is an independent fetch with its own error and its own retry, so a failed rank block must not take My Day down. A page-level loader is precisely the pattern the register forbids there.",
+      "decision": "OPEN — the strongest candidate for removal of the three, on the register's own wording."
+    },
+    {
+      "file": "app/routes/ui/shell.tsx",
+      "kind": "navigation",
+      "status": "not-counted",
+      "reason": "Resolves identity and redirects when there is no session. Carries no application data, and the redirect belongs here precisely so it is written once instead of repeated per screen."
+    },
+    {
+      "file": "app/routes/ui/home.tsx",
+      "kind": "navigation",
+      "status": "not-counted",
+      "reason": "Redirects to My Day when there is a session and to sign-in when there is not. No data."
+    }
+  ]
+}

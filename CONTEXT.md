@@ -49,6 +49,19 @@ Evidencia completa: [`docs/sprint-0/g0-us-region.md`](docs/sprint-0/g0-us-region
 - **Dos aserciones más que agregó la suite:** un supervisor obtiene lectura global **pero la escritura le sigue siendo rechazada** (`USING` pasa, `WITH CHECK` falla — esa asimetría *es* el modelo de autorización, y es lo que hace que el caso del supervisor sea 403 y no un not-found), y el enum `user_role` tiene **exactamente tres etiquetas**, la forma mecánica de "no hay constructor de roles ni matriz de permisos".
 - **También pendiente:** el trigger que rechaza `is_demo=true` en producción (necesita `system_constant`, que aún no existe) y la validación de `display_tz` en `app_user`.
 
+### 🚦 La tensión del loader SSR: eran TRES, no dos (2026-08-02)
+`contracts/ui-loader-whitelist.json`, `scripts/ui-loader-whitelist.test.ts`, migración **0023**. **6 tests nuevos.** Total: **163**.
+
+La tensión estaba marcada como *"sin resolver"* desde el ítem del kanban. Al leer el texto normativo aparecieron dos cosas que la nota no decía.
+
+- **§1.2 tiene nombre y ya elegía ganador: *"The one whitelisted UI loader"*, y es el PIPELINE.** No era una pregunta abierta entre leaderboard y kanban: el kanban es el sancionado porque su primer pintado carga el presupuesto de LCP con 500 leads. Y §1.2 pide explícitamente **un archivo de lista blanca versionado**, que **no existía** — por eso el número derivó sin que nada pudiera notarlo.
+- 🔴 **Y son TRES, no dos: `my-day.tsx` también tiene loader de datos y nunca se había contado.** `CONTEXT.md` registraba la deriva como dos. **Un conteo que nadie puede ver es un conteo que se equivoca.**
+- **§1.1 da cuatro razones ancladas en el registro contra los loaders de datos**, y la segunda **nombra a My Day explícitamente**: cada bloque es un fetch independiente con su propio error y su propio reintento, así que un bloque de ranking caído no puede tirar abajo My Day. **Un loader de página es justo el patrón que el registro prohíbe ahí** — lo que hace a My Day el candidato más fuerte a removerse de los tres.
+- **`shell.tsx` y `home.tsx` NO cuentan y no son una exención:** resuelven identidad y redirigen, sin dato de aplicación. Un test impide la escotilla obvia —reetiquetar un loader de datos como "navigation" para bajar el conteo— exigiendo que un loader de navegación **redirija** y **no llame a ningún `readX()`**.
+- ✅ **Registrado como ratchet `shrink_only` (migración 0023), y probado por los dos lados contra la base:** agregar un cuarto loader → **`AP005: ui.loader_whitelist refused, {app/routes/ui/new-screen.tsx} is not in the previous set`**; encoger al único sancionado → aceptado. **Es el primer uso real de la máquina construida en 0022**, y §11.3 clasifica exactamente así las listas de este estilo: agregar es aflojar.
+- ⚠️ **DECISIÓN ABIERTA, de Jorge, y no la tomé yo:** qué hacer con los dos loaders fuera de presupuesto. Sacar el del leaderboard cuesta el primer pintado de **la pantalla que abre el demo** (DEMO-10 quiere rango y brecha arriba del pliegue en los primeros diez segundos); sacar el de My Day es el que el registro pide por su propio texto. **El motor sólo garantiza que el número no puede volverse cuatro en silencio.**
+- ⚠️ **Y una lección que pagué: sondear un ratchet append-only tiene consecuencias permanentes.** Mi prueba del brazo insertó filas reales y dejó el baseline de `crm_dev` encogido. **No se puede borrar — por diseño.** Se arregla con `db:reset`, y la migración sólo siembra `WHERE NOT EXISTS`. **Probar una tabla append-only es escribir en ella.**
+
 ### 📋 La Lista Protegida deja de ser prosa: `DEMO-01..10` (2026-08-02)
 `contracts/protected-list.json`, `scripts/protected-list.test.ts`, `tests/e2e/demo-protected.spec.ts`. **8 tests de registro + 3 e2e.** Totales: **157** y **31 e2e**.
 
@@ -801,14 +814,14 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 4. ~~**Puerta 12 — el drag a 60 fps con 500 tarjetas.**~~ ✅ **CERRADA el 2026-08-02** (ver arriba). **Y el fixture `perf-500` ya existe**, así que 3b (TTI) hereda lo caro: le falta sólo el tier nocturno de Lighthouse.
 5. ~~**Alcanzabilidad por teclado de la barra de undo.**~~ ✅ **HECHO el 2026-08-02.** Era el focusable **#14 de 15** — detrás de cada tarjeta. Ahora #5, con tope de 6 aserido.
 6. **Re-evaluación en vivo del drag al cruzar 1024 px.** El listener de `matchMedia` es estándar pero **no está verificado**: la emulación de viewport por CDP no dispara `resize` ni `change`, así que en el navegador de la herramienta sólo se puede observar la evaluación inicial (que sí está verificada de los dos lados).
-7. **Tensión de precedencia sin resolver:** `CLAUDE.md` dice que **una sola** ruta `routes/ui/**` puede servir datos de tablero como SSR; hoy leaderboard **y** kanban tienen loader. **Pasar `precedence-checker` antes de decidir.**
+7. ~~**Tensión de precedencia sin resolver.**~~ 🟡 **ENUMERADA Y ACOTADA el 2026-08-02.** §1.2 ya elegía ganador (el pipeline) y son **tres** loaders, no dos. Lista blanca + ratchet `shrink_only`: un cuarto es imposible. **Queda la decisión de producto:** cuál de los dos fuera de presupuesto se saca.
 8. **Puerta 5 — equivalencia plegado/separado.** Ya no arranca de cero: el mismo despachador produjo **las mismas dos filas terminales** en las dos topologías (ver arriba). Lo que falta es lo que da nombre a la puerta — que sean equivalentes **bajo carga y en los bordes**, no en un caso feliz.
 
 ### 🧾 DEUDA TÉCNICA DECLARADA (no perder de vista)
 - **E9 está firmada pero NO implementada:** no existe `ref.capability_probe`. Llega con el módulo Aloware.
 - ⚠️ **Snapshots de Drizzle desenganchados desde 0018.** 0019–0022 son SQL a mano y dos de ellas alteraron tablas sin snapshot. **`npm run db:generate` no es seguro de correr** hasta reconciliarlo: compararía contra un estado cuatro migraciones viejo.
 - **R13 abierto:** `raw_payload_vault` purga por drop de partición mientras `dead_letter` tiene FK hacia ella.
-- **Tensión de precedencia sin resolver:** `CLAUDE.md` dice que **una sola** ruta `routes/ui/**` puede servir datos de tablero como SSR; hoy leaderboard **y** kanban tienen loader. **Pasar `precedence-checker` antes de decidir.**
+- **Loaders SSR fuera de presupuesto:** §1.2 sanciona **uno** (el pipeline) y hay **tres**. Enumerados en `contracts/ui-loader-whitelist.json` y acotados por el ratchet `ui.loader_whitelist`. **Falta la decisión de cuál sacar** — My Day es el que el registro pide por su propio texto; el leaderboard cuesta el primer pintado del demo.
 - **`lead_source_id` omitido** en `contact` a propósito; llega con el módulo de intake.
 - **Trigger diferido "un lead nunca existe sin tarjeta"** — pendiente, necesita cruzar `contact` y `opportunity`.
 
