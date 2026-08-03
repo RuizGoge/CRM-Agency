@@ -112,9 +112,10 @@
       "status": "partial",
       "test": null,
       "missing": [
+        "DONE: the rank-and-gap line above the fold on the seller home ('You're #2 · $9,029.88 · $2,550.12 behind Priya N.'), asserted by rank-and-gap.spec.ts on BOTH profiles — the sentence's shape, its box inside the viewport, and its position ahead of the day's first section. The gap is subtracted on the server; tests/integration/leaderboard-standing.test.ts holds that half, including the tie and the $0 seller.",
         "DONE: the persistent 'Demo' chip in the shell, which survives navigation across all three screens, and the seeded-numbers footnote on the board. Both asserted by honest-board.spec.ts, and the seed now sets tenant.is_demo.",
         "DONE earlier: My Day renders its four sections with counts in the header, and the seed is separately tenanted and refuses to run twice.",
-        "Absent: the four-item first-run checklist, and the rank-and-gap line above the fold ('You're #2 · $41,300 · $6,900 behind Dana R.'), which is the piece that does the entire pitch before a word is spoken.",
+        "Absent: the four-item first-run checklist. It is the last piece of the ten seconds that has no owner yet.",
         "Absent: the seed refuses to DUPLICATE but not to run in a live environment — that needs system_constant, which does not exist."
       ]
     }

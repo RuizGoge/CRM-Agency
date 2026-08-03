@@ -31,6 +31,19 @@ body {
   body {
     font-size: var(--type-md);
   }
+
+  /* The standing sentence on the seller home wraps on a phone, and the last
+     `·` was left hanging at the end of the first line with nothing after it.
+     Found by looking at the rendered screen, which is the only place it
+     exists — the desktop profile is one line and never shows it.
+
+     Below this breakpoint the line break IS the separator, so the last one is
+     removed rather than orphaned. Deliberately inside the existing block: this
+     project already carries one hard-coded breakpoint number and a second copy
+     of it is how two "mobile" boundaries end up 1px apart. */
+  .standing-separator-last {
+    display: none;
+  }
 }
 
 input,

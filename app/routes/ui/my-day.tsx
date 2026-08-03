@@ -1,5 +1,6 @@
 import { isRouteErrorResponse, useRouteError } from 'react-router'
 
+import { StandingBlock } from '~/components/leaderboard/standing-block'
 import { readMyDay, type MyDayItem, type MyDayPayload } from '~/routes/api/my-day'
 
 import type { Route } from './+types/my-day'
@@ -33,6 +34,13 @@ export default function MyDay({ loaderData }: Route.ComponentProps): React.JSX.E
       >
         My Day
       </h1>
+
+      {/* ABOVE THE FOLD, and above the day's first row, because §7 says this is
+          the line that "does the entire pitch before a word is spoken". It sits
+          outside the `clear` branch on purpose: a seller with nothing due still
+          has a rank, and the one morning the list is empty is the worst morning
+          to remove the only reason to open the screen. */}
+      <StandingBlock />
 
       {clear ? (
         <p

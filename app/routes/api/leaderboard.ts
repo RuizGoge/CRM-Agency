@@ -1,7 +1,8 @@
 import { sql } from 'drizzle-orm'
 
-import { withTenant } from '~/db'
+import { withTenant, type SessionIdentity } from '~/db'
 import { requireIdentity } from '~/lib/auth/identity'
+import { fromWireString, subtract, toWireString } from '~/lib/money/money'
 
 /**
  * The public board.
@@ -30,6 +31,26 @@ export interface BoardRow {
   readonly isSelf: boolean
 }
 
+/**
+ * The seller directly above the viewer, and the distance to them.
+ *
+ * Feature 4 of the leaderboard module — "rank alone is a verdict; a dollar gap
+ * is a goal" — and the half of protected item 10 that does the entire pitch
+ * before a word is spoken: `You're #2 · $41,300 · $6,900 behind Dana R.`
+ *
+ * `gapCents` is SUBTRACTED HERE, on the server, and crosses the wire already
+ * computed. The client is handed a number to format and never two numbers to
+ * take the difference of — that is the rule in CLAUDE.md, and this line is the
+ * most tempting place in the product to break it, because both operands are
+ * already sitting in the same response.
+ */
+export interface NextUp {
+  readonly rank: number
+  readonly displayName: string
+  /** Whole cents, as a string. Never a number, and never negative. */
+  readonly gapCents: string
+}
+
 export interface BoardPayload {
   readonly period: Period
   /**
@@ -48,6 +69,8 @@ export interface BoardPayload {
   readonly rows: readonly BoardRow[]
   /** The viewer's own row, always present even when outside the visible slice. */
   readonly self: BoardRow | null
+  /** `null` when the viewer leads the board, or is not ranked on it at all. */
+  readonly nextUp: NextUp | null
 }
 
 function parsePeriod(value: string | null): Period {
@@ -56,10 +79,65 @@ function parsePeriod(value: string | null): Period {
   return found ?? 'all_time'
 }
 
-export async function readBoard(request: Request): Promise<BoardPayload> {
-  const identity = await requireIdentity(request)
-  const period = parsePeriod(new URL(request.url).searchParams.get('period'))
+/**
+ * The standing, derived from the board's OWN rows rather than from a second
+ * query.
+ *
+ * That is errata E2 satisfied structurally instead of by discipline. E2's
+ * finding is that two functions computing rank independently diverge on ties
+ * and on all-time roster population; its ruling is one shared ordering
+ * expression and one shared population predicate for both reads. Here there is
+ * only one of each — `app.leaderboard_board`, already fetched — so there is no
+ * second implementation that could disagree, and no fixture could ever catch
+ * one because none exists.
+ *
+ * "Directly above" is the PREVIOUS ROW in the board's own order, not
+ * `rank - 1`. Said plainly: the two are indistinguishable today and no test
+ * here can tell them apart, because the window orders by `(total DESC, id)`
+ * and a unique id makes every rank distinct and contiguous. It is defensive,
+ * not load-bearing — verified by mutation, which stayed green. It differs only
+ * if the ordering ever admits a true tie, and then the previous row is still
+ * the seller a viewer sees above them while `rank - 1` resolves to nobody and
+ * the gap silently disappears from the screen.
+ */
+export function nextUpFrom(rows: readonly BoardRow[]): NextUp | null {
+  const selfIndex = rows.findIndex((r) => r.isSelf)
+  if (selfIndex < 1) return null // Not on the board, or already leading it.
 
+  const self = rows[selfIndex]
+  const above = rows[selfIndex - 1]
+  if (!self || !above) return null
+
+  return {
+    rank: above.rank,
+    displayName: above.displayName,
+    gapCents: toWireString(
+      subtract(fromWireString(above.totalCents), fromWireString(self.totalCents)),
+    ),
+  }
+}
+
+export async function readBoard(request: Request): Promise<BoardPayload> {
+  return readBoardFor(
+    await requireIdentity(request),
+    parsePeriod(new URL(request.url).searchParams.get('period')),
+  )
+}
+
+/**
+ * The read itself, with the request seam removed.
+ *
+ * Split out so the standing assertions can exercise THIS code — the same SQL,
+ * the same mapping and the same derivation the endpoint runs — instead of a
+ * test-local re-implementation that would agree with itself no matter what the
+ * product did. Errata E2's whole finding is about two implementations of one
+ * ranking drifting apart; a test that builds a third would be the same defect
+ * wearing a lab coat.
+ */
+export async function readBoardFor(
+  identity: SessionIdentity,
+  period: Period,
+): Promise<BoardPayload> {
   return withTenant(identity, async (tx) => {
     const rows = await tx.execute<{
       rank: string
@@ -97,6 +175,7 @@ export async function readBoard(request: Request): Promise<BoardPayload> {
       period,
       rows: mapped,
       self: mapped.find((r) => r.isSelf) ?? null,
+      nextUp: nextUpFrom(mapped),
       trackedSince: meta[0]?.tracked_since ?? null,
       isDemo: meta[0]?.is_demo ?? false,
     }

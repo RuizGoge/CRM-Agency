@@ -58,6 +58,28 @@ const SELLERS = [
  * The demo tenant is the one that runs in front of a customer, and a seat
  * nobody can sign into is the worst possible moment to discover that.
  */
+/**
+ * `Dana Reyes` becomes `Dana R.` — the name the floor sees.
+ *
+ * Found by looking at the rank-and-gap line, which rendered `$2,550.12 behind
+ * Priya` because the seed wrote a bare first name into `display_name`. Every
+ * example in the corpus is `First L.` — §7's demo seller is *Marcus T.*, its
+ * gap line reads *behind Dana R.*, the celebration headline is *Carlos J. just
+ * wrote $1,850*, and leaderboard feature 4 writes *passing Maria R. (#7)*.
+ *
+ * It is not only copy. `display_name` is what the PUBLIC board renders, and on
+ * a floor of fifty producers two people share a first name — a board where two
+ * rows both read `Maria` is a board nobody can read their own position off.
+ * `full_name` stays whole; this is the public form of it.
+ */
+function publicName(name: string): string {
+  const parts = name.trim().split(/\s+/)
+  const first = parts[0] ?? name
+  const initial = parts.length > 1 ? parts[parts.length - 1]?.[0] : undefined
+
+  return initial ? `${first} ${initial}.` : first
+}
+
 function emailLocalPart(name: string): string {
   return (name.split(' ')[0] ?? 'user')
     .normalize('NFD')
@@ -159,7 +181,7 @@ async function main(): Promise<void> {
       INSERT INTO app.app_user
         (tenant_id, id, auth_user_id, email, full_name, display_name, role)
       VALUES (${TENANT}, ${seller.id}, ${authUserId}, ${email}, ${seller.name},
-              ${seller.name.split(' ')[0] ?? seller.name}, 'seller')
+              ${publicName(seller.name)}, 'seller')
       ON CONFLICT (tenant_id, id) DO NOTHING`
 
     await client`
