@@ -49,6 +49,25 @@ Evidencia completa: [`docs/sprint-0/g0-us-region.md`](docs/sprint-0/g0-us-region
 - **Dos aserciones más que agregó la suite:** un supervisor obtiene lectura global **pero la escritura le sigue siendo rechazada** (`USING` pasa, `WITH CHECK` falla — esa asimetría *es* el modelo de autorización, y es lo que hace que el caso del supervisor sea 403 y no un not-found), y el enum `user_role` tiene **exactamente tres etiquetas**, la forma mecánica de "no hay constructor de roles ni matriz de permisos".
 - **También pendiente:** el trigger que rechaza `is_demo=true` en producción (necesita `system_constant`, que aún no existe) y la validación de `display_tz` en `app_user`.
 
+### 📋 La Lista Protegida deja de ser prosa: `DEMO-01..10` (2026-08-02)
+`contracts/protected-list.json`, `scripts/protected-list.test.ts`, `tests/e2e/demo-protected.spec.ts`. **8 tests de registro + 3 e2e.** Totales: **157** y **31 e2e**.
+
+`04-ux-flows.md` §8 lo dice sin ambigüedad: ***"La Lista Protegida es ejecutable, o no está protegida."*** Y su regla 1 nombra el modo de falla exacto: *la función se entrega, el test se desactiva "temporalmente", y el detalle ya no está para cuando alguien corre un demo*. Hasta hoy no había nada capaz de distinguir *"cubierto por un test"* de *"nadie miró"*.
+
+- **Los diez ítems, con estado y verificado por máquina.** `covered` nombra un test **que tiene que existir** —un id mal escrito rompe el build—; `blocked` nombra qué lo bloquea (mínimo 30 caracteres: "TODO" no califica); `partial` lista **en palabras** qué falta. **`partial` no es un estado que apruebe**: existe para que un ítem a medias se lea como a medias en vez de contar como hecho.
+- **Estado real, sin maquillaje: 3 de 10 cubiertos.** Un test assertea ese número, así que moverlo es una decisión y no una deriva. `DEMO-02 · 05 · 06 · 08` bloqueados (Aloware, búsqueda global); `DEMO-07 · 09 · 10` parciales con su lista de faltantes.
+- **`DEMO-03`** (la etapa earning rechaza el drop y abre la puerta) y **`DEMO-04`** (id ajeno → not-found, **nunca 403**) verdes.
+- 🎯 **`DEMO-01` traía una trampa de precedencia:** §7 pide que la segunda pantalla re-rankee **"en 5 s"**, y ese número está **tachado**. La proyección pública retiene toda entrada más joven que `undo_window` (5000) + guard (500), así que **un re-rank en 5 s es aritméticamente imposible en un producto CORRECTO** — el tablero se niega a publicar una venta que todavía se puede deshacer. §8.3 lo retira y **P21** lo reemplaza por 6,5 s push / 10,5 s poll. Asertar el número viejo habría fallado para siempre y el "arreglo" habría sido romper el undo. **Medido: 6.063 ms**, después del cierre de la ventana y dentro de P21.
+
+🔴 **Y UNA FALSA ALARMA DE DINERO QUE CASI REPORTO COMO DEFECTO.** La primera versión de `DEMO-01` midió que el tablero público publicaba la venta **2.517 ms** después de ocurrir — o sea dentro de la ventana de undo, que es exactamente el defecto que la migración 0019 cerró. **No era real.** Era contaminación entre tests: `DEMO-03` cerraba una venta justo antes y **esa** venta afloraba 5,5 s después, dentro de la ventana de medición de `DEMO-01`. Dos correcciones, en este orden:
+1. **Aserción demasiado ancha:** comparaba el texto **entero** de `main`, así que cualquier cambio contaba como re-rank. Ahora se extrae el monto de Renata.
+2. **`DEMO-03` dejó de cerrar la venta.** Su ítem es *"el tablero RECHAZA el drop y la puerta se abre"* — que la puerta aparezca, sin unidad preseleccionada y con el valor requerido, **es** la aserción. Cerrar el trato es trabajo de `DEMO-01`.
+3. **Y `DEMO-01` ahora espera a que el tablero se ESTABILICE** antes de arrancar el cronómetro, porque otros specs (celebración) también acreditan dinero. Suelto pasaba, en la suite no: **la firma de estado compartido, no de un bug.**
+
+**Es la misma lección que la suite comiéndose sus propias tarjetas, un nivel más arriba: un test que acredita dinero se filtra a todo test que mira dinero.**
+
+- ⚠️ **Hallazgo colateral: el tablero "público" NO es público.** `/earnings` vive dentro del layout `shell`, que redirige sin sesión — una segunda pantalla anónima mira el login re-renderizarse para siempre, que es como falló mi primera versión. La segunda pantalla del test entra como **otro vendedor** (Priya), que es el momento del demo tal como está escrito. **Si debe ser alcanzable sin sesión es una pregunta de producto, sin resolver.**
+
 ### ⌨️ La barra de undo era el ÚLTIMO elemento tabulable de la pantalla (2026-08-02)
 `tests/e2e/undo-keyboard.spec.ts`, `app/routes/ui/board.tsx`. **28 e2e** (+1); 149 de unit/integración sin cambios.
 
@@ -745,7 +764,7 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 | 7 | Leaderboard público | ✅ tablero, undo honrado **y celebración** |
 | 8 | My Day | ✅ |
 | 9 | Aloware | 🔴 **bloqueado por la Puerta 11** — necesita la cuenta real |
-| 10 | Datos demo | 🟡 siembra por el camino real y ya **se niega a duplicarse**; **faltan las aserciones DEMO-01..10** y los `lost_reason` |
+| 10 | Datos demo | 🟡 siembra por el camino real, se niega a duplicarse, `lost_reason` sembrados. **`DEMO-01..10` ahora es un registro verificado por máquina: 3 cubiertos, 4 bloqueados por Aloware/búsqueda, 3 parciales** — el estado es visible en vez de supuesto |
 
 **Extra, no planificado:** shell de navegación, CI en GitHub Actions, aserción de arranque G4(a), **undo de 5 s**, **el test de deriva de la Puerta 10**, **el gate de axe-core con su job de CI**, **el drag de escritorio**, **el despachador de jobs** y **la celebración**.
 

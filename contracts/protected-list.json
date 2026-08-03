@@ -1,0 +1,120 @@
+{
+  "$about": [
+    "The Protected List of `04-ux-flows.md` §7, made machine-readable.",
+    "",
+    "§8: 'The Protected List is executable, or it is not protected.' Rule 1 there is",
+    "the one this file exists to enforce — NO MVP ITEM MAY BE MARKED DONE WHILE ITS",
+    "PROTECTED ASSERTION IS SKIPPED. Until this file existed there was nothing that",
+    "could tell 'covered by a test' apart from 'nobody has looked', which is exactly",
+    "the classic failure §8 describes: the feature ships, the test is disabled",
+    "'temporarily', and the detail is gone by the time anyone runs a demo.",
+    "",
+    "So every item carries a STATUS and it is checked by scripts/protected-list.test.ts:",
+    "  covered  — names a test id that must exist in the suite. A typo fails the build.",
+    "  blocked  — names what blocks it. An empty blocker fails the build.",
+    "  partial  — the feature exists in part; `missing` lists what does not, in words.",
+    "",
+    "`partial` is deliberately NOT a passing state. It is here so a half-built item",
+    "reads as half-built instead of quietly counting as done, and so the gap is a",
+    "sentence somebody wrote rather than a silence somebody has to notice."
+  ],
+  "items": [
+    {
+      "id": "DEMO-01",
+      "title": "The public Earnings board re-ranks on a SECOND SCREEN within one poll of the win",
+      "status": "covered",
+      "test": "DEMO-01",
+      "note": [
+        "PRECEDENCE: §7 says 'within 5s'. That number is retired. §8.3 of",
+        "05-architecture.md shows the public projection withholds every entry younger",
+        "than undo_window (5000) + guard (500) = 5.5s, which makes a 5s re-rank",
+        "arithmetically impossible, and P21 replaces it with 6.5s push / 10.5s",
+        "poll-fallback. Asserting the struck number would fail forever on a correct",
+        "product. The test asserts P21."
+      ]
+    },
+    {
+      "id": "DEMO-02",
+      "title": "The call-state banner covering the 5-15 silent seconds of a two-legged dial",
+      "status": "blocked",
+      "blocker": "The Aloware module (Sprint 1 item 9) and its recorded cassettes. Sprint-0 Gate 2 needs the real account, which is Jorge's to obtain.",
+      "test": null
+    },
+    {
+      "id": "DEMO-03",
+      "title": "The board REFUSES the drop into an earning column and opens the win gate",
+      "status": "covered",
+      "test": "DEMO-03",
+      "note": [
+        "§8 requires this on EVERY surface including the raw API, so the assertion is",
+        "not only the drag. The database CHECK is the subject: a test that passed by",
+        "mocking a service layer would prove nothing."
+      ]
+    },
+    {
+      "id": "DEMO-04",
+      "title": "Owner-scoped not-found — a pasted foreign record URL, never a 403",
+      "status": "covered",
+      "test": "DEMO-04",
+      "note": [
+        "The full requirement is broader than this test: §8 wants the route table",
+        "enumerated so a new route with no foreign-id assertion cannot merge. The",
+        "route registry that would drive it does not exist yet. What is asserted here",
+        "is the demo-visible behaviour on the routes that do exist."
+      ]
+    },
+    {
+      "id": "DEMO-05",
+      "title": "Zero-effort call logging and the wrap-up sheet that opens by itself",
+      "status": "blocked",
+      "blocker": "The Aloware module. The sheet opens on banner close, and there is no banner without call state.",
+      "test": null
+    },
+    {
+      "id": "DEMO-06",
+      "title": "One server-side compliance gate that hard-blocks outside the lead-local calling window",
+      "status": "blocked",
+      "blocker": "Needs the dial path (Aloware) and `lead_local_tz` on the contact, which arrives with the intake module. The scheduling layer already snapshots a contact timezone; nothing dials yet.",
+      "test": null
+    },
+    {
+      "id": "DEMO-07",
+      "title": "The kanban card as the whole status report — six facts without opening anything",
+      "status": "partial",
+      "test": null,
+      "missing": [
+        "The card renders three of the six: annualised premium, days untouched, and the next activity.",
+        "Absent: lead source (lead_source_id is deliberately deferred to the intake module), attempt count, and the health signal with its suppression rule.",
+        "Also unasserted: the fixed card height (120px desktop / 156px mobile) that 05c ties to the ui.card_h_* pinned ratchet."
+      ]
+    },
+    {
+      "id": "DEMO-08",
+      "title": "Global owner-scoped search, Cmd/Ctrl+K, under 200ms perceived",
+      "status": "blocked",
+      "blocker": "Not built. There is no search endpoint, no prefix cache and no E.164 normalisation yet.",
+      "test": null
+    },
+    {
+      "id": "DEMO-09",
+      "title": "The honest go-live board: fifty names, fifty $0, the footnote, and the activity strip",
+      "status": "partial",
+      "test": null,
+      "missing": [
+        "The board does include a seller with no ledger row at $0 — migration 0017 fixed the join that hid them, and the leaderboard suite covers it.",
+        "Absent: the permanent 'The board starts at go-live' footnote, the 'Earnings tracked since' label, the distinct per-period empty copy, and the today activity strip (dials / contacts / appointments), which is the only number that moves before the first sale."
+      ]
+    },
+    {
+      "id": "DEMO-10",
+      "title": "The first ten seconds: Demo chip, first-run checklist, My Day counts, rank and gap above the fold",
+      "status": "partial",
+      "test": null,
+      "missing": [
+        "My Day renders its four sections with counts in the header, and the seed is separately tenanted and refuses to run twice.",
+        "Absent: the persistent 'Demo' chip in the shell, the 'Demo tenant — these numbers are seeded' board footnote, the four-item first-run checklist, and the rank-and-gap line above the fold.",
+        "The seed refuses to DUPLICATE but does not yet refuse to run in a live environment: that needs `system_constant`, which does not exist."
+      ]
+    }
+  ]
+}
