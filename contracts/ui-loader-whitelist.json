@@ -35,8 +35,8 @@
       "file": "app/routes/ui/leaderboard.tsx",
       "kind": "data",
       "status": "over-budget",
-      "reason": "Calls readBoard directly. It also polls /api/leaderboard client-side, so the loader buys the first paint and nothing else — but that first paint is the demo's opening moment, where DEMO-10 wants rank and gap above the fold inside ten seconds. Removing it makes the first screen a skeleton.",
-      "decision": "OPEN — Jorge's. Either drop the loader and accept a skeleton on the opening screen, or promote this to a second sanctioned entry with the reason written here."
+      "reason": "Calls readBoard directly. It also polls /api/leaderboard client-side, so the loader buys the first paint and nothing else. CORRECTED 2026-08-03: this entry used to justify itself as the demo's opening moment, 'where DEMO-10 wants rank and gap above the fold inside ten seconds'. That is no longer true and was never quite right — §7 puts the first ten seconds on the SELLER HOME, and home.tsx redirects to My Day. The rank and gap now render there, in a block that fetches its own data. What this loader still buys is the first paint of /earnings, which is the demo's SECOND screen (DEMO-01).",
+      "decision": "OPEN — Jorge's, and the case for keeping it is weaker than this file used to claim. Either drop the loader and accept a skeleton on the second screen, or promote this to a second sanctioned entry with a reason that survives the correction above."
     },
     {
       "file": "app/routes/ui/my-day.tsx",

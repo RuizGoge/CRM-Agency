@@ -122,10 +122,10 @@ export function StandingBlock(): React.JSX.Element {
             gap: 'var(--space-3)',
           }}
         >
-          {/* Says what is affected and what is not. This block only reads the
-              ledger, and the ledger is append-only, so a seller's Earnings are
-              intact whatever this band manages to render. */}
-          <Muted>Standings couldn&rsquo;t load. Your Earnings are still recorded.</Muted>
+          {/* The ratified sentence for this block's error state (`04b` §4.1),
+              and it follows conflict ruling J's pattern exactly: the system
+              takes the blame, and `your` states the silo in two letters. */}
+          <Muted>We couldn&rsquo;t load your rank.</Muted>
           <button
             type="button"
             onClick={retry}
@@ -139,7 +139,7 @@ export function StandingBlock(): React.JSX.Element {
               cursor: 'pointer',
             }}
           >
-            Try again
+            Retry
           </button>
         </div>
       </Frame>
@@ -163,16 +163,16 @@ export function StandingBlock(): React.JSX.Element {
           color: 'inherit',
         }}
       >
-        <RankAndGap self={state.board.self} nextUp={state.board.nextUp} />
+        <RankAndGap board={state.board} />
         <span
           style={{
-            fontSize: 'var(--type-xs)',
+            fontSize: 'var(--type-sm)',
             fontWeight: 'var(--font-weight-semibold)',
             color: 'var(--color-text-link)',
             whiteSpace: 'nowrap',
           }}
         >
-          Earnings board
+          See the board
         </span>
       </Link>
     </Frame>

@@ -2,7 +2,7 @@ import { sql } from 'drizzle-orm'
 
 import { withTenant, type SessionIdentity } from '~/db'
 import { requireIdentity } from '~/lib/auth/identity'
-import { fromWireString, subtract, toWireString } from '~/lib/money/money'
+import { fromWireString, subtract, sum, toWireString } from '~/lib/money/money'
 
 /**
  * The public board.
@@ -71,6 +71,25 @@ export interface BoardPayload {
   readonly self: BoardRow | null
   /** `null` when the viewer leads the board, or is not ranked on it at all. */
   readonly nextUp: NextUp | null
+  /**
+   * The margin over rank 2 — `lb.self.leading`, `Leading by {amount}`.
+   *
+   * Non-null only when the viewer IS rank 1, so it is the leader's own gap
+   * and never a fact about someone else's position. Subtracted on the server
+   * for the same reason `NextUp.gapCents` is.
+   */
+  readonly leadCents: string | null
+  /**
+   * `lb.supervisor_total` — `Floor total — {amount}`.
+   *
+   * The board gives supervisors and admins no self-row, because they cannot
+   * write into a seller's book and a permanent `$0` reads as last place rather
+   * than as not competing. This is what their slot renders instead. It adds no
+   * information a viewer could not sum from `rows` themselves — which is
+   * precisely why summing it here rather than there is the rule: money
+   * arithmetic is server-side, including the kind that looks harmless.
+   */
+  readonly floorTotalCents: string
 }
 
 function parsePeriod(value: string | null): Period {
@@ -115,6 +134,24 @@ export function nextUpFrom(rows: readonly BoardRow[]): NextUp | null {
       subtract(fromWireString(above.totalCents), fromWireString(self.totalCents)),
     ),
   }
+}
+
+/**
+ * The leader's margin over rank 2 — the amount in `Leading by {amount}`.
+ *
+ * Null for everyone who is not rank 1, and null for a leader with nobody
+ * behind them: a one-seller board has no margin, and "Leading by $0" on a
+ * board of one is a sentence about nothing.
+ */
+export function leadFrom(rows: readonly BoardRow[]): string | null {
+  const selfIndex = rows.findIndex((r) => r.isSelf)
+  if (selfIndex !== 0) return null
+
+  const self = rows[0]
+  const second = rows[1]
+  if (!self || !second) return null
+
+  return toWireString(subtract(fromWireString(self.totalCents), fromWireString(second.totalCents)))
 }
 
 export async function readBoard(request: Request): Promise<BoardPayload> {
@@ -176,6 +213,8 @@ export async function readBoardFor(
       rows: mapped,
       self: mapped.find((r) => r.isSelf) ?? null,
       nextUp: nextUpFrom(mapped),
+      leadCents: leadFrom(mapped),
+      floorTotalCents: toWireString(sum(mapped.map((r) => fromWireString(r.totalCents)))),
       trackedSince: meta[0]?.tracked_since ?? null,
       isDemo: meta[0]?.is_demo ?? false,
     }

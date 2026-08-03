@@ -1,5 +1,6 @@
 import { isRouteErrorResponse, useRouteError } from 'react-router'
 
+import { FirstRunChecklist } from '~/components/home/first-run-checklist'
 import { StandingBlock } from '~/components/leaderboard/standing-block'
 import { readMyDay, type MyDayItem, type MyDayPayload } from '~/routes/api/my-day'
 
@@ -41,6 +42,14 @@ export default function MyDay({ loaderData }: Route.ComponentProps): React.JSX.E
           has a rank, and the one morning the list is empty is the worst morning
           to remove the only reason to open the screen. */}
       <StandingBlock />
+
+      {/* AFTER the rank block, which is `04b` §1524's block-order ruling and
+          it comes with its reason: the checklist exists for roughly one day of
+          a seller's life, and the rank and the dollar gap are why they open
+          the app on day 40. Deviation noted: the ruling's desktop layout is
+          two columns with these side by side, and this stacks them. Both are
+          above the fold, which is what the demo script asks for. */}
+      <FirstRunChecklist />
 
       {clear ? (
         <p

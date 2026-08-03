@@ -24,10 +24,10 @@ import { signIn } from './fixtures/seller'
  */
 
 /** The third clause has three shapes, and only one of them mentions a rival. */
-const GAP = String.raw`(\$[\d,]+(\.\d{2})? behind .+|Leading the board|Tied with .+)`
+const GAP = String.raw`(\$[\d,]+(\.\d{2})? to pass .+|Leading by \$[\d,]+(\.\d{2})?|Leading the board|Tied with .+)`
 
 /**
- * `You're #2 · $9,029.88 · $2,550.12 behind Priya N.`
+ * `You're #2 · $9,029.88 · $2,550.12 to pass Priya N.`
  *
  * Below the density breakpoint the sentence wraps and the LAST separator is
  * removed, because the line break is doing that separator's job and a `·` left
@@ -72,7 +72,7 @@ test.describe('the rank and the gap, above the fold on the seller home', () => {
     const line = ((await standing.innerText()) ?? '')
       .replace(/\s*\n\s*/g, ' ')
       .replace(/\s+/g, ' ')
-      .replace(/ Earnings board$/, '')
+      .replace(/ See the board$/, '')
       .trim()
 
     expect(line, 'the standing sentence does not have the shape §7 describes').toMatch(
@@ -135,7 +135,7 @@ test.describe('the rank and the gap, above the fold on the seller home', () => {
     // And the block says so, in the seller's words, with a way out. A silent
     // empty band is how a seller learns to distrust the number.
     const standing = page.getByRole('region', { name: 'Your standing' })
-    await expect(standing.getByText(/Standings couldn.t load/)).toBeVisible()
-    await expect(standing.getByRole('button', { name: 'Try again' })).toBeVisible()
+    await expect(standing.getByText(/We couldn.t load your rank\./)).toBeVisible()
+    await expect(standing.getByRole('button', { name: 'Retry' })).toBeVisible()
   })
 })

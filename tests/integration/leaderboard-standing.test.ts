@@ -107,10 +107,35 @@ describe('the rank-and-gap line', () => {
     const payload = await board(LEADER)
 
     expect(payload.self?.rank).toBe(1)
-    // The branch that keeps "$0 behind" off the leader's screen. A gap of null
-    // is a different sentence from a gap of zero, and the component renders
-    // them differently on purpose.
+    // The branch that keeps "$0 to pass" off the leader's screen. A gap of
+    // null is a different sentence from a gap of zero, and the component
+    // renders them differently on purpose.
     expect(payload.nextUp).toBeNull()
+
+    // `lb.self.leading` — `Leading by {amount}`, the margin over rank 2, and
+    // the second subtraction on this surface that a client must never do.
+    expect(payload.leadCents).toBe((LEADER_CENTS - MIDFIELD_CENTS).toString())
+  })
+
+  it('gives nobody but the leader a margin to lead by', async () => {
+    // `leadCents` is the leader's own fact. Handed to a seller at rank 4 it
+    // would be a statement about two other people's positions, on the one
+    // surface in the product that crosses the silo.
+    for (const userId of [RUNNER_UP, TIED_WITH_RUNNER_UP, NEVER_SOLD]) {
+      expect((await board(userId)).leadCents, `${userId} was given a lead margin`).toBeNull()
+    }
+  })
+
+  it('sums the floor total on the server, for the role that gets no self-row', async () => {
+    // `lb.supervisor_total`. It adds no information a viewer could not sum
+    // from `rows` — which is exactly why it is summed here: money arithmetic
+    // is server-side, including the kind that looks harmless.
+    const payload = await board(SUPERVISOR)
+
+    expect(payload.floorTotalCents).toBe((LEADER_CENTS + MIDFIELD_CENTS * 2n).toString())
+    expect(JSON.stringify(payload)).toContain(
+      `"floorTotalCents":"${LEADER_CENTS + MIDFIELD_CENTS * 2n}"`,
+    )
   })
 
   it('subtracts the gap on the SERVER and sends it as a string of whole cents', async () => {

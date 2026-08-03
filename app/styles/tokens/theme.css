@@ -68,6 +68,21 @@
 
   --color-selected-bg: var(--p-b-50);
 
+  /* --- Domain: money ------------------------------------------------------
+   * Ratified in `04b-design-system.md` §3 and §6, and MISSING from this file
+   * until the rank-and-gap block needed one of them. A totals colour and an
+   * action fill are different jobs: `--color-action-money-bg` is the green a
+   * seller presses, these three are what a number READS as.
+   *
+   * The split that matters is the last one. A reversal is not an error — red
+   * in this product means blocked from contacting a human, and a downward
+   * correction rendered in it teaches a seller to read their own ledger as a
+   * compliance warning. */
+  --color-money-positive: var(--p-g-600);
+  /** EVERY total: leaderboard, column sums, card premium, the seller's own. */
+  --color-money-neutral: var(--p-n-900);
+  --color-money-negative: var(--p-n-700);
+
   /* --- Feedback: one meaning each, and only one -------------------------- */
   --color-success-fill: var(--p-g-50);
   --color-success-text: var(--p-g-600);
