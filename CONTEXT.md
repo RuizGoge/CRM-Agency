@@ -7,6 +7,67 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 🎯 EL RANK-AND-GAP, EL CHECKLIST, Y UNA TRAMPA DE PRECEDENCIA QUE PAGUÉ (2026-08-03)
+`app/components/leaderboard/rank-and-gap.tsx` · `standing-block.tsx` · `empty-copy.ts` · `app/components/home/first-run-checklist.tsx` · `app/routes/api/home-setup.ts` · migración **0024** · `scripts/seed.ts` · `scripts/install-jobs.ts` · `scripts/check-perf-budgets.ts`. **163 → 188 tests · 33 → 66 e2e.**
+
+Los puntos **1 a 4 y 6** de la lista anterior, cerrados. Lo que sigue es lo que aprendí construyéndolos.
+
+🔴 **LA TRAMPA MÁS CARA: construí el bloque de rank-and-gap con el texto equivocado y lo descubrí DESPUÉS de commitearlo.** Lo saqué de la narrativa de §7 (`$6,900 behind Dana R.`) y del mock ASCII de `04b` §4.1, que dice lo mismo. **Las dos están superadas adentro del propio `04b`:**
+- **R5.4** dicta que la pantalla de inicio del vendedor se especifica en `04b`, no en los flujos de `04`.
+- La fila *"Gap sentence variants"* de §4.1, **tres líneas debajo de ese mock**, lista `{amount} to pass {peer_short}` y agrega *"never invent a gap sentence that is not motivating"*.
+- §4.8 ratifica lo mismo como `lb.self.gap`, bajo una tabla cuya regla es **"keys not listed do not exist"**.
+
+**Dos fuentes coinciden contra un dibujo desactualizado.** Y la diferencia no es de estilo: `behind` es marco de pérdida, `to pass` es marco de meta, y la feature 30 del módulo de leaderboard **prohíbe** el primero — los mensajes de ranking van *"always phrased as a gap and an action, never as a loss"*. `behind` sobrevive en un solo lugar: `earn.celebrate.*`, el toast del momento en que el vendedor **acaba de pasar** a alguien.
+
+**Lección de método, no de código: leí la narrativa y el mock, que es lo que un humano lee primero, y no la tabla de strings ratificados.** Cada string inventado quedó reemplazado por su clave (`lb.self.leading` · `lb.self.tied` · `lb.self.zero_alltime` · `lb.supervisor_total` · `See the board` · `We couldn't load your rank.`).
+
+- **La brecha se resta en el SERVIDOR** y cruza el cable como string de centavos enteros. Los dos operandos viajan en la misma respuesta, que es lo que hace a este el lugar más tentador del producto para hacer aritmética de dinero en el cliente. Un test assertea **las comillas en el body serializado**, no sólo el valor.
+- **Derivado de las filas del propio tablero, no de una segunda consulta** — errata **E2** satisfecha estructuralmente: hay una expresión de orden y una de población, y ninguna segunda implementación que pueda discrepar. 🔬 **La variante `rank - 1` es indistinguible hoy y la mutación quedó VERDE** (los rangos son contiguos por construcción). Anotado en el comentario en vez de reclamar cobertura.
+- **El bloque busca su propio dato, y NO con `useFetcher`:** una `Response` lanzada desde el loader de una resource route la renderiza el error boundary más cercano, y `api/leaderboard` es top-level sin ninguno — un 500 borraría el día del vendedor **a través del framework** en vez de a través de un loader de página. §1.1 razón 2 nombra esta pantalla; un e2e lo assertea devolviendo 500 y mirando que My Day siga entero.
+- **Sin intervalo, a propósito.** La cadencia registrada del canal leaderboard (N6, 5000 ms) está presupuestada a 0,6 de duty de **una** pestaña por vendedor; un segundo cliente permanente mueve el piso firmado de N20 (~898.000 req/día) un ~13%, y mover un número de la tabla P5.3 es un ruling, no un detalle. Refresca al montar y al volver el foco.
+
+🔴 **DOS DEFECTOS QUE SÓLO APARECIERON MIRANDO LA PANTALLA:**
+1. **El seed escribía el nombre de pila pelado en `display_name`**, así que la línea decía *"behind Priya"*. Todos los ejemplos del corpus son `First L.` — Marcus T., Dana R., Carlos J., Maria R. **No es sólo copy:** en un piso de cincuenta productores dos comparten nombre de pila, y un tablero público con dos filas que dicen `Maria` es un tablero donde nadie encuentra su propia posición.
+2. **En teléfono la frase envuelve y el último `·` quedaba colgando** al final de la primera línea. Debajo del breakpoint de densidad el salto de línea **es** ese separador, así que se quita en vez de quedar huérfano. Las dos formas se assertean por perfil: un patrón que aceptara cualquiera no podría ver desaparecer el punto en escritorio.
+
+**EL CHECKLIST DE PRIMERA CORRIDA (US-9.14, C-41).** Cada ítem es **una pregunta hecha al dato** — sin `dismissed_at`, sin tabla de completado, sin nada que el vendedor pueda tildar — así que *"colapsa cuando los cuatro están y no vuelve"* es aritmética y no una bandera que alguien tiene que acordarse de poner.
+
+- ⚠️ **NO PUEDE COMPLETARSE en este build, y lo digo en vez de esconderlo.** El ítem 1 pregunta si el número de llamadas está verificado y `aloware_number_mapping` no existe, así que la respuesta es no para todo vendedor de todo tenant. El colapso se prueba contra una lectura de setup **stubbeada**.
+- ⚠️ **El camino "concedido" del ítem 4 se prueba contra un objeto `Notification` stubbeado.** Medido primero: **Chromium headless reporta `denied` pase lo que pase**, y `context.grantPermissions(['notifications'])` no lo mueve.
+- `Number(` es error de build fuera de `app/lib/money`, así que contar cuatro booleanos es `filter(Boolean).length`. `Notification.permission` se lee con `useSyncExternalStore`, no copiándolo a estado desde un efecto — que era, además, lo único que el linter de React rechazaba.
+
+**LAS CUATRO LÍNEAS VACÍAS DEL TABLERO, Y POR QUÉ ERAN INALCANZABLES.** El estado vacío colgaba de `rows.length === 0`, pero la migración 0017 hizo que el tablero arranque del **roster**: `rows` nunca está vacío una vez que el tenant tiene vendedores. Ahora cuelga del **total del piso en cero**, que es exactamente el tablero del ítem protegido 9 — cincuenta nombres, cincuenta $0, la nota al pie, y ahora una línea que dice qué pasa después, con los nombres todavía ahí.
+
+- La copy anterior reportaba ausencia dos veces (`Nothing closed in this period yet` sobre `Try All time to see the full history`) y **mandaba al vendedor a otro tablero** la única mañana en que el producto más necesita que cierre algo. §4.10 abre con la regla que rompía: *"a state that only reports absence is a defect"*.
+- Las cuatro viven en un módulo de datos para que la propiedad que importa se assertee **sin renderizar**: cuatro títulos distintos, cuatro cuerpos distintos, cada uno nombrando su propio período. El atajo que esto previene no es pereza sino prolijidad — una sola frase con `{period_label}` interpolado se lee bien y colapsa justo la distinción que §4.10 pide.
+
+🔴 **DOS EXIGENCIAS DE §1529 QUE LA LISTA PROTEGIDA NUNCA REGISTRÓ COMO FALTANTES: el seed no abarcaba los cuatro períodos y no tenía ninguna reversa.** Medido, no supuesto: day, week, month y all-time tenían **el mismo número** ($56.717,88), porque `stage_move` sólo puede estampar `now()`. El selector de período no demostraba nada en el minuto 0:30.
+
+- Ahora la primera venta de cada vendedor sigue yendo por la puerta real y **el resto se retrofecha por `ledger_append`**, anclado a los **límites de período actuales en la zona horaria de negocio del tenant** y nunca a una cantidad fija de días: *"siete días atrás"* abarca buckets distintos según el día de la semana, y un demo que funciona los jueves es peor que uno que nunca funcionó.
+- Resultado: hoy $26.339,88 · mes $30.557,88 · all-time $31.997,88, **y el top tres se re-rankea entre pestañas.** Una reversa, retrofechada para que no mueva ningún tablero acotado.
+- 🎯 **Encontrado por la constraint haciendo su trabajo:** `earnings_deal_context_present` rechazó la reversa con `opportunity_id` nulo. Una fila de dinero sin trato detrás es un número que nadie puede explicar nunca.
+
+🔴 **JOBS003 — UNA TRAMPA QUE DISPARÉ YO Y DESPUÉS CERRÉ.** Un comando encadenado corrió `db:jobs` después de un `db:migrate` que había competido con el arranque del contenedor, **y la base quedó irrecuperable**: `harden()` falla cerrado ante un esquema sin clasificar, la migración 0020 es la que clasifica `pgboss`, y varias migraciones llaman a `harden()`. Todo migrate posterior levantaba `HR001` para siempre. Sin migraciones de vuelta, el único arreglo era `db:reset`.
+
+- `install-jobs.ts` ahora **se niega** nombrando el comando a correr primero. Chequeo en dos pasos, porque el propio registro llega en la 0000 y un guard que revienta en una base nueva no enseña nada. **Probado por los dos lados: exit 1 sin la fila de registro, exit 0 con ella.** El runbook ya decía migrate primero — un runbook es documentación, esto es el mecanismo.
+
+**LA ALTURA DE TARJETA DEJA DE SER UN NÚMERO EN UNA HOJA DE ESTILOS.** `04b` cargaba **tres** alturas (108/92 en §3.6, **112 en el mock de §2**, 120/156 en §1) y el ruling N17 tachó las dos primeras. Hasta hoy la tarjeta **no tenía altura fija ninguna**: era un grid que se estiraba con su contenido.
+
+- Migración **0024** registra `ui.card_h_desktop` (120) y `ui.card_h_mobile` (156) con el brazo **`pinned`**. Dos nombres, no uno: 44px de target y tipografía móvil necesitan la caja más alta para las mismas cuatro filas, y un nombre para dos geometrías es cómo las dos convergen en silencio.
+- **La puerta se cierra en dos mitades y ninguna alcanza sola:** `card-height.test.ts` ata el token CSS al número fijado (compara **valores**, nunca nombres — E7/NEW-1) y prueba que `AP004` rechaza 96 y acepta que se re-afirme 120; `card-anatomy.spec.ts` ata el token a lo que un navegador realmente renderiza, en los dos perfiles, y assertea el **pitch uniforme por separado** — una tarjeta mal es una variante, una columna entera corrida por lo mismo es un token.
+- **Por qué carga peso y no es cosmética:** un pitch de columna uniforme es lo que hace virtualizable una columna de 500 tarjetas, y la virtualización es lo que hace alcanzables los 60 fps de P6 y el presupuesto de LCP. Una tarjeta que crece una fila porque alguien agregó un chip **no se ve rota** — le come la holgura a la puerta de drag.
+- **P6 sigue verde con la caja fija.**
+
+**EL CHECKER DE PRESUPUESTOS POR FIN LEE EL MOTOR.** La migración 0022 movió el rechazo a Postgres hace ocho commits y **nada comparaba las dos cosas**: el motor podía rechazar un valor que el archivo ya estaba shippeando.
+
+- Tres discrepancias, cada una con su frase: un nombre que el motor nunca oyó · un valor distinto · **un presupuesto que el archivo llama `null` mientras el motor tiene una medición**, que es la forma más barata de hacer desaparecer un incumplimiento.
+- 🎯 **Probado por mutación:** archivo aflojado a 400.000 contra los 128.000 del motor → **`PERF006`, exit 1**, nombrando los dos números. Ese es exactamente el paseo que esto existe para frenar.
+- ⚠️ **LO QUE NO ES, dicho y no insinuado:** cierra el hueco en el hook de **pre-commit**, que es por donde pasan los commits de este proyecto. **NO cubre el CI:** eso necesita `crm_ci` con LOGIN y contraseña puestos fuera de banda y la cadena de conexión como secreto del repo. Las dos cosas son de Jorge; hasta entonces el CI imprime un cuadro que dice que el cruce no corrió. **Un motor inalcanzable pasa en vez de fallar, y ése es el único borde blando acá** — fallar duro dejaría el checker incorrible sin base, incluido el CI que todavía no tiene credencial.
+
+⚠️ **Contradicción encontrada al pasar y NO tocada:** §4.8 marca `lb.footnote.golive` como *"Permanent footnote"* y a `lb.footnote.tracked_since` como *"Replaces the above"*. Las dos no pueden ser ciertas. Hoy se renderizan **las dos**, que es lo que preserva la frase del ruling D8 (*"imported history isn't counted"*) — reemplazarla por una fecha de inicio perdería justo la honestidad que el ítem protegido 9 existe para sostener. Queda como está, anotado.
+
+⚠️ **Deuda de higiene nueva: los ids de tenant de los tests de integración se asignan a mano y nada impide una colisión.** `crm_test` es compartida entre archivos y mi primer fixture chocó con `scheduling.test.ts` en `...0000f7`. Se resolvió cambiando el mío; no hay mecanismo.
+
 ### 🟢 SPRINT 0 EN CURSO — G0 ✅ **APROBADO** (2026-08-01)
 Evidencia completa: [`docs/sprint-0/g0-us-region.md`](docs/sprint-0/g0-us-region.md).
 
@@ -825,7 +886,7 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 | 7 | Leaderboard público | ✅ tablero, undo honrado **y celebración** |
 | 8 | My Day | ✅ |
 | 9 | Aloware | 🔴 **bloqueado por la Puerta 11** — necesita la cuenta real |
-| 10 | Datos demo | 🟡 siembra por el camino real, se niega a duplicarse, `lost_reason` sembrados. **`DEMO-01..10` ahora es un registro verificado por máquina: 3 cubiertos, 4 bloqueados por Aloware/búsqueda, 3 parciales** — el estado es visible en vez de supuesto |
+| 10 | Datos demo | 🟡 siembra por el camino real, se niega a duplicarse, `lost_reason` sembrados, **y desde el 2026-08-03 ABARCA LOS CUATRO PERÍODOS con una reversa** — las dos exigencias de §1529 que el registro nunca había anotado como faltantes. `DEMO-01..10` sigue siendo un registro verificado por máquina: **3 cubiertos, 4 bloqueados por Aloware/búsqueda, 3 parciales**, y los tres parciales encogieron |
 
 **Extra, no planificado:** shell de navegación, CI en GitHub Actions, aserción de arranque G4(a), **undo de 5 s**, **el test de deriva de la Puerta 10**, **el gate de axe-core con su job de CI**, **el drag de escritorio**, **el despachador de jobs** y **la celebración**.
 
@@ -844,35 +905,35 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 | 8 | pg-boss bajo estrés de versión | ⬜ no empezado |
 | 9 | Simulacro de restauración | ⬜ no empezado |
 | 10 | Los 5000 ms en cuatro representaciones | ✅ **CERRADA.** Las cuatro existen —TS · CSS · predicado SQL de la proyección · claim de la celebración— y el test de deriva compara **valores, nunca nombres**, incluida la aserción de que `celebrate_once` no menciona `projection_reveal_delay_ms` |
-| 11 | Bundle y primer paint medidos | 🟡 **MITAD CERRADA.** Bundle **medido y aplicado**: P12 = 108.086 bytes gzip contra un presupuesto de 128.000, P13 = 2.368 contra 16.384, en `perf-budgets.json` vía `npm run perf` dentro de `verify`. **El fallo por presupuesto nulo que E6 exige ahora existe** — antes no estaba en ninguna parte. **Falta:** P20 (TTI móvil), bloqueado por el tier nocturno de Lighthouse y el fixture perf-500. **Y falta el ancla fuera del árbol:** `ref.ci_ratchet` (05c §10.0.1) no está construido, así que aflojar sigue siendo editar un archivo |
+| 11 | Bundle y primer paint medidos | 🟡 **MITAD CERRADA.** Bundle **medido y aplicado**: P12 = 108.383 bytes gzip contra 128.000, P13 = 2.431 contra 16.384, vía `npm run perf` dentro de `verify`. **El ancla fuera del árbol YA ESTÁ CABLEADA (2026-08-03):** el checker lee `ref.ci_ratchet` y falla con `PERF006` si el archivo y el motor discrepan — probado con el archivo aflojado a 400.000 contra los 128.000 del motor. **Falta:** P20 (TTI móvil), bloqueado por el tier nocturno de Lighthouse; y que el CRUCE corra en el CI, que necesita `crm_ci` con LOGIN y contraseña fuera de banda (de Jorge). Hoy corre en el hook de pre-commit |
 | 12 | Drag a 60 fps con 500 tarjetas | ✅ **CERRADA.** Perfil `dnd-ci` (2× CPU throttle) sobre `perf-500`, **contra el BUILD DE PRODUCCIÓN**: **p95 16,8 ms · max 16,8 ms (cero frames perdidos) · cero long tasks**, contra p95≤20 / frame≤34 / longtask≤50. El fixture se assertea antes de medir, y el gate está probado con dientes (bloqueo de 60 ms → las tres aserciones rojas) |
 | 13 | Publicar las contradicciones | ✅ `docs/sprint-0/g13-published-contradictions.md` |
 
-### ▶️ LO SIGUIENTE — sesión del 2026-08-02, cierre
+### ▶️ LO SIGUIENTE — sesión del 2026-08-03, cierre
 
-**El repositorio TIENE REMOTO y el CI corre**: `github.com/RuizGoge/CRM-Agency` (privado). `master` = `origin/master` = `92f3f46`. **163 tests · 33 e2e · árbol limpio · demo reseteado.**
+**`master` = `origin/master`. 188 tests · 66 e2e · árbol limpio · demo reseteado.** Los puntos 1, 2, 3, 4 y 6 de la lista anterior están cerrados (ver la entrada del 2026-08-03 arriba).
 
 **Lo que NO depende de nadie — por acá seguir, en este orden:**
 
-1. **El rank-and-gap arriba del pliegue** — `You're #2 · $41,300 · $6,900 behind Dana R.` Es lo que queda de mayor valor del ítem protegido 10; `04-ux-flows.md` §7 lo describe como *"hace todo el pitch antes de que se diga una palabra"*. El dato ya existe: `readBoard` devuelve `self` con `rank` y `totalCents`, y el vecino de arriba está en `rows`. **La brecha se calcula en el SERVIDOR** — el cliente no hace aritmética de dinero, nunca. Actualizar `contracts/protected-list.json` al terminar.
-2. **La lista de primera corrida, cuatro ítems** — la otra mitad del ítem 10.
-3. **Copy vacío distinto por período** en el leaderboard (ítem 9). Hoy distingue all-time de un período; faltan las cuatro líneas propias.
-4. **DEMO-07: la tarjeta kanban con seis hechos.** Rinde tres. Faltan lead source (difiere al módulo de intake), conteo de intentos y la señal de salud con su regla de supresión. **Y la altura fija de tarjeta 120/156, que `05c` ata al ratchet `ui.card_h_*` con brazo `pinned`** — la máquina ya existe (migración 0022), sólo falta registrar el nombre y medir.
-5. **P20 (TTI móvil)** — lo único que le falta a la Puerta 11. Necesita Lighthouse y un tier nocturno. **El fixture `perf-500` YA existe**, que era lo caro. ⚠️ Ojo con los minutos de Actions: el control de costo es la ausencia de método de pago (§9.4.1).
-6. **Cablear el ratchet al checker** — que `check-perf-budgets.ts` lea `ref.ci_ratchet` en vez de sólo el archivo. Necesita la credencial `crm_ci` como secreto del repo, y `crm_ci` se crea `NOLOGIN` sin contraseña a propósito (migración 0022): hay que darle LOGIN y contraseña fuera de banda.
+1. **La señal de salud de la tarjeta y el slot de señal, con su regla de supresión** — lo único sustantivo que le queda a `DEMO-07`. `04b` §2.8 quiere un enum `health` **calculado en el servidor** (`blocked` > `overdue` > `fresh` > `going_cold` > `ok`) renderizado como un riel de relleno parcial en `days_since_touch ÷ cold_threshold_days`, y §2.4 quiere **exactamente una** señal en el slot por una precedencia de seis pasos. **Cuatro de los cinco estados se computan con datos que ya existen** (`contact.last_touch_at`, actividades vencidas, `first_touch_latency_seconds`); `blocked` necesita la puerta de cumplimiento, que necesita Aloware. El riel de dos señales (color **y** forma) es requisito WCAG 1.4.1, no decoración.
+2. **P20 (TTI móvil)** — lo único que le falta a la Puerta 11. Necesita Lighthouse y un tier nocturno. **El fixture `perf-500` YA existe**, que era lo caro. ⚠️ Ojo con los minutos de Actions: el control de costo es la ausencia de método de pago (§9.4.1).
+3. **Cerrar el cruce del ratchet en el CI.** El checker ya lee `ref.ci_ratchet` y **falla con `PERF006`** cuando el archivo y el motor discrepan — probado por mutación. Falta sólo lo que no puedo hacer yo: darle a `crm_ci` LOGIN y contraseña **fuera de banda** y poner la cadena como secreto `CI_RATCHET_DATABASE_URL`. Hasta entonces el CI imprime el cuadro de "el cruce no corrió".
+4. **La franja de actividad de hoy** (`day.strip.*`: Dials · Contacts · Appointments set) — lo último de `DEMO-09`, y el único número que se mueve antes de la primera venta. Cuenta desde `call.completed` con cualquier resultado, **así que espera a Aloware**.
+5. **Reconciliar la cadena de snapshots de Drizzle**, desenganchada desde 0018 (ahora 0019–0024 son SQL a mano). `db:generate` se niega (`DBGEN003`), así que no es una trampa; es una tarea pendiente.
 
 **Dos DECISIONES DE JORGE, ninguna bloquea lo de arriba:**
 
-- **Cuál loader SSR fuera de presupuesto se saca** (`contracts/ui-loader-whitelist.json`). §1.2 sanciona **uno** (el pipeline) y hay **tres**. My Day es el que el registro pide sacar por su propio texto (§1.1 razón 2 lo nombra); el leaderboard cuesta el primer pintado de la pantalla que abre el demo. El motor sólo garantiza que no puedan volverse cuatro.
+- **Cuál loader SSR fuera de presupuesto se saca** (`contracts/ui-loader-whitelist.json`). §1.2 sanciona **uno** (el pipeline) y hay **tres**. ⚠️ **La razón que ese archivo daba para conservar el del leaderboard era falsa y quedó corregida:** decía que era *"la pantalla donde DEMO-10 quiere rango y brecha arriba del pliegue"* — §7 pone los primeros diez segundos en la **pantalla de inicio del vendedor**, y `home.tsx` redirige a My Day, donde el rank-and-gap ahora vive en un bloque que busca su propio dato. Lo que ese loader todavía compra es el primer pintado de `/earnings`, que es la **segunda** pantalla del demo (DEMO-01). El caso para conservarlo es más débil de lo que el archivo afirmaba; My Day sigue siendo el que el registro pide sacar por su propio texto (§1.1 razón 2 lo nombra). **El motor sólo garantiza que no puedan volverse cuatro.**
 - **Si `/earnings` debe ser alcanzable SIN sesión.** El ítem protegido 1 lo llama *"el tablero público"*, pero vive dentro del layout `shell`, que redirige. Hoy una segunda pantalla necesita una cuenta.
 
-**Bloqueado por terceros:** los 4 ítems protegidos que esperan Aloware (Puerta 2 — la cuenta real es de Jorge) y el registro 10DLC (aparcado por decisión de Jorge).
 
 ### 🧾 DEUDA TÉCNICA DECLARADA (no perder de vista)
 - **E9 está firmada pero NO implementada:** no existe `ref.capability_probe`. Llega con el módulo Aloware.
 - 🟢 **Snapshots de Drizzle desenganchados desde 0018** — 0019–0023 son SQL a mano y dos alteraron tablas. **Ya no es una trampa: `npm run db:generate` se NIEGA (`DBGEN003`)** nombrando el desfase. Reconciliar la cadena sigue pendiente, pero ahora es una decisión y no un accidente.
 - **R13 abierto:** `raw_payload_vault` purga por drop de partición mientras `dead_letter` tiene FK hacia ella.
-- **Loaders SSR fuera de presupuesto:** §1.2 sanciona **uno** (el pipeline) y hay **tres**. Enumerados en `contracts/ui-loader-whitelist.json` y acotados por el ratchet `ui.loader_whitelist`. **Falta la decisión de cuál sacar** — My Day es el que el registro pide por su propio texto; el leaderboard cuesta el primer pintado del demo.
+- **Loaders SSR fuera de presupuesto:** §1.2 sanciona **uno** (el pipeline) y hay **tres**. Enumerados en `contracts/ui-loader-whitelist.json` y acotados por el ratchet `ui.loader_whitelist`. **Falta la decisión de cuál sacar** — My Day es el que el registro pide por su propio texto; el del leaderboard ya no compra el primer pintado del demo (ese pasó a My Day el 2026-08-03), sino el de la segunda pantalla.
+- **Ids de tenant de los tests de integración asignados a mano**, sobre la base compartida `crm_test`, sin nada que impida una colisión. Ya chocaron una vez (`...0000f7`, con `scheduling.test.ts`) y el síntoma fue un `duplicate key` en `beforeAll`, no algo que se lea como lo que es.
+- **`04b` §4.8 se contradice sobre la nota al pie del tablero:** marca `lb.footnote.golive` como *permanente* y a `lb.footnote.tracked_since` como *que la reemplaza*. Hoy se renderizan las dos, que es lo que conserva la frase del ruling D8. Sin resolver, a propósito.
 - **`lead_source_id` omitido** en `contact` a propósito; llega con el módulo de intake.
 - **Trigger diferido "un lead nunca existe sin tarjeta"** — pendiente, necesita cruzar `contact` y `opportunity`.
 
@@ -882,7 +943,11 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 ```bash
 npm run db:up      # Docker Postgres 18 — puede necesitar abrir Docker Desktop a mano
 npm run db:migrate
-npm run db:jobs    # NO ES OPCIONAL. Instala el esquema de pg-boss COMO MIGRADOR.
+npm run db:jobs    # NO ES OPCIONAL, Y VA DESPUÉS DE db:migrate: correrlo antes
+                   # deja la base IRRECUPERABLE (harden() falla cerrado sobre el
+                   # esquema pgboss sin clasificar, y la 0020 es la que lo
+                   # clasifica). Desde el 2026-08-03 se NIEGA con JOBS003.
+                   # Instala el esquema de pg-boss COMO MIGRADOR.
                    # Sin esto `npm run dev` se niega a arrancar (JOBS002), porque
                    # PROCESS_ROLES incluye "worker" y el worker se pliega adentro.
 npm run db:seed    # crea el tenant demo Y fija la contraseña dev de crm_app
@@ -901,9 +966,11 @@ npm run db:reset && npm run db:up && npm run db:migrate && npm run db:seed
 ```
 `db:down` **no** alcanza — deja el volumen y las filas vuelven.
 
-✅ **El tenant demo de esta máquina fue RESETEADO el 2026-08-02 y está limpio.** Renata vuelve a marcar **$9.029,88**. (Venía de **$89.549,88** por residuo de corridas viejas del e2e.)
+✅ **El tenant demo de esta máquina fue RESETEADO el 2026-08-03 y está limpio.** Con el seed que abarca períodos, el tablero arranca en: **hoy $26.339,88 · mes $30.557,88 · all-time $31.997,88**, y el top tres se re-rankea entre pestañas. Renata queda **#2 en all-time con $9.029,88** y **#3 en hoy** — que es justo lo que hace demostrable el selector de período.
 
 📐 **Medido, no estimado: cada corrida completa de `npm run test:e2e` le suma exactamente $3.720 a Renata.** Verificado dos veces el 2026-08-02 — quedó en $16.469,88 tras dos corridas ($9.029,88 + 2 × $3.720). Reseteado después.
+
+⚠️ **Y ese crédito cae en HOY**, así que la deriva del e2e mueve las pestañas Today/This week/This month y deja all-time como el único número estable de Renata. Los specs nuevos lo asumen: los que necesitan un número que no se mueva leen a **Priya**, a la que ningún spec toca.
 
 ⚠️ **Pero el demo se vuelve a derivar cada vez que corrés `npm run test:e2e`, y eso es por diseño.** `celebration.spec.ts` lo dice en su propio encabezado: cerrar un trato *es* lo que ese spec prueba y no existe versión que no toque el ledger, así que **cada corrida deja una venta real de $310 × 12 = $3.720** en el vendedor con el que entra. El ledger es append-only y **no hay job de recomputo**, por diseño. **Antes de un demo comercial, reseteá** con el bloque de arriba; el CI corre el e2e contra su propia base efímera, así que allá no importa.
 
