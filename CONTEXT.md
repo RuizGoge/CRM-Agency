@@ -49,6 +49,21 @@ Evidencia completa: [`docs/sprint-0/g0-us-region.md`](docs/sprint-0/g0-us-region
 - **Dos aserciones más que agregó la suite:** un supervisor obtiene lectura global **pero la escritura le sigue siendo rechazada** (`USING` pasa, `WITH CHECK` falla — esa asimetría *es* el modelo de autorización, y es lo que hace que el caso del supervisor sea 403 y no un not-found), y el enum `user_role` tiene **exactamente tres etiquetas**, la forma mecánica de "no hay constructor de roles ni matriz de permisos".
 - **También pendiente:** el trigger que rechaza `is_demo=true` en producción (necesita `system_constant`, que aún no existe) y la validación de `display_tz` en `app_user`.
 
+### 🏷️ El tablero honesto y el chip de Demo (2026-08-02)
+`scripts/seed.ts`, `app/routes/api/leaderboard.ts`, `shell.tsx`, `leaderboard.tsx`, `undo-bar.tsx`, `tests/e2e/honest-board.spec.ts`. **33 e2e** (+2).
+
+Los ítems protegidos 9 y 10 son la **contraparte del confeti**: la parte que dice la verdad en vez de celebrar. Ninguno se puede sostener con un tipo ni una constraint — son copy en pantalla, así que un test que lee la pantalla es el único mecanismo disponible.
+
+- **`tenant.is_demo` existía desde la migración 0001 con índice único parcial, y el seed NUNCA lo marcaba.** O sea que el chip no podía aparecer aunque estuviera construido. **Una columna que nadie escribe es una columna que no existe.**
+- **Tres textos, cada uno con su razón escrita:** *"The board starts at go-live — imported history isn't counted."* (permanente, es el ruling D8 en una frase, y su atajo asesino es borrarlo *"por ser ruido"*); *"Earnings tracked since <fecha>"* (un total sin fecha de inicio invita al lector a inventarse una); y *"Demo tenant — these numbers are seeded."* sólo en el tenant sembrado.
+- **El chip vive en el SHELL, no en una pantalla**, y el test lo comprueba en las tres. Un marcador que sólo está en el tablero **falta justo en la captura que alguien saca de My Day** — que es el fallo que el ítem 10 describe: una captura del demo indistinguible de las cifras de un cliente real.
+
+🔴 **Y EL CHIP DESTAPÓ UN BUG DE LAYOUT QUE NO CAUSÓ — lo empujó al borde.** El e2e móvil del undo empezó a fallar con *"intercepts pointer events"*, que **es un bug de layout disfrazado de fallo de test**. La cabecera del shell ya estaba a un elemento de desbordar un teléfono; el chip la pasó, el documento ganó scroll horizontal, y **la barra de undo —`position: fixed`, centrada en el viewport— dejó de ser clickeable en sus propias coordenadas**.
+
+- ⚠️ **Tres hipótesis mías equivocadas antes de medirlo bien, y las anoto porque el método falló, no sólo el código:** creí que era orden de apilado (subí el `z-index` de 10 a 30 → seguía fallando), después que era desbordamiento de texto empujando el botón fuera del `overflow: hidden` (agregué truncado → seguía fallando). **Un probe con el escenario exacto mostró el botón perfectamente clickeable**, lo que descartó las dos. Lo que lo resolvió fue **quitar el chip y ver que pasaba** — la comparación que debí hacer primero.
+- **Los dos cambios intermedios se quedan porque son correctos igual:** el `z-index` 30 sí hacía falta (la barra ahora precede a las columnas en el DOM, así que ya no gana por orden de pintado), y el truncado con `flexShrink: 0` en las acciones evita que un nombre largo empuje el botón fuera de la barra.
+- **El arreglo real: la cabecera envuelve (`flexWrap`) y el gap baja de 6 a 3.** En 482 px el gap viejo era la mayor parte del desbordamiento.
+
 ### 🔴🟢 La PRIMERA corrida del CI, y falló en 29 segundos (2026-08-02)
 `package-lock.json`, `.github/workflows/verify.yml`.
 

@@ -101,8 +101,9 @@
       "status": "partial",
       "test": null,
       "missing": [
-        "The board does include a seller with no ledger row at $0 — migration 0017 fixed the join that hid them, and the leaderboard suite covers it.",
-        "Absent: the permanent 'The board starts at go-live' footnote, the 'Earnings tracked since' label, the distinct per-period empty copy, and the today activity strip (dials / contacts / appointments), which is the only number that moves before the first sale."
+        "DONE: the board includes a seller with no ledger row at $0 (migration 0017 fixed the join that hid them); the permanent 'The board starts at go-live' footnote; the 'Earnings tracked since' label; and the 'Demo tenant — these numbers are seeded' note. All asserted by honest-board.spec.ts.",
+        "Absent: the distinct per-period empty copy (all-time vs a period reads differently, but the four periods do not each have their own line yet).",
+        "Absent: the today activity strip — dials, contacts, appointments set — which is the ONLY number that moves before the first sale. It counts from call.completed on any outcome, so it needs the Aloware module."
       ]
     },
     {
@@ -111,9 +112,10 @@
       "status": "partial",
       "test": null,
       "missing": [
-        "My Day renders its four sections with counts in the header, and the seed is separately tenanted and refuses to run twice.",
-        "Absent: the persistent 'Demo' chip in the shell, the 'Demo tenant — these numbers are seeded' board footnote, the four-item first-run checklist, and the rank-and-gap line above the fold.",
-        "The seed refuses to DUPLICATE but does not yet refuse to run in a live environment: that needs `system_constant`, which does not exist."
+        "DONE: the persistent 'Demo' chip in the shell, which survives navigation across all three screens, and the seeded-numbers footnote on the board. Both asserted by honest-board.spec.ts, and the seed now sets tenant.is_demo.",
+        "DONE earlier: My Day renders its four sections with counts in the header, and the seed is separately tenanted and refuses to run twice.",
+        "Absent: the four-item first-run checklist, and the rank-and-gap line above the fold ('You're #2 · $41,300 · $6,900 behind Dana R.'), which is the piece that does the entire pitch before a word is spoken.",
+        "Absent: the seed refuses to DUPLICATE but not to run in a live environment — that needs system_constant, which does not exist."
       ]
     }
   ]

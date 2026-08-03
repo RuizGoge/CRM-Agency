@@ -129,10 +129,14 @@ async function main(): Promise<void> {
   const { withTenant } = await import('../app/db')
   const { auth } = await import('../app/lib/auth/server')
 
+  // `is_demo` is the flag the shell renders its Demo chip from, and protected
+  // item 10 names the failure it prevents: without it, a screenshot of the demo
+  // is indistinguishable from a real customer's standings. The column carries a
+  // unique partial index, so there can only ever be one demo tenant.
   await client`
-    INSERT INTO app.tenant (id, name, business_tz)
-    VALUES (${TENANT}, 'Demo Agency', 'America/New_York')
-    ON CONFLICT (id) DO NOTHING`
+    INSERT INTO app.tenant (id, name, business_tz, is_demo)
+    VALUES (${TENANT}, 'Demo Agency', 'America/New_York', true)
+    ON CONFLICT (id) DO UPDATE SET is_demo = true`
 
   await refuseToSeedTwice()
 

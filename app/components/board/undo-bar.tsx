@@ -73,7 +73,18 @@ export function UndoBar({
         left: '50%',
         bottom: 'var(--space-6)',
         transform: 'translateX(-50%)',
-        zIndex: 10,
+        // 30, not 10, and the number moved when the bar moved.
+        //
+        // The bar now renders BEFORE the columns so that DOM order — which is
+        // tab order — puts it a few tabs from the top instead of behind every
+        // card. Painting order follows DOM order for anything the columns put
+        // into a stacking context of their own, so a bar that used to sit last
+        // and win by default has to say what layer it is on. Mobile found it:
+        // the click landed on the column, not the button.
+        //
+        // Below the celebration at 20? No: above it. The celebration is
+        // decoration and the undo is the only way back.
+        zIndex: 30,
         width: 'min(30rem, calc(100% - var(--space-8)))',
         overflow: 'hidden',
         background: 'var(--color-surface-inverse)',
@@ -89,7 +100,25 @@ export function UndoBar({
           padding: 'var(--space-3) var(--space-4)',
         }}
       >
-        <p style={{ margin: 0, flex: 1, fontSize: 'var(--type-sm)' }}>
+        {/* `minWidth: 0` and truncation, because `flex: 1` alone does not shrink
+            below content width — and a long contact name then pushes the actions
+            out of a bar that clips them with `overflow: hidden`.
+            The failure was mobile-only and did not look like a layout bug: the
+            button was still in the accessibility tree and still had a bounding
+            box, so Playwright resolved it, aimed at its centre, and hit the
+            column underneath. A seller would have tapped the board instead of
+            undoing, with the same silence. */}
+        <p
+          style={{
+            margin: 0,
+            flex: 1,
+            minWidth: 0,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            fontSize: 'var(--type-sm)',
+          }}
+        >
           Moved {contactName} to {toStageName}.
         </p>
 
@@ -100,6 +129,7 @@ export function UndoBar({
           <button
             type="submit"
             style={{
+              flexShrink: 0,
               padding: 'var(--space-1) var(--space-2)',
               background: 'none',
               border: 'none',
@@ -118,6 +148,7 @@ export function UndoBar({
         <Link
           to="/board"
           style={{
+            flexShrink: 0,
             fontSize: 'var(--type-xs)',
             color: 'var(--color-text-inverse)',
             opacity: 0.72,

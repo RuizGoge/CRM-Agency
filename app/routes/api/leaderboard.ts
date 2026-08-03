@@ -32,6 +32,19 @@ export interface BoardRow {
 
 export interface BoardPayload {
   readonly period: Period
+  /**
+   * When this tenant's ledger begins — protected item 9's "Earnings tracked
+   * since". ISO date; the client formats it.
+   *
+   * Ruling D8 is what makes this honest rather than decorative: the ledger
+   * starts at go-live and imported history is NOT counted, so the board has to
+   * say what window it is describing. Without the label the same screen reads
+   * as "these are your totals", and the first question after the meeting is the
+   * one whose true answer is no.
+   */
+  readonly trackedSince: string | null
+  /** Renders the seeded-numbers footnote. Never true for a real tenant. */
+  readonly isDemo: boolean
   readonly rows: readonly BoardRow[]
   /** The viewer's own row, always present even when outside the visible slice. */
   readonly self: BoardRow | null
@@ -70,10 +83,22 @@ export async function readBoard(request: Request): Promise<BoardPayload> {
       isSelf: r.user_id === identity.userId,
     }))
 
+    // Tenant-level facts, read in the same unit of work. The date is the
+    // ledger's beginning, which under ruling D8 is go-live: history imported
+    // from a spreadsheet is NOT counted, and the board has to say so rather
+    // than let the number imply otherwise.
+    const meta = await tx.execute<{ tracked_since: string | null; is_demo: boolean }>(
+      sql`SELECT to_char(created_at AT TIME ZONE business_tz, 'Mon DD, YYYY') AS tracked_since,
+                 is_demo
+            FROM app.tenant WHERE id = app.current_tenant()`,
+    )
+
     return {
       period,
       rows: mapped,
       self: mapped.find((r) => r.isSelf) ?? null,
+      trackedSince: meta[0]?.tracked_since ?? null,
+      isDemo: meta[0]?.is_demo ?? false,
     }
   })
 }

@@ -25,13 +25,18 @@ export async function loader({ request }: Route.LoaderArgs) {
   }
 
   return withTenant(identity, async (tx) => {
-    const rows = await tx.execute<{ display_name: string; role: string }>(
-      sql`SELECT display_name, role::text AS role FROM app.app_user
-          WHERE tenant_id = app.current_tenant() AND id = app.current_user_id()`,
+    const rows = await tx.execute<{ display_name: string; role: string; is_demo: boolean }>(
+      sql`SELECT u.display_name,
+                 u.role::text AS role,
+                 t.is_demo
+            FROM app.app_user u
+            JOIN app.tenant t ON t.id = u.tenant_id
+           WHERE u.tenant_id = app.current_tenant() AND u.id = app.current_user_id()`,
     )
     return {
       displayName: rows[0]?.display_name ?? 'You',
       role: rows[0]?.role ?? 'seller',
+      isDemo: rows[0]?.is_demo ?? false,
     }
   })
 }
@@ -52,7 +57,17 @@ export default function Shell({ loaderData }: Route.ComponentProps): React.JSX.E
             padding: 'var(--space-3) var(--space-6)',
             display: 'flex',
             alignItems: 'center',
-            gap: 'var(--space-6)',
+            // WRAPS, and the reason is a defect the Demo chip exposed rather
+            // than caused. This row was already one item away from overflowing a
+            // phone; adding the chip pushed it over, the document gained
+            // horizontal scroll, and the undo bar — `position: fixed`, centred
+            // on the viewport — stopped being clickable at its own coordinates.
+            // The mobile e2e caught it as a pointer-event interception, which
+            // is a layout bug wearing a test failure's clothes.
+            flexWrap: 'wrap',
+            // Smaller than the 6 it was: at 482px the old gap alone accounted
+            // for most of the overflow.
+            gap: 'var(--space-3)',
           }}
         >
           <span
@@ -64,6 +79,32 @@ export default function Shell({ loaderData }: Route.ComponentProps): React.JSX.E
           >
             CRM Leads
           </span>
+
+          {/* Protected item 10. The failure it names is precise: without a
+              persistent marker, a screenshot of the demo is indistinguishable
+              from a real customer's standings — and this product's whole
+              credibility rests on the public board being trustworthy.
+
+              It sits next to the wordmark and never scrolls away, because a
+              chip that only appears on one screen is a chip that is missing on
+              the screenshot somebody actually takes. */}
+          {loaderData.isDemo ? (
+            <span
+              title="Seeded data. This is not a live account."
+              style={{
+                padding: 'var(--space-1) var(--space-2)',
+                borderRadius: 'var(--radius-sm)',
+                background: 'var(--color-caution-fill)',
+                border: '1px solid var(--color-caution-stroke)',
+                color: 'var(--color-caution-text)',
+                fontSize: 'var(--type-xs)',
+                fontWeight: 'var(--font-weight-semibold)',
+                letterSpacing: '0.02em',
+              }}
+            >
+              Demo
+            </span>
+          ) : null}
 
           <nav aria-label="Main" style={{ display: 'flex', gap: 'var(--space-1)' }}>
             <Tab to="/my-day">My Day</Tab>

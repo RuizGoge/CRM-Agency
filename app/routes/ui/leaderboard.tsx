@@ -173,6 +173,53 @@ export default function Leaderboard({ loaderData }: Route.ComponentProps): React
         Since launch. A win appears here about ten seconds after it is closed — the delay is the
         undo window, so a number on this board never corrects itself downward.
       </p>
+      {/* PROTECTED ITEM 9, and it is the counterweight to the confetti.
+          The permanent footnote is not clutter to be trimmed: ruling D8 says
+          the ledger starts at go-live and imported history is not counted, and
+          an owner who is not told that asks the question after the meeting
+          instead of during it. The honest answer is no, and the dishonest
+          answer is fifty spreadsheets of unverifiable numbers and a dispute on
+          day one.
+
+          The "silently lost" note on that item names the exact shortcut this
+          resists — seeding the live ledger from a CSV import so the board is
+          not blank at launch, which would make every number on a public board
+          unverifiable forever. */}
+      <footer
+        style={{
+          marginTop: 'var(--space-8)',
+          paddingTop: 'var(--space-4)',
+          borderTop: '1px solid var(--color-border-subtle)',
+          display: 'grid',
+          gap: 'var(--space-1)',
+        }}
+      >
+        <p style={{ margin: 0, fontSize: 'var(--type-xs)', color: 'var(--color-text-tertiary)' }}>
+          The board starts at go-live — imported history isn&rsquo;t counted.
+        </p>
+
+        {board.trackedSince ? (
+          <p style={{ margin: 0, fontSize: 'var(--type-xs)', color: 'var(--color-text-tertiary)' }}>
+            Earnings tracked since {board.trackedSince}
+          </p>
+        ) : null}
+
+        {/* Only on the seeded tenant, and it says so in the seller's words
+            rather than in a flag name. */}
+        {board.isDemo ? (
+          <p
+            style={{
+              margin: 0,
+              marginTop: 'var(--space-1)',
+              fontSize: 'var(--type-xs)',
+              fontWeight: 'var(--font-weight-semibold)',
+              color: 'var(--color-caution-text)',
+            }}
+          >
+            Demo tenant — these numbers are seeded.
+          </p>
+        ) : null}
+      </footer>
     </main>
   )
 }
