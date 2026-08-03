@@ -2,6 +2,8 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
 
+import postgres from 'postgres'
+
 /**
  * Sprint-0 Gate 11: the performance budget stops being a sentence.
  *
@@ -70,6 +72,101 @@ interface Budget {
   readonly value: number | null
 }
 
+/**
+ * THE ANCHOR OUTSIDE THE WORKING TREE, half built.
+ *
+ * `perf-budgets.json` already turns the build red, which is a real mechanism.
+ * What it is not is un-walkable: loosening a number there is editing a file,
+ * and the founding rule names the actor to design against — "Claude writes it
+ * and nobody reads the diff". Migration 0022 moved the refusal into Postgres,
+ * where `ref.ci_ratchet` rejects a loosening with its own SQLSTATE. Until now
+ * nothing compared the two, so the engine could refuse a value the file was
+ * already shipping.
+ *
+ * This closes that for every run that can reach the engine — which today means
+ * the pre-commit hook, where this project's commits actually go through. It
+ * does NOT yet cover CI: that needs `crm_ci` to have LOGIN and a password, set
+ * out of band, and the connection string as a repository secret. When the
+ * engine is unreachable this says so in a box rather than passing quietly,
+ * because a cross-check that skips itself in silence is the same defect as a
+ * budget nobody measured.
+ */
+const RATCHET_URL =
+  process.env['CI_RATCHET_DATABASE_URL'] ??
+  process.env['MIGRATION_DATABASE_URL'] ??
+  process.env['DEV_DATABASE_URL'] ??
+  'postgresql://crm:crm@localhost:5432/crm_dev'
+
+interface RatchetRow {
+  readonly name: string
+  readonly latest: string | null
+}
+
+async function readRatchet(): Promise<readonly RatchetRow[] | null> {
+  const client = postgres(RATCHET_URL, { max: 1, onnotice: () => {}, connect_timeout: 5 })
+  try {
+    return await client<RatchetRow[]>`
+      SELECT n.name,
+             (SELECT r.value_num::text FROM ref.ci_ratchet r
+               WHERE r.name = n.name ORDER BY r.set_at DESC LIMIT 1) AS latest
+        FROM ref.ci_ratchet_name n`
+  } catch {
+    // Unreachable, or the migration that creates the table has not run here.
+    // Reported, never swallowed — see the box printed by the caller.
+    return null
+  } finally {
+    await client.end({ timeout: 5 })
+  }
+}
+
+/**
+ * Three disagreements, and the third is the one worth the code.
+ *
+ * A budget the engine never heard of is a name added to the file alone. A
+ * value that differs is the file and the engine shipping two numbers. And a
+ * budget the FILE calls null while the engine holds a measurement is the
+ * cheapest way to make a breach disappear: delete the number, and a checker
+ * that only reads the file reports a budget "not yet measured".
+ */
+function compareToEngine(budgets: readonly Budget[], rows: readonly RatchetRow[]): string[] {
+  const engine = new Map(rows.map((r) => [r.name, r.latest]))
+  const problems: string[] = []
+
+  for (const b of budgets) {
+    if (!engine.has(b.name)) {
+      problems.push(
+        `  ${b.id} ${b.name} — the file declares it; ref.ci_ratchet_name has no such name. ` +
+          'Register it in a migration with its arm and its rationale.',
+      )
+      continue
+    }
+
+    const held = engine.get(b.name) ?? null
+    if (b.value === null && held !== null) {
+      problems.push(
+        `  ${b.id} ${b.name} — the file says NO VALUE and the engine holds ${held}. ` +
+          'Emptying a measured budget is how a breach disappears.',
+      )
+      continue
+    }
+    if (b.value !== null && held === null) {
+      problems.push(
+        `  ${b.id} ${b.name} — the file ships ${b.value} and the engine holds no value. ` +
+          'A budget the engine never accepted is a number nobody ratcheted.',
+      )
+      continue
+    }
+    if (b.value !== null && held !== null && String(b.value) !== held) {
+      problems.push(
+        `  ${b.id} ${b.name} — the file ships ${b.value}, the engine holds ${held}. ` +
+          'Tightening is free but it is an INSERT: the engine has to accept the new number.',
+      )
+    }
+  }
+
+  return problems
+}
+
 function fail(lines: readonly string[]): never {
   console.error(`\n${lines.join('\n')}\n`)
   process.exit(1)
@@ -124,7 +221,7 @@ function gzipBytes(files: ReadonlySet<string>): number {
   return total
 }
 
-function main(): void {
+async function main(): Promise<void> {
   if (!existsSync(MANIFEST)) {
     fail([
       'PERF001: no client build to measure.',
@@ -217,7 +314,44 @@ function main(): void {
     ])
   }
 
+  // The engine half. Ordered AFTER the breach report on purpose: a run that
+  // fails both should print the measurement first, because that is the one a
+  // seller would feel.
+  const rows = await readRatchet()
+  if (rows === null) {
+    console.log(
+      [
+        '',
+        '  ┌─────────────────────────────────────────────────────────────────────┐',
+        '  │ THE ENGINE CROSS-CHECK DID NOT RUN.                                 │',
+        '  │                                                                     │',
+        '  │ ref.ci_ratchet was unreachable, so the only authority in this run   │',
+        '  │ was perf-budgets.json — a file. Loosening a number in it is an edit │',
+        '  │ nobody reviews, which is the failure mode migration 0022 exists to  │',
+        '  │ close. CI needs crm_ci with LOGIN and a password, set out of band,  │',
+        '  │ and its connection string as CI_RATCHET_DATABASE_URL.               │',
+        '  └─────────────────────────────────────────────────────────────────────┘',
+      ].join('\n'),
+    )
+  } else {
+    const problems = compareToEngine(config.budgets, rows)
+    if (problems.length > 0) {
+      fail([
+        'PERF006: perf-budgets.json disagrees with ref.ci_ratchet.',
+        '',
+        ...problems,
+        '',
+        'The engine is the authority. A number that only exists in the file is a',
+        'number nobody ratcheted, and the whole point of 05c 10.0.1 is that loosening',
+        'one stops being something a file edit can do.',
+      ])
+    }
+    console.log(
+      `\n  Engine cross-check: ${config.budgets.length} budgets agree with ref.ci_ratchet.`,
+    )
+  }
+
   console.log('\nAll enforced budgets pass.\n')
 }
 
-main()
+await main()
