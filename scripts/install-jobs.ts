@@ -31,7 +31,56 @@ const SCHEMA = 'pgboss'
 
 const client = postgres(URL_, { max: 1, onnotice: () => {} })
 
+/**
+ * REFUSES to run before migration 0020 — and this is a recovered trap, not a
+ * hypothetical.
+ *
+ * Run in the wrong order, this script BRICKS THE DATABASE. `security.harden()`
+ * fails closed on any schema with no `security.schema_policy` row, migration
+ * 0020 is the migration that classifies `pgboss` as exempt, and several
+ * migrations call `harden()`. So installing pg-boss into a database whose
+ * migrations have not reached 0020 leaves every remaining migration raising
+ * `HR001: relation pgboss.version has no security.table_registry row` — for
+ * ever. There is no forward fix and there are no down migrations. The only
+ * recovery is `npm run db:reset`, which is a new database.
+ *
+ * Found by doing it: one chained command ran `db:jobs` after a `db:migrate`
+ * that had raced the container's startup, and the next migrate attempt could
+ * never succeed. The runbook already said migrate first; a runbook is
+ * documentation, and this is the mechanism.
+ */
+async function refuseIfMigrationsAreBehind(): Promise<void> {
+  // Two steps, because the registry itself arrives in migration 0000: on a
+  // brand-new database the first query would raise instead of refusing, and a
+  // guard that crashes teaches nobody which command to run.
+  const [registry] = await client<{ present: boolean }[]>`
+    SELECT to_regclass('security.schema_policy') IS NOT NULL AS present`
+
+  if (registry?.present) {
+    const [ready] = await client<{ classified: boolean }[]>`
+      SELECT EXISTS (
+        SELECT 1 FROM security.schema_policy WHERE schema_name = ${SCHEMA}
+      ) AS classified`
+
+    if (ready?.classified) return
+  }
+
+  console.error(
+    `\nJOBS003: migrations have not reached 0020, which classifies the "${SCHEMA}"` +
+      `\nschema as exempt from security.harden().` +
+      `\n\nInstalling pg-boss now would leave every remaining migration raising` +
+      `\nHR001 for ever — harden() fails closed on an unclassified schema, and this` +
+      `\nproject has no down migrations. The database would need to be recreated.` +
+      `\n\nRun the migrations first:` +
+      `\n\n  npm run db:migrate && npm run db:jobs\n`,
+  )
+  await client.end()
+  process.exit(1)
+}
+
 async function main(): Promise<void> {
+  await refuseIfMigrationsAreBehind()
+
   const [installed] = await client<{ present: boolean }[]>`
     SELECT EXISTS (
       SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace

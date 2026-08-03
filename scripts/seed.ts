@@ -46,18 +46,37 @@ const SELLERS = [
 ] as const
 
 /**
- * Fold a display name into the local part of an email address.
+ * Where a backdated win lands, anchored to the TENANT BUSINESS timezone.
  *
- * Found by signing in as Tomás Guerra and failing: the first seed produced
- * `tomás@demo.test`, better-auth accepted the sign-up, and then the login form
- * refused to submit it forever. `<input type="email">` validates against the
- * HTML5 grammar, which is ASCII-only before the `@`, so the account existed
- * and no human could ever reach it — `validity.typeMismatch` was true and the
- * browser simply declined to POST, with no error the page could show.
+ * Three timezone rules exist in this product and they are never merged: the
+ * tenant's business zone stamps `period_key`, the user's display zone formats
+ * what a human reads, and the lead's zone decides the legal calling window.
+ * This is the first of the three, and computing these anchors in UTC would put
+ * a 9 p.m. Eastern sale in the wrong day bucket — on the number a seller is
+ * ranked by, on the board a room watches.
  *
- * The demo tenant is the one that runs in front of a customer, and a seat
- * nobody can sign into is the worst possible moment to discover that.
+ * Relative to the CURRENT period boundaries, never a fixed number of days ago:
+ * "seven days back" spans a different set of buckets depending on which day
+ * the seed runs, and a demo whose period selector works on Thursdays is worse
+ * than one that never worked.
  */
+function localAnchor(expression: string): string {
+  return `(SELECT (${expression}) AT TIME ZONE t.business_tz
+             FROM app.tenant t WHERE t.id = app.current_tenant())`
+}
+
+const LOCAL_NOW = `now() AT TIME ZONE t.business_tz`
+
+function backdateFor(index: number): string {
+  // Note what the calendar does to this and what it does not. On a Monday the
+  // week starts today, so `this week` and `today` hold the same wins — that is
+  // the calendar being honest, not the seed failing. What the seed guarantees
+  // is that all-time is strictly bigger than a bounded board.
+  if (index === 1) return localAnchor(`date_trunc('week', ${LOCAL_NOW}) + interval '10 hours'`)
+  if (index === 2) return localAnchor(`date_trunc('month', ${LOCAL_NOW}) + interval '10 hours'`)
+  return localAnchor(`date_trunc('month', ${LOCAL_NOW}) - interval '25 days'`)
+}
+
 /**
  * `Dana Reyes` becomes `Dana R.` — the name the floor sees.
  *
@@ -80,6 +99,19 @@ function publicName(name: string): string {
   return initial ? `${first} ${initial}.` : first
 }
 
+/**
+ * Fold a display name into the local part of an email address.
+ *
+ * Found by signing in as Tomás Guerra and failing: the first seed produced
+ * `tomás@demo.test`, better-auth accepted the sign-up, and then the login form
+ * refused to submit it forever. `<input type="email">` validates against the
+ * HTML5 grammar, which is ASCII-only before the `@`, so the account existed
+ * and no human could ever reach it — `validity.typeMismatch` was true and the
+ * browser simply declined to POST, with no error the page could show.
+ *
+ * The demo tenant is the one that runs in front of a customer, and a seat
+ * nobody can sign into is the worst possible moment to discover that.
+ */
 function emailLocalPart(name: string): string {
   return (name.split(' ')[0] ?? 'user')
     .normalize('NFD')
@@ -223,20 +255,47 @@ async function main(): Promise<void> {
         WHERE p.tenant_id = ${TENANT} AND p.owner_user_id = ${seller.id}
         RETURNING id`
 
-      // Through the real gate: monthly premium in, x12 applied server-side,
-      // ledger appended, projection maintained.
+      if (i === 0) {
+        // Through the real gate: monthly premium in, x12 applied server-side,
+        // ledger appended, projection maintained. The FIRST win of every
+        // seller goes this way, so the seed still proves the path it seeds.
+        await withTenant({ tenantId: TENANT, userId: seller.id }, (tx) =>
+          tx.execute(sql`
+            SELECT app.stage_move(
+              ${opp?.id ?? null}::uuid, ${wonStage}::uuid, 'kanban_drag'::app.moved_via,
+              'human'::app.actor_type, NULL, ${monthly.toString()}::bigint,
+              'monthly'::app.premium_mode, NULL, NULL)`),
+        )
+        continue
+      }
+
+      // The rest are BACKDATED, because protected item 10 requires the seed to
+      // span all four periods and `stage_move` can only stamp now(). Without
+      // this every bucket held the same number — measured, not assumed: day,
+      // week, month and all_time all read $56,717.88 — so the period selector
+      // demonstrated nothing at minute 0:30 and the four ratified empty
+      // states were unreachable copy.
+      //
+      // `stage_move` is still the only path that WRITES A CARD; these move the
+      // card and then append the money with a date, through the same definer
+      // the real path calls. A seed that backfills history is backfilling
+      // history, and saying so beats pretending now() is a business decision.
       await withTenant({ tenantId: TENANT, userId: seller.id }, (tx) =>
         tx.execute(sql`
-          SELECT app.stage_move(
-            ${opp?.id ?? null}::uuid, ${wonStage}::uuid, 'kanban_drag'::app.moved_via,
-            'human'::app.actor_type, NULL, ${monthly.toString()}::bigint,
-            'monthly'::app.premium_mode, NULL, NULL)`),
+          SELECT app.ledger_append(
+            ${seller.id}::uuid, gen_random_uuid(), 'opportunity.won',
+            'sale'::app.ledger_entry_type,
+            app.annualize(${monthly.toString()}::bigint),
+            ${sql.raw(backdateFor(i))},
+            ${opp?.id ?? null}::uuid, ${contact?.id ?? null}::uuid,
+            ${wonStage}::uuid, 'Closed Won', 1::bigint, NULL, NULL, NULL, NULL)`),
       )
     }
 
     console.log(`  ${seller.name}: ${seller.wins.length} closed`)
   }
 
+  await seedReversedSale()
   await seedMyDay()
   await seedOpenPipeline()
 
@@ -280,6 +339,83 @@ async function seedLostReasons(): Promise<void> {
       ON CONFLICT (tenant_id, code) DO NOTHING`
   }
   console.log(`  ${LOST_REASONS.length} loss reasons`)
+}
+
+/**
+ * One sale that was credited and then taken back — protected item 10 asks for
+ * exactly one, *"so corrections can be shown without faking one"*.
+ *
+ * Faking one live is the alternative, and it is the worse one in two ways: it
+ * writes to a customer-facing demo's public board during the meeting, and it
+ * asks the presenter to explain a reversal while performing it. A seeded pair
+ * lets the reversal be READ instead — which is also the only way to show what
+ * the ledger looks like afterwards, since there is no recompute job and the
+ * correction is a compensating append, by design.
+ *
+ * Backdated, so it does not move any bounded board. A reversal on the Today
+ * board mid-demo is a number moving down in front of a room.
+ */
+async function seedReversedSale(): Promise<void> {
+  const seller = SELLERS[1]
+  if (!seller) return
+
+  const monthlyCents = 41_500n
+  // Same deferred import as the win loop: `~/db` reads DATABASE_URL at module
+  // load, and this script connects as the OWNER.
+  const { withTenant } = await import('../app/db')
+
+  const [contact] = await client<{ id: string }[]>`
+    INSERT INTO app.contact (tenant_id, owner_user_id, full_name, created_via)
+    VALUES (${TENANT}, ${seller.id}, 'Wanda Estes', 'manual')
+    RETURNING id`
+
+  // A deal is required, not decoration: `earnings_deal_context_present` refuses
+  // any sale or reversal without an opportunity, a contact, a stage-name
+  // snapshot AND a stage config version. Found by the constraint rejecting the
+  // first version of this function, which is the check doing its job — a money
+  // row with no deal behind it is a number nobody can ever explain.
+  //
+  // Left in an OPEN stage on purpose. That is what a reversed win looks like
+  // afterwards: the card came back out, and the ledger carries both rows.
+  const [openStage] = await client<{ id: string }[]>`
+    SELECT id FROM app.stage
+     WHERE tenant_id = ${TENANT} AND owner_user_id = ${seller.id} AND stage_type = 'open'
+     ORDER BY sort_order LIMIT 1`
+
+  const [opp] = await client<{ id: string }[]>`
+    INSERT INTO app.opportunity
+      (tenant_id, owner_user_id, contact_id, pipeline_id, stage_id, current_stage_type, created_from)
+    SELECT ${TENANT}, ${seller.id}, ${contact?.id ?? null}, p.id, ${openStage?.id ?? null}, 'open', 'manual'
+    FROM app.pipeline p
+    WHERE p.tenant_id = ${TENANT} AND p.owner_user_id = ${seller.id}
+    RETURNING id`
+
+  await withTenant({ tenantId: TENANT, userId: seller.id }, async (tx) => {
+    const rows = await tx.execute<{ entry_id: string }>(sql`
+      SELECT entry_id FROM app.ledger_append(
+        ${seller.id}::uuid, gen_random_uuid(), 'opportunity.won',
+        'sale'::app.ledger_entry_type, app.annualize(${monthlyCents.toString()}::bigint),
+        ${sql.raw(backdateFor(3))},
+        ${opp?.id ?? null}::uuid, ${contact?.id ?? null}::uuid, NULL,
+        'Closed Won', 1::bigint, NULL, NULL, NULL, NULL)`)
+
+    const entryId = rows[0]?.entry_id
+    if (!entryId) throw new Error('the sale to reverse was not appended')
+
+    // NAMES the entry it cancels, which migration 0019 made a constraint
+    // rather than a habit: without the link an undo is indistinguishable from
+    // a correction, takes the correction path, and lands on the public board.
+    await tx.execute(sql`
+      SELECT app.ledger_append(
+        ${seller.id}::uuid, gen_random_uuid(), 'opportunity.reopened',
+        'reversal'::app.ledger_entry_type, -app.annualize(${monthlyCents.toString()}::bigint),
+        ${sql.raw(backdateFor(3))},
+        ${opp?.id ?? null}::uuid, ${contact?.id ?? null}::uuid, NULL,
+        'Closed Won', 1::bigint, NULL,
+        'Policy not taken — first premium never drafted', NULL, ${entryId}::uuid)`)
+  })
+
+  console.log(`  ${seller.name}: 1 sale reversed (net zero, both rows on the ledger)`)
 }
 
 /**

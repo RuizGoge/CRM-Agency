@@ -3,7 +3,9 @@ import { isRouteErrorResponse, useNavigation, useRevalidator, useRouteError } fr
 
 import { BoardSkeleton } from '~/components/leaderboard/board-skeleton'
 import { BoardRow } from '~/components/leaderboard/board-row'
+import { BOARD_EMPTY } from '~/components/leaderboard/empty-copy'
 import { Podium } from '~/components/leaderboard/podium'
+import { fromWireString, isZero } from '~/lib/money/money'
 import { readBoard, type BoardPayload, type Period } from '~/routes/api/leaderboard'
 import { POLL_FAST_MS } from '~/styles/tokens/timing'
 
@@ -79,6 +81,24 @@ export default function Leaderboard({ loaderData }: Route.ComponentProps): React
   const rest = board.rows.slice(3)
   const selfBelowFold = board.self !== null && board.self.rank > 3 && !rest.includes(board.self)
 
+  /**
+   * NOBODY HAS EARNED ANYTHING YET — which is not the same as "there are no
+   * rows", and conflating the two is how the four empty states above became
+   * unreachable copy.
+   *
+   * Migration 0017 made the board start from the ROSTER: every active seller
+   * is listed, including the ones at $0, because the seller with the least to
+   * celebrate was the only one who could not find themselves at all. So on
+   * go-live day `rows` holds fifty names and is not empty — and the state the
+   * §4.10 strings describe is the one where every one of those names reads
+   * $0. That is protected item 9's board exactly: fifty names, fifty $0, the
+   * footnote, and now a line that says what happens next.
+   *
+   * Read off `floorTotalCents`, which is zero precisely when every row is, and
+   * through the money module's own predicate rather than a string comparison.
+   */
+  const nothingEarnedYet = isZero(fromWireString(board.floorTotalCents))
+
   return (
     <main
       style={{ maxWidth: '48rem', margin: '0 auto', padding: 'var(--space-10) var(--space-6)' }}
@@ -127,6 +147,15 @@ export default function Leaderboard({ loaderData }: Route.ComponentProps): React
           <EmptyBoard period={board.period} />
         ) : (
           <>
+            {/* ABOVE the roster, never instead of it. US-9.5 wants every
+                active seller listed with nobody hidden, so this teaches and
+                the names stay. */}
+            {nothingEarnedYet ? (
+              <div style={{ marginBottom: 'var(--space-6)' }}>
+                <EmptyBoard period={board.period} />
+              </div>
+            ) : null}
+
             <Podium top={top} />
 
             <ul
@@ -204,6 +233,19 @@ export default function Leaderboard({ loaderData }: Route.ComponentProps): React
           </p>
         ) : null}
 
+        {/* `lb.footnote.period_boundary`, and §4.8 calls it "the one place
+            tenant_business_tz renders as a word". A bounded board is a
+            question about WHEN it resets, and a seller in Phoenix reading a
+            Today board stamped in the agency's timezone will otherwise answer
+            it with their own — which is the wrong answer by up to three hours
+            on the number they are judged by. All time has no boundary, so it
+            gets no line. */}
+        {board.period === 'all_time' ? null : (
+          <p style={{ margin: 0, fontSize: 'var(--type-xs)', color: 'var(--color-text-tertiary)' }}>
+            Periods reset at midnight, agency time.
+          </p>
+        )}
+
         {/* Only on the seeded tenant, and it says so in the seller's words
             rather than in a flag name. */}
         {board.isDemo ? (
@@ -225,29 +267,36 @@ export default function Leaderboard({ loaderData }: Route.ComponentProps): React
 }
 
 function EmptyBoard({ period }: { period: Period }): React.JSX.Element {
+  const [headline, body] = BOARD_EMPTY[period]
+
   return (
     <div
       style={{
-        padding: 'var(--space-10) var(--space-6)',
+        padding: 'var(--space-8) var(--space-6)',
         textAlign: 'center',
         background: 'var(--color-surface-1)',
         border: '1px dashed var(--color-border-default)',
         borderRadius: 'var(--radius-lg)',
       }}
     >
-      <p style={{ fontSize: 'var(--type-lg)', fontWeight: 'var(--font-weight-semibold)' }}>
-        {period === 'all_time' ? 'No Earnings yet' : 'Nothing closed in this period yet'}
+      <p
+        style={{
+          margin: 0,
+          fontSize: 'var(--type-lg)',
+          fontWeight: 'var(--font-weight-semibold)',
+        }}
+      >
+        {headline}
       </p>
       <p
         style={{
+          margin: 0,
           marginTop: 'var(--space-2)',
           fontSize: 'var(--type-sm)',
           color: 'var(--color-text-secondary)',
         }}
       >
-        {period === 'all_time'
-          ? 'The board fills in as deals reach a stage that counts toward Earnings.'
-          : 'Try All time to see the full history.'}
+        {body}
       </p>
     </div>
   )

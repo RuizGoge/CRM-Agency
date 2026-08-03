@@ -102,7 +102,7 @@
       "test": null,
       "missing": [
         "DONE: the board includes a seller with no ledger row at $0 (migration 0017 fixed the join that hid them); the permanent 'The board starts at go-live' footnote; the 'Earnings tracked since' label; and the 'Demo tenant — these numbers are seeded' note. All asserted by honest-board.spec.ts.",
-        "Absent: the distinct per-period empty copy (all-time vs a period reads differently, but the four periods do not each have their own line yet).",
+        "DONE: the four ratified per-period empty states (lb.empty.alltime/.today/.week/.month) plus lb.footnote.period_boundary. The four sentences are guarded mechanically by empty-copy.test.ts — a collapse back into one interpolated string fails the build — and board-periods.spec.ts asserts which tab shows the boundary footnote and that the period selector actually changes the board. The empty block hangs off the floor total, not off rows.length, because the roster join means rows is never empty once a tenant has sellers.",
         "Absent: the today activity strip — dials, contacts, appointments set — which is the ONLY number that moves before the first sale. It counts from call.completed on any outcome, so it needs the Aloware module."
       ]
     },
@@ -116,6 +116,7 @@
         "DONE: the persistent 'Demo' chip in the shell, which survives navigation across all three screens, and the seeded-numbers footnote on the board. Both asserted by honest-board.spec.ts, and the seed now sets tenant.is_demo.",
         "DONE: the four-item first-run checklist, asserted by first-run-checklist.spec.ts — the ratified labels in order, the absence of any 'mark done' control, the auto-check reading real data, 44px rows, and the collapse at four of four. CAVEAT, stated rather than hidden: item 1 cannot complete because aloware_number_mapping does not exist, so the collapse is proven against a stubbed setup read, and item 4's granted path is proven against a stubbed Notification object because headless Chromium reports 'denied' whatever the test grants.",
         "DONE earlier: My Day renders its four sections with counts in the header, and the seed is separately tenanted and refuses to run twice.",
+        "DONE, and neither was ever recorded as missing: the seed now SPANS ALL FOUR PERIODS and includes ONE REVERSAL, both named by §1529. Every seeded win used to land on now() because stage_move can only stamp now(), so day, week, month and all-time held one identical number and the period selector demonstrated nothing at minute 0:30. The first win of each seller still goes through the real gate; the rest are backdated through ledger_append, anchored to the CURRENT period boundaries in the tenant business timezone rather than to a fixed number of days.",
         "Absent: the seed refuses to DUPLICATE but not to run in a live environment — that needs system_constant, which does not exist."
       ]
     }
