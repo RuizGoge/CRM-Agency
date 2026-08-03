@@ -49,6 +49,27 @@ Evidencia completa: [`docs/sprint-0/g0-us-region.md`](docs/sprint-0/g0-us-region
 - **Dos aserciones más que agregó la suite:** un supervisor obtiene lectura global **pero la escritura le sigue siendo rechazada** (`USING` pasa, `WITH CHECK` falla — esa asimetría *es* el modelo de autorización, y es lo que hace que el caso del supervisor sea 403 y no un not-found), y el enum `user_role` tiene **exactamente tres etiquetas**, la forma mecánica de "no hay constructor de roles ni matriz de permisos".
 - **También pendiente:** el trigger que rechaza `is_demo=true` en producción (necesita `system_constant`, que aún no existe) y la validación de `display_tz` en `app_user`.
 
+### 🔴🟢 La PRIMERA corrida del CI, y falló en 29 segundos (2026-08-02)
+`package-lock.json`, `.github/workflows/verify.yml`.
+
+**El repositorio por fin tiene remoto** — `github.com/RuizGoge/CRM-Agency`, privado, 44 commits. Y el CI, que nunca se había ejecutado, **falló a los 29 segundos**: demasiado rápido para ser un test, así que murió en el arranque.
+
+🎯 **Diagnosticado reproduciéndolo, no leyendo el log** (que no tenía a mano): corrí el `npm ci` del CI dentro de un contenedor `node:24` con Docker, que es exactamente lo que hace el runner. Falló idéntico:
+
+```
+npm error code EUSAGE
+npm ci can only install packages when your package.json and
+package-lock.json are in sync.
+Missing: @emnapi/core@2.0.0-alpha.3 from lock file
+Missing: @emnapi/runtime@2.0.0-alpha.3 from lock file
+```
+
+**El lockfile se generó en Windows y le faltaban dos dependencias transitivas que npm sólo resuelve fuera de Windows.** `npm install` local nunca se quejó —resuelve lo que su plataforma necesita—; **`npm ci` es estricto por diseño y se niega**. El lockfile estuvo así todo el proyecto y nada podía notarlo, porque nunca había corrido en Linux.
+
+- **Regenerado dentro del contenedor Linux y verificado en las DOS plataformas antes de aplicarlo:** 458 → 460 entradas, **exactamente las dos que faltaban agregadas, cero quitadas, las 13 entradas de `win32` intactas**. `npm ci` real en Linux: exit 0. `npm ci --dry-run` en Windows: verde.
+- ⚠️ **Y una segunda divergencia encontrada al comparar, que el propio workflow desmentía.** Su comentario decía *"la misma imagen que usa el compose local"* — cierto para la imagen, **falso para la configuración**: el compose local crea el cluster con `--locale-provider=icu --icu-locale=en-US` y el CI lo creaba con locale de libc. **Ordenamiento y comparación difieren entre los dos**, así que un `ORDER BY` correcto local podía ser distinto en CI — o peor, correcto en CI y equivocado en la pantalla de un vendedor. Agregado a los dos bloques de servicio.
+- **Lección de método:** con Docker disponible, **reproducir el entorno del CI es más rápido que conseguir su log** — y da un ciclo de corrección que no depende de esperar a nadie.
+
 ### 🧯 `db:generate` se niega mientras la cadena de snapshots esté atrasada (2026-08-02)
 `scripts/guard-db-generate.ts`, `package.json`.
 
@@ -868,7 +889,7 @@ npm run db:reset && npm run db:up && npm run db:migrate && npm run db:seed
 
 ⚠️ **Pero el demo se vuelve a derivar cada vez que corrés `npm run test:e2e`, y eso es por diseño.** `celebration.spec.ts` lo dice en su propio encabezado: cerrar un trato *es* lo que ese spec prueba y no existe versión que no toque el ledger, así que **cada corrida deja una venta real de $310 × 12 = $3.720** en el vendedor con el que entra. El ledger es append-only y **no hay job de recomputo**, por diseño. **Antes de un demo comercial, reseteá** con el bloque de arriba; el CI corre el e2e contra su propia base efímera, así que allá no importa.
 
-⚠️ **ESTE REPOSITORIO SIGUE SIN REMOTO** — pendiente de Jorge al 2026-08-02. **Decidido:** va a GitHub bajo `RuizGoge`, **privado** (los repos privados igual tienen cuota gratuita de Actions; el control de costo sigue siendo la ausencia de método de pago, §9.4.1). Falta sólo el paso manual: crear el repo **vacío** en github.com/new —sin README, sin .gitignore, sin licencia, porque cualquiera de los tres fuerza un merge antes del primer push— y después `git remote add origin <url> && git push -u origin master`. El workflow ya dispara sobre `[master, main]`, así que no hace falta renombrar la rama. **Hasta que eso pase: no hay copia fuera de este disco, y el CI de GitHub Actions nunca se ejecutó** — o sea que *"el build se pone rojo"* sigue sin haberlo visto nadie más que esta máquina.
+✅ **REMOTO CREADO Y EMPUJADO el 2026-08-02:** `github.com/RuizGoge/CRM-Agency`, privado, `master` rastreando `origin/master`. El CI corrió por primera vez. (Texto histórico abajo.) ~~ESTE REPOSITORIO SIGUE SIN REMOTO~~ — pendiente de Jorge al 2026-08-02. **Decidido:** va a GitHub bajo `RuizGoge`, **privado** (los repos privados igual tienen cuota gratuita de Actions; el control de costo sigue siendo la ausencia de método de pago, §9.4.1). Falta sólo el paso manual: crear el repo **vacío** en github.com/new —sin README, sin .gitignore, sin licencia, porque cualquiera de los tres fuerza un merge antes del primer push— y después `git remote add origin <url> && git push -u origin master`. El workflow ya dispara sobre `[master, main]`, así que no hace falta renombrar la rama. **Hasta que eso pase: no hay copia fuera de este disco, y el CI de GitHub Actions nunca se ejecutó** — o sea que *"el build se pone rojo"* sigue sin haberlo visto nadie más que esta máquina.
 
 ### Decisiones abiertas que Jorge confirma cuando quiera (ninguna bloquea la escritura; van con mi recomendación): propiedad del registro 10DLC (agencia del cliente vs nuestra); grabación de llamadas si el aviso no se dispara en el two-legged → *reco: desactivar a nivel de cuenta*; retención de payloads crudos → *reco: 60 días*; atajos de una tecla → *reco: apagados por defecto los primeros 30 días*; Sentry Team USD 26 pre-aprobado para activar el día del primer incidente; confirmar que sin email no hay reset de contraseña autogestionado; y si habrá una 2ª persona con acceso en 12 meses (**+USD 25/mes planos** — corregido en G0 desde el "+USD 51" que decía antes; Render reemplazó sus planes de workspace el 2026-04-23 y Pro dejó de cobrar por asiento. La prohibición de §9.4.5 no cambia, solo su aritmética).
 4. **Sprint 0 — primer ítem, antes de crear ningún recurso:** verificar región EE.UU. en el plan de hosting a contratar. Si falla, la decisión de stack se da vuelta hacia Rails/DigitalOcean.

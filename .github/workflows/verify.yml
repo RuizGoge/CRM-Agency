@@ -40,6 +40,13 @@ jobs:
           POSTGRES_USER: crm
           POSTGRES_PASSWORD: crm
           POSTGRES_DB: crm_dev
+          # The SAME initdb arguments the local compose file uses. Without them
+          # CI builds its cluster with libc collation while development builds
+          # it with ICU, and ordering and comparison differ between the two —
+          # so a sort that is correct locally could be wrong here, or worse,
+          # correct here and wrong on a seller's screen. Development is supposed
+          # to train the production configuration with perfect fidelity.
+          POSTGRES_INITDB_ARGS: '--locale-provider=icu --icu-locale=en-US'
         ports:
           - 5432:5432
         options: >-
@@ -89,6 +96,13 @@ jobs:
           POSTGRES_USER: crm
           POSTGRES_PASSWORD: crm
           POSTGRES_DB: crm_dev
+          # The SAME initdb arguments the local compose file uses. Without them
+          # CI builds its cluster with libc collation while development builds
+          # it with ICU, and ordering and comparison differ between the two —
+          # so a sort that is correct locally could be wrong here, or worse,
+          # correct here and wrong on a seller's screen. Development is supposed
+          # to train the production configuration with perfect fidelity.
+          POSTGRES_INITDB_ARGS: '--locale-provider=icu --icu-locale=en-US'
         ports:
           - 5432:5432
         options: >-
