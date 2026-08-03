@@ -49,6 +49,18 @@ Evidencia completa: [`docs/sprint-0/g0-us-region.md`](docs/sprint-0/g0-us-region
 - **Dos aserciones más que agregó la suite:** un supervisor obtiene lectura global **pero la escritura le sigue siendo rechazada** (`USING` pasa, `WITH CHECK` falla — esa asimetría *es* el modelo de autorización, y es lo que hace que el caso del supervisor sea 403 y no un not-found), y el enum `user_role` tiene **exactamente tres etiquetas**, la forma mecánica de "no hay constructor de roles ni matriz de permisos".
 - **También pendiente:** el trigger que rechaza `is_demo=true` en producción (necesita `system_constant`, que aún no existe) y la validación de `display_tz` en `app_user`.
 
+### 🧯 `db:generate` se niega mientras la cadena de snapshots esté atrasada (2026-08-02)
+`scripts/guard-db-generate.ts`, `package.json`.
+
+La deuda que encontré al hacer 0022 era **una trampa cargada, no una molestia**. drizzle-kit genera una migración **diffeando los archivos de esquema contra el snapshot MÁS NUEVO**; el más nuevo es 0018 y desde entonces hay **cinco** migraciones escritas a mano, dos de las cuales **alteraron tablas** (0019 sumó constraints a `earnings_ledger`, 0020 sumó `scheduled_job.claimed_at`). Ninguna quedó en un snapshot.
+
+Correr `db:generate` habría emitido una migración que **re-agrega objetos que ya existen o dropea los que no puede explicarse** — contra una base cuya regla es que **no hay migraciones de vuelta: el rollback es la imagen anterior**. O sea que no es algo que se deshaga.
+
+- **Convertido en una negativa con instrucciones (`DBGEN003`), misma postura que `BOOT002` y `JOBS002`.** Nombra el snapshot más nuevo, la migración más nueva, y lista las cinco escritas a mano.
+- **Bloquea el GENERADOR, no el trabajo.** Seguir escribiendo SQL a mano —que es lo que hicieron las últimas cinco— no toca este guard.
+- 🎯 **Probado por los dos lados:** con la cadena sincronizada sale 0; desincronizada sale 1. Un guard que siempre dispara se termina borrando.
+- **No estaba roto hoy sólo porque nadie había corrido el comando.** Esa es la definición de trampa cargada.
+
 ### 🚦 La tensión del loader SSR: eran TRES, no dos (2026-08-02)
 `contracts/ui-loader-whitelist.json`, `scripts/ui-loader-whitelist.test.ts`, migración **0023**. **6 tests nuevos.** Total: **163**.
 
@@ -819,7 +831,7 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 
 ### 🧾 DEUDA TÉCNICA DECLARADA (no perder de vista)
 - **E9 está firmada pero NO implementada:** no existe `ref.capability_probe`. Llega con el módulo Aloware.
-- ⚠️ **Snapshots de Drizzle desenganchados desde 0018.** 0019–0022 son SQL a mano y dos de ellas alteraron tablas sin snapshot. **`npm run db:generate` no es seguro de correr** hasta reconciliarlo: compararía contra un estado cuatro migraciones viejo.
+- 🟢 **Snapshots de Drizzle desenganchados desde 0018** — 0019–0023 son SQL a mano y dos alteraron tablas. **Ya no es una trampa: `npm run db:generate` se NIEGA (`DBGEN003`)** nombrando el desfase. Reconciliar la cadena sigue pendiente, pero ahora es una decisión y no un accidente.
 - **R13 abierto:** `raw_payload_vault` purga por drop de partición mientras `dead_letter` tiene FK hacia ella.
 - **Loaders SSR fuera de presupuesto:** §1.2 sanciona **uno** (el pipeline) y hay **tres**. Enumerados en `contracts/ui-loader-whitelist.json` y acotados por el ratchet `ui.loader_whitelist`. **Falta la decisión de cuál sacar** — My Day es el que el registro pide por su propio texto; el leaderboard cuesta el primer pintado del demo.
 - **`lead_source_id` omitido** en `contact` a propósito; llega con el módulo de intake.
