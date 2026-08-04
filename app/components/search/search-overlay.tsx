@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 
 import { MIN_QUERY_LENGTH } from '~/lib/search/query'
+import type { QuickAddResult } from '~/routes/api/quick-add'
 import type { SearchPayload } from '~/routes/api/search'
 
 /**
@@ -53,6 +54,8 @@ export function SearchOverlay(): React.JSX.Element | null {
   const [query, setQuery] = useState('')
   const [answer, setAnswer] = useState<Answer | null>(null)
   const [highlight, setHighlight] = useState(0)
+  /** The quick-add sheet, opened from the empty state with the number in hand. */
+  const [adding, setAdding] = useState<string | null>(null)
 
   const inputRef = useRef<HTMLInputElement | null>(null)
   /** Whatever had focus when the overlay opened. Escape gives it back. */
@@ -63,6 +66,7 @@ export function SearchOverlay(): React.JSX.Element | null {
     setOpen(false)
     setQuery('')
     setAnswer(null)
+    setAdding(null)
     // RESTORE, and only if the element is still in the document — a card that
     // was dragged away while the overlay was open is not somewhere to return
     // to, and focusing a detached node silently does nothing.
@@ -186,6 +190,17 @@ export function SearchOverlay(): React.JSX.Element | null {
           overflow: 'hidden',
         }}
       >
+        {adding !== null ? (
+          <QuickAdd
+            phone={adding}
+            onCancel={() => setAdding(null)}
+            onCreated={(contactId) => {
+              close()
+              void navigate(`/contacts/${contactId}`)
+            }}
+          />
+        ) : null}
+
         <input
           ref={inputRef}
           value={query}
@@ -207,10 +222,16 @@ export function SearchOverlay(): React.JSX.Element | null {
             background: 'transparent',
             fontSize: 'var(--type-md)',
             outline: 'none',
+            display: adding === null ? 'block' : 'none',
           }}
         />
 
-        <div id="search-results" role="listbox" aria-label="Results">
+        <div
+          id="search-results"
+          role="listbox"
+          aria-label="Results"
+          style={{ display: adding === null ? undefined : 'none' }}
+        >
           {!searching ? (
             <Teaching
               headline="Search your book"
@@ -239,6 +260,11 @@ export function SearchOverlay(): React.JSX.Element | null {
                 headline="No matches in your book"
                 body="Add this number and start a deal in one step."
                 action={current.result.asPhone === null ? null : 'Quick-add this number'}
+                onAction={
+                  current.result.asPhone === null
+                    ? undefined
+                    : () => setAdding(current.result.asPhone)
+                }
               />
             )
           ) : null}
@@ -310,10 +336,12 @@ function Teaching({
   headline,
   body,
   action,
+  onAction,
 }: {
   headline: string
   body: string
   action?: string | null
+  onAction?: (() => void) | undefined
 }): React.JSX.Element {
   return (
     <div style={{ padding: 'var(--space-6) var(--space-5)' }}>
@@ -336,20 +364,25 @@ function Teaching({
       >
         {body}
       </p>
-      {action == null ? null : (
-        <p
+      {action == null || onAction === undefined ? null : (
+        <button
+          type="button"
+          onClick={onAction}
           style={{
-            margin: 0,
             marginTop: 'var(--space-3)',
+            minHeight: 'var(--size-target-min)',
+            padding: 'var(--space-2) var(--space-4)',
+            borderRadius: 'var(--radius-md)',
+            border: 0,
+            background: 'var(--color-action-primary-bg)',
+            color: 'var(--color-action-primary-fg)',
             fontSize: 'var(--type-sm)',
             fontWeight: 'var(--font-weight-semibold)',
-            color: 'var(--color-text-tertiary)',
+            cursor: 'pointer',
           }}
         >
-          {/* Named but not wired: quick-add does not exist yet, and a button
-              that does nothing is worse than a line that says what is coming. */}
           {action}
-        </p>
+        </button>
       )}
     </div>
   )
@@ -374,3 +407,194 @@ function ResultSkeleton(): React.JSX.Element {
     </div>
   )
 }
+
+/**
+ * `Quick-add lead` — the far end of the loop section 7 opens.
+ *
+ * The seller searched a number, it was not in the book, and the one thing the
+ * product knows for certain is the number. It arrives PREFILLED and read-only
+ * for that reason: retyping it is the step that makes a seller close the sheet
+ * and decide to do it later.
+ *
+ * TWO FIELDS, NOT FOUR. 4.11 ratifies `Name / Phone / Lead source / Note`, and
+ * the two that are missing are missing honestly: `lead_source_id` is deferred
+ * to the intake module and the `activity_type` enum has no `note` label, so
+ * neither has a column to land in. A field that silently discards what a
+ * seller typed is worse than a field that is not there.
+ *
+ * `Save`, not `Save & call` — 4.11 makes the dialling variant primary and it
+ * needs the Aloware gate, which does not exist. Shipping `Save & call` as a
+ * button that saves and does not call would be the one lie this sheet could
+ * tell.
+ */
+function QuickAdd({
+  phone,
+  onCancel,
+  onCreated,
+}: {
+  phone: string
+  onCancel: () => void
+  onCreated: (contactId: string) => void
+}): React.JSX.Element {
+  const [name, setName] = useState('')
+  const [result, setResult] = useState<QuickAddResult | null>(null)
+  const [saving, setSaving] = useState(false)
+  const nameRef = useRef<HTMLInputElement | null>(null)
+
+  useEffect(() => {
+    nameRef.current?.focus()
+  }, [])
+
+  const save = useCallback((): void => {
+    setSaving(true)
+    const body = new FormData()
+    body.set('name', name)
+    body.set('phone', phone)
+
+    void fetch('/api/quick-add', { method: 'POST', body })
+      .then(async (response) => (await response.json()) as QuickAddResult)
+      .then(
+        (answer) => {
+          setSaving(false)
+          setResult(answer)
+          if (answer.status === 'created') onCreated(answer.contactId)
+        },
+        () => setSaving(false),
+      )
+  }, [name, phone, onCreated])
+
+  return (
+    <div style={{ padding: 'var(--space-5)' }}>
+      <h2
+        style={{ margin: 0, fontSize: 'var(--type-md)', fontWeight: 'var(--font-weight-semibold)' }}
+      >
+        Quick-add lead
+      </h2>
+
+      <label style={{ display: 'block', marginTop: 'var(--space-4)' }}>
+        <span style={{ fontSize: 'var(--type-xs)', color: 'var(--color-text-tertiary)' }}>
+          Name
+        </span>
+        <input
+          ref={nameRef}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') save()
+          }}
+          style={FIELD}
+        />
+      </label>
+
+      <label style={{ display: 'block', marginTop: 'var(--space-3)' }}>
+        <span style={{ fontSize: 'var(--type-xs)', color: 'var(--color-text-tertiary)' }}>
+          Phone
+        </span>
+        {/* Read-only: it is the one fact the search already established, and
+            re-entering it is how a seller decides to do this later. */}
+        <input value={phone} readOnly style={{ ...FIELD, color: 'var(--color-text-secondary)' }} />
+      </label>
+
+      {/* The inline block section 7 names, and it is what a CONSTRAINT looks
+          like on screen: the duplicate was never written, and this says whose
+          it is. */}
+      {result?.status === 'duplicate' ? (
+        <div
+          role="status"
+          style={{
+            marginTop: 'var(--space-3)',
+            padding: 'var(--space-3)',
+            borderRadius: 'var(--radius-md)',
+            background: 'var(--color-caution-fill)',
+            border: '1px solid var(--color-caution-stroke)',
+          }}
+        >
+          <p style={{ margin: 0, fontSize: 'var(--type-sm)', color: 'var(--color-caution-text)' }}>
+            {result.name === ''
+              ? 'That number is already in use.'
+              : `You already have ${result.name} with this number.`}
+          </p>
+          {result.contactId === '' ? null : (
+            <button
+              type="button"
+              onClick={() => onCreated(result.contactId)}
+              style={{
+                marginTop: 'var(--space-2)',
+                minHeight: 'var(--size-target-min)',
+                padding: 0,
+                border: 0,
+                background: 'transparent',
+                color: 'var(--color-text-link)',
+                fontSize: 'var(--type-sm)',
+                fontWeight: 'var(--font-weight-semibold)',
+                cursor: 'pointer',
+              }}
+            >
+              Open existing
+            </button>
+          )}
+        </div>
+      ) : null}
+
+      {result?.status === 'invalid' ? (
+        <p
+          style={{
+            marginTop: 'var(--space-3)',
+            fontSize: 'var(--type-sm)',
+            color: 'var(--color-danger-text)',
+          }}
+        >
+          {result.reason === 'name' ? 'Add a name for this lead.' : 'That is not a phone number.'}
+        </p>
+      ) : null}
+
+      <div style={{ display: 'flex', gap: 'var(--space-2)', marginTop: 'var(--space-4)' }}>
+        <button
+          type="button"
+          onClick={save}
+          disabled={saving}
+          style={{
+            minHeight: 'var(--size-target-min)',
+            padding: 'var(--space-2) var(--space-4)',
+            borderRadius: 'var(--radius-md)',
+            border: 0,
+            background: 'var(--color-action-primary-bg)',
+            color: 'var(--color-action-primary-fg)',
+            fontSize: 'var(--type-sm)',
+            fontWeight: 'var(--font-weight-semibold)',
+            cursor: 'pointer',
+          }}
+        >
+          Save
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          style={{
+            minHeight: 'var(--size-target-min)',
+            padding: 'var(--space-2) var(--space-4)',
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--color-action-secondary-border)',
+            background: 'var(--color-action-secondary-bg)',
+            color: 'var(--color-action-secondary-fg)',
+            fontSize: 'var(--type-sm)',
+            cursor: 'pointer',
+          }}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  )
+}
+
+const FIELD = {
+  display: 'block',
+  width: '100%',
+  marginTop: 'var(--space-1)',
+  padding: 'var(--space-2) var(--space-3)',
+  borderRadius: 'var(--radius-md)',
+  border: '1px solid var(--color-border-default)',
+  background: 'var(--color-surface-1)',
+  fontSize: 'var(--type-md)',
+} as const

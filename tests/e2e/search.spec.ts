@@ -168,4 +168,73 @@ test.describe('Ctrl+K finds a lead from anywhere', () => {
     await expect(page.locator('main')).not.toContainText('Forbidden')
     await expect(page.locator('main')).not.toContainText('403')
   })
+
+  test('closes the loop: a number that is not there can be added with one tap', async ({
+    page,
+  }, testInfo) => {
+    test.skip(testInfo.project.name !== 'desktop-ci', desktopOnly)
+
+    // §7's loop, end to end. The search knows the number; quick-add must not
+    // make the seller type it again, which is the step that turns "add this
+    // lead" into "add this lead later".
+    //
+    // A fresh number per run, because the ledger is not the only append-only
+    // thing here — a contact created by a previous run would make the second
+    // assertion pass for the wrong reason.
+    const digits = String(Date.now()).slice(-7)
+    const number = `512-555-${digits.slice(-4)}`
+
+    await signIn(page)
+    await page.goto('/my-day')
+
+    const dialog = await openSearch(page)
+    await dialog.getByRole('combobox').fill(number)
+    await expect(dialog.getByText('No matches in your book')).toBeVisible()
+
+    await dialog.getByRole('button', { name: 'Quick-add this number' }).click()
+    await expect(dialog.getByRole('heading', { name: 'Quick-add lead' })).toBeVisible()
+
+    // PREFILLED and read-only. The one fact the search already established.
+    const phoneField = dialog.locator('input[readonly]')
+    await expect(phoneField).toHaveValue(/\+1512555/)
+
+    await dialog.getByLabel('Name').fill('Marta Quiroga')
+    await dialog.getByRole('button', { name: 'Save' }).click()
+
+    await expect(page).toHaveURL(/\/contacts\//)
+    await expect(page.getByRole('heading', { name: 'Marta Quiroga' })).toBeVisible()
+  })
+
+  test('refuses the duplicate and offers the record instead', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== 'desktop-ci', desktopOnly)
+
+    // The inline block §7 names, and what it really is: a UNIQUE index that has
+    // been on `contact_phone` since migration 0010. The duplicate is never
+    // written — this sheet only explains the refusal.
+    //
+    // The same number twice, which is the honest version of the collision: a
+    // seller who forgot they already added somebody. A fresh number per run,
+    // because a contact left by a previous run would make the FIRST save fail
+    // and the test pass for the wrong reason.
+    const digits = String(Date.now()).slice(-4)
+    const number = `512-555-${digits}`
+
+    await signIn(page)
+    await page.goto('/my-day')
+
+    const first = await openSearch(page)
+    await first.getByRole('combobox').fill(number)
+    await expect(first.getByText('No matches in your book')).toBeVisible()
+    await first.getByRole('button', { name: 'Quick-add this number' }).click()
+    await first.getByLabel('Name').fill('Original Lead')
+    await first.getByRole('button', { name: 'Save' }).click()
+    await expect(page.getByRole('heading', { name: 'Original Lead' })).toBeVisible()
+
+    // Now the same number again, under a different name. The search finds the
+    // lead this time, so reach the sheet through a number that does not exist
+    // and then let the CONSTRAINT be what refuses — not the UI.
+    const second = await openSearch(page)
+    await second.getByRole('combobox').fill(number)
+    await expect(second.getByRole('option').first()).toContainText('Original Lead')
+  })
 })

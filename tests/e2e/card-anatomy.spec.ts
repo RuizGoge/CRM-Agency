@@ -64,12 +64,20 @@ test.describe('every card is exactly one height', () => {
 
     // Element ⑤ of the anatomy, and §2.4 gives zero its own sentence on
     // purpose: `Not called yet` is a state a seller acts on this morning, and
-    // `0 attempts` is a field they read past. The seeded board has never been
-    // dialled, so this is the branch it renders.
+    // `0 attempts` is a field they read past.
+    //
+    // 🔴 ANCHORED TO RUTH, not to `.first()`. The board sorts by
+    // `stage_entered_at DESC`, so the first card is whichever one was moved
+    // most recently — and moving a card is what half the other specs do. The
+    // original passed only while nothing in the suite had ever dragged
+    // anything, which made it a test whose result depended on the history of
+    // the database rather than on the copy it was written to protect. Ruth is
+    // the one seeded lead with zero attempts, by name.
     await signIn(page)
     await page.goto('/board')
 
-    await expect(page.locator('main article').first()).toContainText('Not called yet')
+    const ruth = page.locator('main article').filter({ hasText: 'Ruth Alvarez' })
+    await expect(ruth).toContainText('Not called yet')
     await expect(page.locator('main').getByText('0 attempts')).toHaveCount(0)
   })
 

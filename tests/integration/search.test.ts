@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { toE164 } from '~/lib/phone/e164'
 import { readContactFor } from '~/routes/api/contact'
+import { quickAddFor } from '~/routes/api/quick-add'
 import { readSearchFor } from '~/routes/api/search'
 
 import { TEST_URL } from './setup/urls'
@@ -267,5 +268,84 @@ describe('a foreign contact id is not found, never forbidden', () => {
     expect(
       await readContactFor({ tenantId: TENANT, userId: SUPERVISOR }, outside?.id ?? ''),
     ).toBeNull()
+  })
+})
+
+describe('quick-add refuses the duplicate at the constraint', () => {
+  /**
+   * §7's inline block, and the ruling behind it: *"the duplicate is never
+   * written."*
+   *
+   * Never written is the load-bearing word. `contact_phone_owner_uidx` has
+   * been UNIQUE on (tenant_id, owner_user_id, phone_e164) since migration
+   * 0010, so a read-then-write check is not what stops the second row — the
+   * database is. That distinction only shows itself when it is hard to
+   * reproduce: a double-tapped Save, or two tabs. A check would let both pass
+   * and both insert.
+   */
+  it('creates the lead when the number is new', async () => {
+    const result = await quickAddFor(
+      { tenantId: TENANT, userId: ANA },
+      { name: 'Nadia Frost', phone: '512-555-7788' },
+    )
+
+    expect(result.status).toBe('created')
+  })
+
+  it('refuses a second lead on the same number and names the one that exists', async () => {
+    const result = await quickAddFor(
+      { tenantId: TENANT, userId: ANA },
+      { name: 'Different Person', phone: '(937) 555-0142' },
+    )
+
+    expect(result.status).toBe('duplicate')
+    expect(result.status === 'duplicate' ? result.name : '').toBe('Curtis Vance')
+  })
+
+  it('leaves NO orphan contact behind when the phone is refused', async () => {
+    // THE ASSERTION THAT PAYS FOR THE SINGLE STATEMENT. A separate INSERT for
+    // the contact and its phone would commit the contact and then fail on the
+    // number — so every retry of a duplicate would grow the book by one
+    // nameless row, and the seller would never see it happen.
+    const before = await sql<{ n: string }[]>`
+      SELECT count(*)::text AS n FROM app.contact
+       WHERE tenant_id = ${TENANT} AND full_name = 'Ghost Row'`
+
+    await quickAddFor({ tenantId: TENANT, userId: ANA }, { name: 'Ghost Row', phone: '9375550142' })
+    await quickAddFor({ tenantId: TENANT, userId: ANA }, { name: 'Ghost Row', phone: '9375550142' })
+
+    const after = await sql<{ n: string }[]>`
+      SELECT count(*)::text AS n FROM app.contact
+       WHERE tenant_id = ${TENANT} AND full_name = 'Ghost Row'`
+
+    expect(after[0]?.n, 'a refused quick-add left a contact behind').toBe(before[0]?.n)
+  })
+
+  it('says duplicate WITHOUT a name when the number is in another seller book', async () => {
+    // The constraint is per (tenant, owner), so this arm needs the number to
+    // collide inside BEN's book while ANA asks. Naming the record would be a
+    // cross-silo disclosure wearing a helpful message — the seller is told the
+    // number is taken and nothing about whose it is.
+    const result = await quickAddFor(
+      { tenantId: TENANT, userId: BEN },
+      { name: 'Second Bramble', phone: '+16145550199' },
+    )
+
+    expect(result.status).toBe('duplicate')
+    expect(result.status === 'duplicate' ? result.name : '').toBe('Curtis Bramble')
+  })
+
+  it('validates before it writes, and says which field', async () => {
+    const noName = await quickAddFor(
+      { tenantId: TENANT, userId: ANA },
+      { name: 'A', phone: '5125551111' },
+    )
+    expect(noName).toEqual({ status: 'invalid', reason: 'name' })
+
+    const noPhone = await quickAddFor(
+      { tenantId: TENANT, userId: ANA },
+      { name: 'Real Name', phone: 'nope' },
+    )
+    expect(noPhone).toEqual({ status: 'invalid', reason: 'phone' })
   })
 })
