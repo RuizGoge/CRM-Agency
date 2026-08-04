@@ -113,6 +113,41 @@
         "GATE 11 IS HALF CLOSED. The bundle half is measured and enforced; the",
         "time-to-interactive half is not."
       ]
+    },
+    {
+      "id": "N13",
+      "name": "perf.N13_search_server_p95",
+      "title": "Global search, server p95",
+      "tier": "integration",
+      "metric": "query_ms",
+      "unit": "ms",
+      "direction": "monotonic_down",
+      "fixture": "search-25k",
+      "value": 120,
+      "note": [
+        "P5.3 N13. The SERVER p95 is the budget; US-LCP-08's 500 ms end-to-end is",
+        "'a consequence, not a budget' and is deliberately not ratcheted here.",
+        "",
+        "MEASURED at 55-60 ms across 25,000 contacts in 50 books, over the six",
+        "queries §7 puts a seller in front of: a pasted number, a number typed",
+        "with hyphens, the last four digits, a surname with many matches, a first",
+        "name with more, and an email fragment.",
+        "",
+        "120, not 60. The budget exists to catch a REGRESSION, not to break the",
+        "build the next time a result row gains a column — the same deliberate",
+        "headroom P12 was given over its own measurement, for the same reason.",
+        "",
+        "The first measurement was 1,053 ms. Nothing about the schema changed to",
+        "fix it: migration 0011 already had the composite GIN over",
+        "(tenant_id, owner_user_id, full_name gin_trgm_ops), and the query was",
+        "written so it could not be used. Scoping in a CTE and matching in a",
+        "LATERAL forced a sequential scan of the tenant on every keystroke.",
+        "",
+        "Enforced by tests/integration/search-perf.test.ts, not by",
+        "check-perf-budgets.ts: this one needs a database and a 25,000-contact",
+        "fixture. The number lives here so there is one place to read it from and",
+        "one place it can be loosened from."
+      ]
     }
   ]
 }

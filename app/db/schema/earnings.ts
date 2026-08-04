@@ -9,6 +9,7 @@ import {
   primaryKey,
   text,
   timestamp,
+  index,
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core'
@@ -119,6 +120,22 @@ export const earningsLedger = app.table(
     // SUCCESS path. An application-level check-then-insert cannot do this
     // under concurrency: two simultaneous gate submissions both pass a check.
     uniqueIndex('earnings_source_event_uidx').on(t.tenantId, t.sourceEventId),
+
+    /**
+     * ONE reversal per entry, and it is the mechanism migration 0019 added so
+     * an undo NAMES the credit it cancels. Without the link a reversal is
+     * indistinguishable from a correction, takes the correction path, and
+     * lands on the public board.
+     */
+    uniqueIndex('earnings_reverses_uidx')
+      .on(t.tenantId, t.reversesEntryId)
+      .where(sql`${t.reversesEntryId} IS NOT NULL`),
+
+    /**
+     * The public projection's pending-row scan: every entry younger than the
+     * reveal delay, newest first. Also 0019, also never declared until now.
+     */
+    index('earnings_recorded_at_idx').on(t.tenantId, sql`${t.recordedAt} DESC`),
 
     foreignKey({
       columns: [t.tenantId, t.ownerUserId],

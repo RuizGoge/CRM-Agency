@@ -191,7 +191,12 @@ describe('the budgets this project actually ships are registered', () => {
       SELECT name, direction::text AS direction FROM ref.ci_ratchet_name
       WHERE name LIKE 'perf.%' ORDER BY name`
 
+    // The exact list, so registering a budget is a decision somebody made
+    // rather than a name that appeared. This assertion going red on a new arm
+    // is the mechanism working — it went red for N13, which is how the search
+    // budget got read by a person before it counted as shipped.
     expect(arms.map((a) => a.name)).toEqual([
+      'perf.N13_search_server_p95',
       'perf.P12_initial_js_gzip',
       'perf.P13_initial_css_gzip',
       'perf.P20_mobile_tti_pipeline',

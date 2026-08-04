@@ -4,6 +4,7 @@ import {
   char,
   check,
   foreignKey,
+  index,
   primaryKey,
   text,
   timestamp,
@@ -99,6 +100,33 @@ export const contact = app.table(
       .on(t.tenantId, t.ownerUserId, t.emailNorm)
       .where(sql`${t.emailNorm} IS NOT NULL AND ${t.deletedAt} IS NULL`),
 
+    /**
+     * GLOBAL SEARCH, with the ownership predicate INSIDE the index — created
+     * by migration 0011 and declared here only now.
+     *
+     * Sprint-0 gate G1e proved `btree_gin` ships a GIN opclass for uuid, and
+     * proved it with a planner check rather than a catalog lookup: all three
+     * conditions land in `Index Cond`, not in a post-retrieval filter.
+     *
+     * That distinction is a SILO property before it is a performance one.
+     * 0011 puts it plainly: a tenant-wide trigram index filtered AFTER
+     * retrieval is the leak that rules out a separate search service — the
+     * rows are fetched first and discarded second, and every layer above has
+     * to be trusted to do the discarding. Here the seller's own rows are the
+     * only ones the scan ever produces.
+     *
+     * Measured: a search query written so it could NOT use this index ran at
+     * a p95 of 1,053 ms across fifty books. Written so it can, 59.7 ms.
+     */
+    index('contact_name_trgm_idx').using(
+      'gin',
+      sql`${t.tenantId}, ${t.ownerUserId}, ${t.fullName} gin_trgm_ops`,
+    ),
+
+    index('contact_email_idx')
+      .on(t.tenantId, t.ownerUserId, t.emailNorm)
+      .where(sql`${t.emailNorm} IS NOT NULL AND ${t.deletedAt} IS NULL`),
+
     // A timezone we do not know must not masquerade as one we do. Without
     // this, `tz_confidence = 'high'` with a NULL zone reads as a confident
     // answer to the question that decides whether a dial is legal.
@@ -174,6 +202,17 @@ export const contactPhone = app.table(
     // consumer get two rows and neither can see the other. That is the
     // requirement, not a tolerated duplicate.
     uniqueIndex('contact_phone_owner_uidx').on(t.tenantId, t.ownerUserId, t.phoneE164),
+
+    /**
+     * Deliberately WITHOUT `owner_user_id`. This is the second, TENANT-WIDE
+     * scope on the same number: suppression matching, the non-attributive
+     * recent-contact signal, and inbound webhook attribution.
+     *
+     * Reachable only through SECURITY DEFINER functions that return a verdict
+     * and a reason code, never a row — which is what keeps a tenant-wide index
+     * on personal data from being a tenant-wide read of it.
+     */
+    index('contact_phone_tenant_idx').on(t.tenantId, t.phoneE164),
 
     uniqueIndex('contact_phone_primary_uidx')
       .on(t.tenantId, t.contactId)

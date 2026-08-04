@@ -190,6 +190,13 @@
       "when": 1785802854920,
       "tag": "0026_reconcile_snapshot_chain",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1785807146250,
+      "tag": "0027_search_budget",
+      "breakpoints": true
     }
   ]
 }

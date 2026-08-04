@@ -107,50 +107,72 @@ export async function readSearchFor(
       matched_on: 'name' | 'phone' | 'email'
       owner_name: string | null
     }>(sql`
-      WITH scoped AS (
-        SELECT c.id, c.full_name, c.email_norm::text AS email, c.owner_user_id
+      -- THREE INDEXED BRANCHES, UNIONed — not one scoped set filtered
+      -- afterwards, and the difference was measured at 1,053 ms.
+      --
+      -- The first version scoped the seller's book in a CTE and then tested
+      -- each row in a LATERAL. That structure cannot use the index migration
+      -- 0011 built for exactly this: a composite GIN over
+      -- (tenant_id, owner_user_id, full_name gin_trgm_ops), which puts the
+      -- OWNERSHIP PREDICATE INSIDE THE INDEX so the seller's own rows are the
+      -- only ones the scan ever produces. Splitting the CTE from the match
+      -- threw that away and made every keystroke a sequential scan of the
+      -- tenant.
+      --
+      -- 0011's comment says why that index is shaped that way, and it is not
+      -- about speed: "a tenant-wide trigram index filtered AFTER retrieval is
+      -- the silo leak that rules out a separate search service — the rows are
+      -- fetched first and discarded second." Writing the query the slow way
+      -- was also writing it the shape that leak has.
+      WITH matches AS (
+        SELECT p.contact_id AS id, 'phone'::text AS matched_on, 1 AS rank
+          FROM app.contact_phone p
+         WHERE p.tenant_id = app.current_tenant()
+           AND (${global}::boolean OR p.owner_user_id = app.current_user_id())
+           AND (p.phone_e164 = ${asPhone}::text
+                OR (${digits}::text IS NOT NULL
+                    AND p.phone_e164 LIKE '%' || ${digits}::text))
+
+        UNION ALL
+
+        SELECT c.id, 'email', 2
           FROM app.contact c
          WHERE c.tenant_id = app.current_tenant()
-           AND c.deleted_at IS NULL
-           AND c.redacted_at IS NULL
-           -- The silo, stated once. RLS has already applied it for a
-           -- seller; see the note above about which layer holds it.
            AND (${global}::boolean OR c.owner_user_id = app.current_user_id())
+           AND c.email_norm IS NOT NULL
+           AND c.email_norm::text LIKE ${`%${query.toLowerCase()}%`}::text
+
+        UNION ALL
+
+        -- The branch the composite GIN serves. All three conditions are in the
+        -- scan, which is what keeps them in Index Cond rather than in a
+        -- post-retrieval filter.
+        SELECT c.id, 'name', 3
+          FROM app.contact c
+         WHERE c.tenant_id = app.current_tenant()
+           AND (${global}::boolean OR c.owner_user_id = app.current_user_id())
+           AND c.full_name ILIKE ${`%${query}%`}::text
+      ),
+      best AS (
+        -- ONE row per contact. A phone match is an identification and a name
+        -- match is a guess, so a contact found both ways is reported as found
+        -- by phone.
+        SELECT DISTINCT ON (id) id, matched_on FROM matches ORDER BY id, rank
       )
-      SELECT s.id AS contact_id,
-             s.full_name,
+      SELECT c.id AS contact_id,
+             c.full_name,
              (SELECT p.phone_e164 FROM app.contact_phone p
-               WHERE p.tenant_id = app.current_tenant() AND p.contact_id = s.id
+               WHERE p.tenant_id = c.tenant_id AND p.contact_id = c.id
                ORDER BY p.is_primary DESC LIMIT 1) AS phone,
-             s.email,
-             m.matched_on,
+             c.email_norm::text AS email,
+             b.matched_on,
              CASE WHEN ${global}::boolean THEN o.display_name ELSE NULL END AS owner_name
-        FROM scoped s
-        JOIN LATERAL (
-          -- ONE row per contact, and the precedence is the point: a phone
-          -- match is an identification and a name match is a guess, so a
-          -- contact found both ways is reported as found by phone.
-          SELECT 'phone'::text AS matched_on, 1 AS rank
-           WHERE EXISTS (SELECT 1 FROM app.contact_phone p
-                          WHERE p.tenant_id = app.current_tenant()
-                            AND p.contact_id = s.id
-                            -- Casts, because both can be NULL and Postgres
-                            -- cannot infer a type for a null parameter. Found
-                            -- by the query refusing to plan at all, which is
-                            -- the good failure: a wrong guess would have been
-                            -- a silo predicate comparing text to unknown.
-                            AND (p.phone_e164 = ${asPhone}::text
-                                 OR (${digits}::text IS NOT NULL
-                                     AND p.phone_e164 LIKE '%' || ${digits}::text)))
-          UNION ALL
-          SELECT 'email', 2 WHERE s.email IS NOT NULL AND s.email LIKE ${`%${query.toLowerCase()}%`}::text
-          UNION ALL
-          SELECT 'name', 3 WHERE s.full_name ILIKE ${`%${query}%`}::text
-          ORDER BY rank LIMIT 1
-        ) m ON true
+        FROM best b
+        JOIN app.contact c ON c.tenant_id = app.current_tenant() AND c.id = b.id
         LEFT JOIN app.app_user o
-          ON o.tenant_id = app.current_tenant() AND o.id = s.owner_user_id
-       ORDER BY m.matched_on, s.full_name
+          ON o.tenant_id = app.current_tenant() AND o.id = c.owner_user_id
+       WHERE c.deleted_at IS NULL AND c.redacted_at IS NULL
+       ORDER BY b.matched_on, c.full_name
        LIMIT ${LIMIT}`)
 
     return {

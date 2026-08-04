@@ -114,4 +114,46 @@ describe('the snapshot chain is level with the migrations', () => {
         `file, so the generator has no picture of them`,
     ).toEqual([])
   })
+
+  it('declares every index the migrations create', () => {
+    // 🔴 ADDED BECAUSE THE TABLE CHECK WAS NOT ENOUGH, proven by the very next
+    // migration. `contact_name_trgm_idx` has existed since 0011 — hand-written,
+    // `IF NOT EXISTS`, never in a snapshot — so the generator had no picture of
+    // it and cheerfully proposed creating it a second time. The migration
+    // applied against a fresh database, hit "already exists", and rolled the
+    // WHOLE CHAIN back, because drizzle's migrator is one transaction.
+    //
+    // That is the same class of gap as the missing tables, one level down, and
+    // it cost more: a table nobody declared is merely unmanaged, while an index
+    // nobody declared is a migration that cannot be applied to a new database
+    // at all.
+    const declared = readdirSync('app/db/schema')
+      .filter((f) => f.endsWith('.ts') && !f.startsWith('_'))
+      .map((f) => readFileSync(join('app/db/schema', f), 'utf8'))
+      .join('\n')
+
+    const created = new Set<string>()
+    for (const file of readdirSync(MIGRATIONS).filter((f) => f.endsWith('.sql'))) {
+      const statements = readFileSync(join(MIGRATIONS, file), 'utf8')
+      for (const match of statements.matchAll(
+        /CREATE (?:UNIQUE )?INDEX (?:CONCURRENTLY )?(?:IF NOT EXISTS )?"?([a-z0-9_]+)"?/gi,
+      )) {
+        const index = match[1]
+        if (index !== undefined) created.add(index)
+      }
+    }
+
+    expect(created.size, 'no CREATE INDEX parsed — the regex broke, not the tree').toBeGreaterThan(
+      5,
+    )
+
+    const undeclared = [...created].filter((name) => !declared.includes(`'${name}'`)).sort()
+
+    expect(
+      undeclared,
+      `${undeclared.join(', ')} are created by a migration and declared in no schema file. ` +
+        `The generator will propose creating them again, and the second CREATE fails on a ` +
+        `fresh database — rolling back every migration with it.`,
+    ).toEqual([])
+  })
 })

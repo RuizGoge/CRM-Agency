@@ -293,6 +293,17 @@ export const scheduledJob = app.table(
 
     // The dispatcher. Cross-tenant by design — one of the four enumerated
     // system paths — so it is deliberately NOT led by tenant_id.
+    /**
+     * What the dispatcher actually claims from — migration 0020, and distinct
+     * from `scheduled_job_due_idx` above by the `canceled_at` clause: a
+     * reschedule cancels a job without resolving it, and a claimable index
+     * that still returned those would have the dispatcher fighting rows it
+     * must never run.
+     */
+    index('scheduled_job_claimable_idx')
+      .on(t.fireAt)
+      .where(sql`${t.status} = 'pending' AND ${t.canceledAt} IS NULL`),
+
     index('scheduled_job_due_idx')
       .on(t.fireAt)
       .where(sql`${t.status} = 'pending'`),
