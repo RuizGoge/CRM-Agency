@@ -7,6 +7,33 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 🔎 LA BÚSQUEDA GLOBAL, Y UNA PUERTA QUE ME ATRAPÓ DOS VECES (2026-08-03)
+`app/routes/api/search.ts` · `contact.ts` · `app/components/search/search-overlay.tsx` · `app/routes/ui/contact.tsx` · `app/lib/phone/e164.ts` · migración **0026**. **207 → 231 tests · 69 → 80 e2e.**
+
+**`DEMO-08` pasa de BLOQUEADO a parcial**, y la cadena de snapshots de Drizzle quedó saldada.
+
+**LA CADENA DE SNAPSHOTS.** La migración **0026 no lleva SQL: existe por su snapshot.** Cinco objetos estaban en la base y en ningún archivo de esquema — `ref.timing_constant` (desde la 0009), `scheduled_job.claimed_at`, el enum `ratchet_direction` y las dos tablas del ratchet, más los cambios de `tenant`. Ahora `npm run db:generate` vuelve a funcionar y reporta *no schema changes*, verificado además contra una base construida desde cero.
+
+- ⚠️ **Una afirmación mía que estaba MAL y corregí:** el primer comentario decía que la cadena atrasada habría emitido `DROP TABLE ref.ci_ratchet`. **No.** Drizzle compara snapshots contra archivos de esquema, **nunca contra la base** — esa tabla no estaba en ninguno de los dos, así que era invisible al diff, no estaba en peligro. El riesgo real era más aburrido: `CREATE TYPE` de un tipo que existe, y una migración que falla en su primera sentencia. La exposición callada era la otra: una relación que Postgres tiene y los archivos de esquema no está **fuera del alcance del generador**, coordinada con nada.
+- ✅ **`snapshot-chain.test.ts`** falla si el snapshot queda atrás o si una migración crea una tabla que nadie declaró — y **escribirlo encontró `ref.timing_constant`**, sin declarar desde la 0009. Es la tabla que guarda `undo_deadline_ms` y `projection_reveal_delay_ms`.
+- **Su primera versión consultaba `information_schema` y pasaba sola pero fallaba en la suite:** `silo.test.ts` crea tablas a propósito y `crm_test` es compartida. La pregunta es estática, así que ahora lee los archivos de migración — sin base, sin orden, sin limpieza. **Tercera vez que este proyecto paga la firma del estado compartido.**
+
+**LA BÚSQUEDA.** Tres campos y no más — nombre, teléfono, email, que es lo que `search.idle` dice en pantalla para que nadie pruebe con un número de póliza y concluya que está rota.
+
+- **La normalización E.164 es lo que sostiene el camino de recuperación de §7:** suena el teléfono, la vendedora tipea el número como lo lee, y `937-555-0142`, `(937) 555-0142`, `9375550142`, `+19375550142` y `1 937 555 0142` encuentran el registro. Los últimos cuatro dígitos también. **Normalizar no es validar**, y están separadas a propósito: un typo devuelve nada en vez de ser rechazado, y el estado vacío recupera el número para ofrecer el alta.
+- **El overlay vive en el SHELL**, porque *"desde cualquier superficie"* es el requisito y un atajo cableado por pantalla funciona en las pantallas que alguien se acordó. Asertado en tres. **Escape devuelve el foco a lo que lo abrió** — la regla que todos saltean y la que un mouse nunca prueba.
+- **La pantalla de contacto NO tiene loader**, y no por estilo: `ui.loader_whitelist` es `shrink_only` y habría rechazado un cuarto con `AP005`. **El motor forzó la arquitectura que §1.1 quería igual.** Un id ajeno, uno inexistente y uno mal formado son indistinguibles ahí: los tres leen *"That contact isn't in your book"*, nunca un 403. Eso es `DEMO-04` sobre la pantalla en la que realmente aterriza una URL pegada.
+- 🔬 **Otra mutación verde, anotada:** abrir el predicado de dueño del endpoint a `true` dejó todo pasando, porque la política RLS `owner_scoped` ya había acotado las filas. **El silo lo sostiene la base**; mi predicado es la segunda capa. Los tests prueban la propiedad, no qué capa la entrega.
+
+🔴 **LA PUERTA DE FRONTERA ME ATRAPÓ DOS VECES EN LA MISMA SESIÓN, y la segunda es la que vale.** Importé una constante desde un módulo de ruta a un componente — otra vez — y postgres volvió al bundle del navegador. El síntoma: `ReferenceError: Buffer is not defined` y una pantalla de login que nunca renderizaba, en **todos** los tests a la vez. La puerta nombró el archivo, el especificador y el arreglo **antes de que terminara de fallar el e2e**.
+
+**La nota también existía** — en el mensaje del commit anterior. No me detuvo. Ésa es la diferencia entre una nota y un mecanismo, demostrada sobre mí mismo, y quedó escrita en el módulo donde la constante vive ahora.
+
+- **Dos correcciones más por el camino:** `setState` en el cuerpo de un efecto otra vez —resuelto **derivando** los estados en vez de guardarlos, y dejando sólo la respuesta, que ahora carga la consulta a la que pertenece para descartar una respuesta tardía de algo que la vendedora ya dejó atrás—; y el spec presionando `Ctrl+K` antes de la hidratación, que falló con *"Ctrl+K did nothing"* mientras el único test que hacía `focus()` primero pasaba. **El mismo accidente que `undo-keyboard.spec` registra desde el otro lado.**
+- ⚠️ **Un chunk `db-*.js` nuevo en el directorio del cliente.** Verificado, no supuesto: **ninguna ruta lo descarga** — mismo fenómeno ya documentado para `identity-*.js`, infraestructura de servidor emitida al directorio del cliente y jamás referenciada. Cuesta tamaño de deploy, no bytes del vendedor. P12 subió 1,7 KB (el overlay), no 121.
+
+⚠️ **Lo que la búsqueda NO tiene:** el presupuesto de **200 ms percibidos / 500 ms comprometidos como GATE** — ninguno de los dos está medido, no hay tier, y el match por nombre es un `ILIKE` sin índice trigram (correcto a tamaño de demo, no probado a 500 leads por vendedor por cincuenta vendedores). Y `Quick-add this number` es **copy, no un control**: el alta rápida no existe, y un botón que no hace nada sería peor que la frase.
+
 ### ⛔ EL RELOJ QUE NO ENTRÓ: P6 LO RECHAZÓ DOS VECES, Y EL CAMINO DEJÓ UNA PUERTA (2026-08-03)
 `scripts/client-server-boundary.test.ts`. **203 → 207 tests.** El reloj `NEW` **no se shippeó**, y eso es el resultado, no un pendiente.
 
@@ -963,15 +990,16 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 
 ### ▶️ LO SIGUIENTE — sesión del 2026-08-03, cierre
 
-**`master` = `origin/master` + commits locales sin empujar. 207 tests · 69 e2e · árbol limpio · demo reseteado.** Los puntos 1, 2, 3, 4 y 6 de la lista anterior están cerrados, y también el riel de salud que abría esta lista (ver las dos entradas del 2026-08-03 arriba).
+**`master` = `origin/master` + commits locales sin empujar. 231 tests · 80 e2e · árbol limpio · demo sembrado.** Los puntos 1, 2, 3, 4 y 6 de la lista anterior están cerrados, y también el riel de salud que abría esta lista (ver las dos entradas del 2026-08-03 arriba).
 
 **Lo que NO depende de nadie — por acá seguir, en este orden:**
 
 1. **El reloj `NEW` que tictaquea** — intentado, medido y **rechazado por P6 dos veces** (ver la entrada de arriba con la tabla). Tictaqueando todo: 116,7 ms / 84 ms. Acotado a lo visible: 50,0 ms / 53,0 ms. Presupuesto: 34 / 50. **No vuelve a intentarse sin virtualización del tablero o sin escribir ese texto en el DOM fuera de React** — y con virtualización el problema se disuelve solo, porque dejan de existir 500 nodos.
 2. **P20 (TTI móvil)** — lo único que le falta a la Puerta 11. Necesita Lighthouse y un tier nocturno. **El fixture `perf-500` YA existe**, que era lo caro. ⚠️ Ojo con los minutos de Actions: el control de costo es la ausencia de método de pago (§9.4.1).
 3. **Cerrar el cruce del ratchet en el CI.** El checker ya lee `ref.ci_ratchet` y **falla con `PERF006`** cuando el archivo y el motor discrepan — probado por mutación. Falta sólo lo que no puedo hacer yo: darle a `crm_ci` LOGIN y contraseña **fuera de banda** y poner la cadena como secreto `CI_RATCHET_DATABASE_URL`. Hasta entonces el CI imprime el cuadro de "el cruce no corrió".
-4. **La franja de actividad de hoy** (`day.strip.*`: Dials · Contacts · Appointments set) — lo último de `DEMO-09`, y el único número que se mueve antes de la primera venta. Cuenta desde `call.completed` con cualquier resultado, **así que espera a Aloware**.
-5. **Reconciliar la cadena de snapshots de Drizzle**, desenganchada desde 0018 (ahora 0019–0025 son SQL a mano, y **0025 dropeó una columna**, así que el desfase ya no es sólo aditivo). `db:generate` se niega (`DBGEN003`), así que no es una trampa; es una tarea pendiente.
+4. **El presupuesto de la búsqueda como GATE** — 200 ms percibidos / 500 ms comprometidos (§7 y R6). Nada lo mide hoy. Necesita un fixture con un libro grande y, casi seguro, un índice trigram sobre `contact.full_name`: el match por nombre es un `ILIKE` que a tamaño de demo va sobrado y a 500 leads por vendedor no está probado. **Es la única pieza de `DEMO-08` que no depende de nadie.**
+5. **`Quick-add this number`** — hoy es copy en el estado vacío y no un control. Cierra el bucle que §7 abre: buscás un número que no está, y lo das de alta con el número ya puesto.
+6. **La franja de actividad de hoy** (`day.strip.*`: Dials · Contacts · Appointments set) — lo último de `DEMO-09`, y el único número que se mueve antes de la primera venta. Cuenta desde `call.completed` con cualquier resultado, **así que espera a Aloware**.
 
 **Dos DECISIONES DE JORGE, ninguna bloquea lo de arriba:**
 
