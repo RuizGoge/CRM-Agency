@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm'
 import { withTenant, type SessionIdentity } from '~/db'
 import { requireIdentity } from '~/lib/auth/identity'
 import { looksNumeric, toE164 } from '~/lib/phone/e164'
+import { MIN_QUERY_LENGTH } from '~/lib/search/query'
 
 /**
  * Global search — MVP item 8, protected item `DEMO-08`, and §7's recovery path.
@@ -62,9 +63,6 @@ export interface SearchPayload {
    */
   readonly asPhone: string | null
 }
-
-/** Below this, the overlay shows `search.idle` and nothing is queried. */
-export const MIN_QUERY_LENGTH = 2
 
 /** One screen of results. A search that returns a report is not a search. */
 const LIMIT = 20

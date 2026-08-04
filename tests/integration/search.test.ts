@@ -2,6 +2,7 @@ import postgres from 'postgres'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { toE164 } from '~/lib/phone/e164'
+import { readContactFor } from '~/routes/api/contact'
 import { readSearchFor } from '~/routes/api/search'
 
 import { TEST_URL } from './setup/urls'
@@ -200,5 +201,71 @@ describe('a supervisor reads every book, and every row says whose', () => {
     const found = await search(ANA, 'Curtis')
 
     expect(found.hits.every((h) => h.ownerName === null)).toBe(true)
+  })
+})
+
+describe('a foreign contact id is not found, never forbidden', () => {
+  /**
+   * Protected item `DEMO-04`, on the screen a pasted URL actually lands on.
+   *
+   * A 403 confirms the record exists. Not-found tells a prober nothing, which
+   * is the entire point of a silo — and it is the difference between "somebody
+   * has a contact with this id" and silence.
+   */
+  it('returns null for a contact that belongs to another seller', async () => {
+    const [ben] = await sql<{ id: string }[]>`
+      SELECT id FROM app.contact
+       WHERE tenant_id = ${TENANT} AND full_name = 'Curtis Bramble'`
+
+    expect(ben?.id, 'the fixture lost the contact this test is about').toBeDefined()
+    expect(await readContactFor({ tenantId: TENANT, userId: ANA }, ben?.id ?? '')).toBeNull()
+  })
+
+  it('returns the same null for an id that does not exist at all', async () => {
+    // The two answers must be INDISTINGUISHABLE. If "not yours" and "no such
+    // record" differed by anything — a status, a message, a timing — the
+    // difference would be the disclosure.
+    const missing = await readContactFor(
+      { tenantId: TENANT, userId: ANA },
+      '00000000-0000-7000-8000-0000000000ff',
+    )
+    expect(missing).toBeNull()
+  })
+
+  it('returns null for a malformed id instead of raising', async () => {
+    // A uuid cast on garbage raises 22P02 and answers 500, which tells a
+    // prober their input was interesting and tells a seller their link is
+    // broken rather than stale.
+    expect(await readContactFor({ tenantId: TENANT, userId: ANA }, 'not-a-uuid')).toBeNull()
+  })
+
+  it('gives the owner the record, so the null above is scoping and not breakage', async () => {
+    const [ana] = await sql<{ id: string }[]>`
+      SELECT id FROM app.contact
+       WHERE tenant_id = ${TENANT} AND full_name = 'Curtis Vance'`
+
+    const record = await readContactFor({ tenantId: TENANT, userId: ANA }, ana?.id ?? '')
+
+    expect(record?.fullName).toBe('Curtis Vance')
+    expect(record?.phones.map((p) => p.e164)).toEqual(['+19375550142'])
+  })
+
+  it('lets a supervisor read across books, which is the one asymmetry', async () => {
+    const [ben] = await sql<{ id: string }[]>`
+      SELECT id FROM app.contact
+       WHERE tenant_id = ${TENANT} AND full_name = 'Curtis Bramble'`
+
+    const record = await readContactFor({ tenantId: TENANT, userId: SUPERVISOR }, ben?.id ?? '')
+    expect(record?.fullName).toBe('Curtis Bramble')
+  })
+
+  it('never crosses a tenant, not even for a supervisor', async () => {
+    const [outside] = await sql<{ id: string }[]>`
+      SELECT id FROM app.contact
+       WHERE tenant_id = ${OTHER_TENANT} AND full_name = 'Curtis Elsewhere'`
+
+    expect(
+      await readContactFor({ tenantId: TENANT, userId: SUPERVISOR }, outside?.id ?? ''),
+    ).toBeNull()
   })
 })

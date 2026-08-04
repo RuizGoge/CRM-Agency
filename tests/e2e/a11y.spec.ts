@@ -82,6 +82,36 @@ test.describe('every surface passes axe with no serious or critical finding', ()
     expect(await seriousOrCritical(page)).toEqual([])
   })
 
+  test('the search overlay, which is a keyboard surface first', async ({ page }) => {
+    // A combobox driving a listbox it does not contain is the shape axe is
+    // strictest about, and it is the one this overlay uses on purpose: focus
+    // stays in the input while the highlight moves, so `aria-activedescendant`
+    // is doing the work a roving tabindex usually does.
+    await signIn(page)
+    await page.goto('/my-day')
+
+    const dialog = page.getByRole('dialog', { name: 'Search' })
+    await expect
+      .poll(async () => {
+        await page.keyboard.press('Control+k')
+        return dialog.count()
+      })
+      .toBe(1)
+
+    await dialog.getByRole('combobox').fill('Doris')
+    await expect(dialog.getByRole('option').first()).toBeVisible()
+
+    expect(await seriousOrCritical(page)).toEqual([])
+  })
+
+  test('the contact record, and the not-found it shares a shape with', async ({ page }) => {
+    await signIn(page)
+    await page.goto('/contacts/00000000-0000-7000-8000-0000000000ff')
+    await expect(page.getByRole('heading', { name: /isn.t in your book/ })).toBeVisible()
+
+    expect(await seriousOrCritical(page)).toEqual([])
+  })
+
   test('the undo bar, which only exists for five seconds', async ({ page }) => {
     // The clock is faked BEFORE the page loads so the bar's own dismiss timer
     // never fires. Without it this scan races a five-second window, and a

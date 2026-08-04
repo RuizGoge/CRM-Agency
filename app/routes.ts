@@ -20,6 +20,9 @@ export default [
     route('my-day', 'routes/ui/my-day.tsx'),
     route('board', 'routes/ui/board.tsx'),
     route('earnings', 'routes/ui/leaderboard.tsx'),
+    // No loader, deliberately: the sanctioned UI-loader count is one and three
+    // exist, so `ui.loader_whitelist` (shrink_only) would refuse a fourth.
+    route('contacts/:contactId', 'routes/ui/contact.tsx'),
   ]),
 
   route('sign-out', 'routes/api/sign-out.ts'),
@@ -28,6 +31,7 @@ export default [
   route('api/my-day', 'routes/api/my-day.ts'),
   route('api/home-setup', 'routes/api/home-setup.ts'),
   route('api/search', 'routes/api/search.ts'),
+  route('api/contacts/:contactId', 'routes/api/contact.ts'),
   route('api/celebrate', 'routes/api/celebrate.ts'),
   // better-auth mounts its whole surface under one splat. See the note in the
   // module for why this is the one resource route outside the endpoint factory.

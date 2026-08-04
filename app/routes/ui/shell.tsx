@@ -1,5 +1,7 @@
 import { Form, NavLink, Outlet, redirect } from 'react-router'
 
+import { SearchOverlay } from '~/components/search/search-overlay'
+
 import { sql } from 'drizzle-orm'
 
 import { withTenant } from '~/db'
@@ -163,6 +165,11 @@ export default function Shell({ loaderData }: Route.ComponentProps): React.JSX.E
       </header>
 
       <Outlet />
+
+      {/* IN THE SHELL, because Ctrl+K has to work "from any surface" and a
+          shortcut wired per screen is one that works on the screens somebody
+          remembered. It renders nothing until it opens. */}
+      <SearchOverlay />
     </>
   )
 }
