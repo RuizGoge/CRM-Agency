@@ -7,6 +7,29 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 🚪 PUERTA 11 CERRADA: P20 MEDIDO EN 2251 ms (2026-08-03)
+`tests/e2e/tti.spec.ts` · `fixtures/lighthouse.ts` · migración **0028** · perfil **`lh-ci`**. **241 → 243 tests · 82 → 83 e2e.** La Puerta 11 pasa de **mitad cerrada** a **cerrada**.
+
+**LO QUE FALTABA NUNCA FUE EL FIXTURE.** La propia lista `blocked_on` de la fila nombraba `perf-500`, y la Puerta 12 lo construyó hace semanas. Lo que no existía era **algo que corriera Lighthouse**. El número quedó en `null` mientras el archivo, visto desde afuera, se parecía exactamente a un presupuesto que se aplica.
+
+**Medido: 2251 ms**, mediana de cinco corridas con un reparto de **49 ms** (2227 2248 2251 2265 2276), con la auditoría `interactive` de Lighthouse contra el **build de producción** en :3001, sobre las 500 tarjetas del fixture, con sesión de la vendedora del fixture y el preset móvil de Lighthouse **sin tocar** (4× de CPU, 4G lento simulado, viewport de teléfono). §8.1 redondea hacia arriba al siguiente 100: **presupuesto 2300**, techo 3000. Registrado en `ref.ci_ratchet` por la 0028.
+
+- **El algoritmo de TTI NO está reimplementado**, y ésa es toda la razón de la dependencia. *"La primera ventana de cinco segundos después del FCP sin long task y con dos pedidos en vuelo como máximo"* es lo bastante sutil como para que una versión propia salga **plausiblemente mal** — y un número plausiblemente mal es peor que ninguno una vez que está ratcheteado.
+- **Corre en la suite e2e y NO en un job nocturno de Actions**, y es una rebaja deliberada del plan. §9.4.1 hace que el control de costo de este proyecto sea la ausencia de método de pago, así que un job programado es un gate que se apaga antes de atrapar nada. La suite ya levanta este mismo build para P6.
+- ✅ **Las dos aserciones probadas por mutación.** Bajar el presupuesto a 1000 lo pone rojo con el número y la negativa AP002. Devolver una cookie falsa hace que Lighthouse mida **la pantalla de login** —un formulario sin tarjetas, interactivo casi al instante, reportando un número precioso de la página equivocada— y la aserción de `finalUrl` lo atrapa.
+- **FCP y TTI caen en el mismo milisegundo, y es una propiedad real de esta arquitectura**, no una medición rota: el tablero es SSR, así que los píxeles existen en el primer pintado, y React hidrata 500 tarjetas en tramos interrumpibles que nunca producen una tarea de más de 50 ms (TBT: 0–10 ms). Si alguna de las dos cosas deja de ser cierta, TTI se despega de FCP y este presupuesto es lo que lo nota.
+- ⚠️ **A DIFERENCIA DE P12/P13, ESTE NÚMERO DEPENDE DE LA MÁQUINA.** Aquéllos cuentan bytes; éste multiplica por cuatro las duraciones observadas **de esta máquina**. En un runner más lento la medición es mayor, se pone rojo, y `monotonic_down` se **niega** a aflojarlo. Eso es el brazo funcionando, no fallando: mudar un presupuesto a otro hardware debería costar una decisión.
+
+🔴 **DOS GUARDIANES TUVIERON QUE CAMBIAR, que es exactamente para lo que se escribieron.** `ci-ratchet.test.ts` asserteaba que P20 tenía **cero** filas de valor y `perf-budgets.test.ts` que su valor era **null**. Los dos existían para mantener visible el agujero declarado de E6; los dos ahora assertean que está cerrado y acotado. **Un agujero que se cierra porque nadie se dio cuenta es el fallo que este arreglo previene, en las dos direcciones.**
+
+- **`PERF007` es nuevo:** un presupuesto que nombra un tier que nadie corre ahora rompe el build. El reporte encabezaba las otras filas con *"su tier todavía no existe"*, que era cierto cuando sólo el bundle estaba medido y **había dejado de serlo** para N13 y P6. Ahora cada tier nombra el comando que lo corre.
+
+🔴 **UN TEST CON FECHA DE VENCIMIENTO.** `card-anatomy` asserteaba riel azul sobre Ruth Alvarez, y `fresh` es cero intentos **Y una llegada de menos de SESENTA MINUTOS**. El seed le da *"llegó cuando corrió el seed"*, así que la aserción era cierta **una hora** después de `db:seed` y falsa para siempre después. Pasó semanas porque el demo se re-sembraba seguido. **La ventana no se ensancha:** sesenta minutos es la definición del producto, y moverla para que pase un test cambia la definición por la comodidad.
+
+- ⚠️ **CONSECUENCIA PARA EL DEMO, no sólo para el test:** un tablero mostrado **más de una hora** después de `npm run db:seed` **no tiene ninguna tarjeta fresca**. El riel azul y el `NEW` simplemente no están. Si el demo va a mostrar ese estado, hay que sembrar antes.
+
+📐 **P6 está al borde y quedó anotado, no tocado.** En la suite completa las tres corridas dan máximos de 33,3–50,0 ms contra un presupuesto de 34: **la mediana pasa con 0,6 ms de margen y una de cada tres corridas se pasa**. Con la máquina ocupada (el Chrome de Jorge son once procesos) falla. Aislado pasa siempre. El presupuesto **no se mueve** — lo que esto dice es que la mediana de tres es lo único que lo sostiene, y que la virtualización del tablero sigue siendo la respuesta real.
+
 ### ➕ EL BUCLE SE CIERRA: N13 MEDIDO Y `Quick-add this number` ES UN CONTROL (2026-08-03)
 `app/routes/api/quick-add.ts` · `search-overlay.tsx` · migración **0027** · `perf-budgets.json`. **231 → 241 tests · 80 → 82 e2e.** `DEMO-08` sigue **parcial**, y por una razón que ahora está escrita en el registro.
 
@@ -980,7 +1003,7 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 | 6 | Calendario + recordatorios | ✅ dominio **y** despachador: pg-boss cableado, claim con lease, 15-min drop y SMS-dark |
 | 7 | Leaderboard público | ✅ tablero, undo honrado **y celebración** |
 | 8 | My Day | ✅ |
-| 9 | Aloware | 🔴 **bloqueado por la Puerta 11** — necesita la cuenta real |
+| 9 | Aloware | 🔴 **bloqueado por la Puerta 2** — necesita la cuenta real. (Decía "Puerta 11", que es la del bundle y el primer paint; se cerró el 2026-08-03 y Aloware sigue bloqueado, que es como se notó el error) |
 | 10 | Datos demo | 🟡 siembra por el camino real, se niega a duplicarse, `lost_reason` sembrados, **y desde el 2026-08-03 ABARCA LOS CUATRO PERÍODOS con una reversa** — las dos exigencias de §1529 que el registro nunca había anotado como faltantes. `DEMO-01..10` sigue siendo un registro verificado por máquina: **3 cubiertos, 4 bloqueados por Aloware/búsqueda, 3 parciales**, y los tres parciales encogieron |
 
 **Extra, no planificado:** shell de navegación, CI en GitHub Actions, aserción de arranque G4(a), **undo de 5 s**, **el test de deriva de la Puerta 10**, **el gate de axe-core con su job de CI**, **el drag de escritorio**, **el despachador de jobs** y **la celebración**.
@@ -1000,18 +1023,18 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 | 8 | pg-boss bajo estrés de versión | ⬜ no empezado |
 | 9 | Simulacro de restauración | ⬜ no empezado |
 | 10 | Los 5000 ms en cuatro representaciones | ✅ **CERRADA.** Las cuatro existen —TS · CSS · predicado SQL de la proyección · claim de la celebración— y el test de deriva compara **valores, nunca nombres**, incluida la aserción de que `celebrate_once` no menciona `projection_reveal_delay_ms` |
-| 11 | Bundle y primer paint medidos | 🟡 **MITAD CERRADA.** Bundle **medido y aplicado**: P12 = 108.383 bytes gzip contra 128.000, P13 = 2.431 contra 16.384, vía `npm run perf` dentro de `verify`. **El ancla fuera del árbol YA ESTÁ CABLEADA (2026-08-03):** el checker lee `ref.ci_ratchet` y falla con `PERF006` si el archivo y el motor discrepan — probado con el archivo aflojado a 400.000 contra los 128.000 del motor. **Falta:** P20 (TTI móvil), bloqueado por el tier nocturno de Lighthouse; y que el CRUCE corra en el CI, que necesita `crm_ci` con LOGIN y contraseña fuera de banda (de Jorge). Hoy corre en el hook de pre-commit |
+| 11 | Bundle y primer paint medidos | ✅ **CERRADA (2026-08-03).** Bundle **medido y aplicado**: P12 = 111.068 bytes gzip contra 128.000, P13 = 2.462 contra 16.384, vía `npm run perf` dentro de `verify`. **TTI medido y aplicado**: P20 = 2.251 ms medidos, presupuesto 2.300, techo 3.000, por `tests/e2e/tti.spec.ts` en el perfil `lh-ci` — el tier nocturno se **descartó**, no se pospuso. **El ancla fuera del árbol está cableada:** el checker lee `ref.ci_ratchet` y falla con `PERF006` si el archivo y el motor discrepan, y con `PERF007` si un presupuesto nombra un tier que nadie corre. **Lo único que falta es que el CRUCE corra en el CI**, que necesita `crm_ci` con LOGIN y contraseña fuera de banda (de Jorge). Hoy corre en el hook de pre-commit |
 | 12 | Drag a 60 fps con 500 tarjetas | ✅ **CERRADA.** Perfil `dnd-ci` (2× CPU throttle) sobre `perf-500`, **contra el BUILD DE PRODUCCIÓN**: **p95 16,8 ms · max 16,8 ms (cero frames perdidos) · cero long tasks**, contra p95≤20 / frame≤34 / longtask≤50. El fixture se assertea antes de medir, y el gate está probado con dientes (bloqueo de 60 ms → las tres aserciones rojas) |
 | 13 | Publicar las contradicciones | ✅ `docs/sprint-0/g13-published-contradictions.md` |
 
 ### ▶️ LO SIGUIENTE — sesión del 2026-08-03, cierre
 
-**`master` = `origin/master` + commits locales sin empujar. 241 tests · 82 e2e · árbol limpio · demo sembrado.** Los puntos 1, 2, 3, 4 y 6 de la lista anterior están cerrados, y también el riel de salud que abría esta lista (ver las entradas del 2026-08-03 arriba).
+**`master` = `origin/master` + commits locales sin empujar. 243 tests · 83 e2e · árbol limpio · demo sembrado.** Los puntos 1, 2, 3, 4 y 6 de la lista anterior están cerrados, y también el riel de salud que abría esta lista (ver las entradas del 2026-08-03 arriba).
 
 **Lo que NO depende de nadie — por acá seguir, en este orden:**
 
 1. **El reloj `NEW` que tictaquea** — intentado, medido y **rechazado por P6 dos veces** (ver la entrada de arriba con la tabla). Tictaqueando todo: 116,7 ms / 84 ms. Acotado a lo visible: 50,0 ms / 53,0 ms. Presupuesto: 34 / 50. **No vuelve a intentarse sin virtualización del tablero o sin escribir ese texto en el DOM fuera de React** — y con virtualización el problema se disuelve solo, porque dejan de existir 500 nodos.
-2. **P20 (TTI móvil)** — lo único que le falta a la Puerta 11. Necesita Lighthouse y un tier nocturno. **El fixture `perf-500` YA existe**, que era lo caro. ⚠️ Ojo con los minutos de Actions: el control de costo es la ausencia de método de pago (§9.4.1).
+2. ~~**P20 (TTI móvil)**~~ — **HECHO (2026-08-03), y la Puerta 11 está CERRADA.** 2251 ms medidos, presupuesto 2300, en el perfil `lh-ci` dentro de la suite e2e. **El tier nocturno no se construyó: se descartó** — con el control de costo siendo la ausencia de método de pago, un job programado es un gate que se apaga. Lo que queda abierto de este tema es el punto 3, que es de Jorge.
 3. **Cerrar el cruce del ratchet en el CI.** El checker ya lee `ref.ci_ratchet` y **falla con `PERF006`** cuando el archivo y el motor discrepan — probado por mutación. Falta sólo lo que no puedo hacer yo: darle a `crm_ci` LOGIN y contraseña **fuera de banda** y poner la cadena como secreto `CI_RATCHET_DATABASE_URL`. Hasta entonces el CI imprime el cuadro de "el cruce no corrió".
 4. ~~**El presupuesto de la búsqueda como GATE**~~ — **CERRADA LA MITAD DEL SERVIDOR (2026-08-03):** N13 mide 59,7 ms p95 sobre 25.000 contactos y está en el ratchet. La sospecha del `ILIKE` sin índice trigram **era falsa** — el índice existía desde la 0011 y la consulta no podía usarlo. **Lo que queda es la mitad PERCIBIDA**, que necesita el mismo tier nocturno que P20 (punto 2) y por eso deja de ser una tarea aparte.
 5. ~~**`Quick-add this number`**~~ — **HECHO (2026-08-03).** Es un control, con el número precargado, y el duplicado lo rechaza el índice UNIQUE de la 0010 en vez de una consulta previa. Faltan dos de los cuatro campos de §4.11 y `Save & call`, los tres por falta de columna o de la puerta de Aloware — anotado arriba y en `contracts/protected-list.json`.
@@ -1061,6 +1084,8 @@ Hace falta un `.env` (copiar de `.env.example`; está en `.gitignore`, así que 
 npm run db:reset && npm run db:up && npm run db:migrate && npm run db:seed
 ```
 `db:down` **no** alcanza — deja el volumen y las filas vuelven.
+
+⏳ **El estado `fresh` del tablero dura SESENTA MINUTOS desde `npm run db:seed`.** `fresh` es cero intentos **y** una llegada de menos de una hora, y el seed le da a Ruth Alvarez *"llegó cuando corrió el seed"*. Un tablero mostrado más tarde **no tiene ninguna tarjeta fresca**: ni riel azul ni `NEW`. Si el demo va a mostrar ese estado, sembrar antes. Encontrado el 2026-08-03 porque un e2e que lo asserteaba se puso rojo por primera vez.
 
 ✅ **El tenant demo de esta máquina fue RESETEADO el 2026-08-03 y está limpio.** Con el seed que abarca períodos, el tablero arranca en: **hoy $26.339,88 · mes $30.557,88 · all-time $31.997,88**, y el top tres se re-rankea entre pestañas. Renata queda **#2 en all-time con $9.029,88** y **#3 en hoy** — que es justo lo que hace demostrable el selector de período.
 
