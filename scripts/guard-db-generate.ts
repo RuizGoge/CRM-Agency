@@ -71,16 +71,17 @@ function main(): void {
       `drizzle-kit diffs the schema files against the NEWEST SNAPSHOT, so it would\n` +
       `compare against a database ${behind} migration(s) in the past — and emit a migration\n` +
       `that re-adds objects that already exist or drops ones it cannot account for.\n` +
-      `0019 added constraints to earnings_ledger and 0020 added scheduled_job.claimed_at;\n` +
-      `neither is in a snapshot. This project has no down migrations: rollback is the\n` +
-      `previous image, so a bad generated migration is not something to undo.\n\n` +
+      `A hand-written migration changed a table and left no snapshot behind. This\n` +
+      `project has no down migrations: rollback is the previous image, so a bad\n` +
+      `generated migration is not something to undo.\n\n` +
       `Two honest ways forward:\n\n` +
-      `  1. Keep writing SQL by hand, which is what every migration since 0019 did.\n` +
+      `  1. Keep writing SQL by hand, which is what 0019 to 0025 did.\n` +
       `     Add the file and its journal entry yourself. Nothing here blocks that —\n` +
       `     this guard only stops the GENERATOR.\n\n` +
       `  2. Reconcile the chain first, deliberately: bring the schema files and the\n` +
       `     snapshots back into agreement in one reviewed step, then generate.\n\n` +
-      `Nothing was broken today only because nobody had run this command.`,
+      `Nothing was broken today only because nobody had run this command. Migration\n` +
+      `0026 is what a reconciliation looks like: no SQL, one snapshot.`,
   )
   process.exit(1)
 }

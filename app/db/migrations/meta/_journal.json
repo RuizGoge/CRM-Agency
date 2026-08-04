@@ -183,6 +183,13 @@
       "when": 1785745000004,
       "tag": "0025_one_decay_threshold",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1785802854920,
+      "tag": "0026_reconcile_snapshot_chain",
+      "breakpoints": true
     }
   ]
 }

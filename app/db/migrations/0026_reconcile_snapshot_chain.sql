@@ -1,0 +1,44 @@
+-- DELIBERATELY EMPTY. This migration exists for its SNAPSHOT, not its SQL.
+--
+-- Drizzle generates a migration by diffing the schema files against the NEWEST
+-- SNAPSHOT — never against the database — and the newest was 0018. Migrations
+-- 0019 to 0025 were written by hand, which was right for the triggers,
+-- policies and functions Drizzle does not model. But several of them changed
+-- things it DOES model, and none left a snapshot behind:
+--
+--   0009  ref.timing_constant                 (the undo window, in SQL)
+--   0020  app.scheduled_job.claimed_at        (the dispatcher's lease)
+--   0022  app.ratchet_direction               (the enum)
+--   0022  ref.ci_ratchet, ref.ci_ratchet_name (the CI ratchet)
+--   0025  app.tenant                          (the struck rot threshold)
+--
+-- WHAT THE STALE CHAIN WOULD ACTUALLY HAVE DONE, stated precisely, because an
+-- earlier draft of this comment overstated it and a wrong reason is worse than
+-- none. It claimed the generator would emit `DROP TABLE ref.ci_ratchet`. It
+-- would not have: Drizzle compares snapshots to schema files, and that table
+-- was in NEITHER, so it was invisible to the diff rather than endangered by
+-- it. What the generator would really have emitted is the catch-up above —
+-- `CREATE TYPE` for a type that exists, `ADD COLUMN` for a column that exists,
+-- `DROP COLUMN` for one already dropped — a migration that fails on its first
+-- statement on every database, new and old alike, because a fresh one runs
+-- 0019 to 0025 before reaching it.
+--
+-- The real exposure was the quieter one: a relation Postgres has and the
+-- schema files do not is a relation OUTSIDE the generator's management
+-- entirely. Nothing coordinated it with anything, and the day somebody
+-- declared a table of the same name, the diff would have been computed against
+-- a picture of the database that was missing it.
+--
+-- `DBGEN003` refused to run the generator while the chain was behind, which is
+-- what kept this a debt rather than a broken deploy. This file pays it: the
+-- schema files now declare all five, the generated diff was exactly the
+-- catch-up, and the SQL is dropped because every statement in it is already
+-- applied. The snapshot is the payload.
+--
+-- HOW TO KNOW IT WORKED, checked rather than asserted: `drizzle-kit generate`
+-- reports no schema changes, `npm run db:generate` stops refusing, and
+-- `tests/integration/snapshot-chain.test.ts` fails if a table ever exists in
+-- Postgres and in no schema file again — which is how `ref.timing_constant`
+-- was found while writing it.
+
+SELECT 1 WHERE false;

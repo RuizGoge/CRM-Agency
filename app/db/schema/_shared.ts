@@ -26,6 +26,22 @@ export const earningsDisposition = app.enum('earnings_disposition', [
 ])
 
 /**
+ * The five arms a CI ratchet can have — §11.3's vocabulary, and the direction
+ * is a property of the NAME rather than of a row.
+ *
+ * `frozen_set` is deliberately absent, and its absence is the ruling: it
+ * permitted supersets, so every list it guarded could be loosened by adding
+ * one row. §10.0.1 offered it and §11.3 struck it.
+ */
+export const ratchetDirection = app.enum('ratchet_direction', [
+  'monotonic_down',
+  'monotonic_up',
+  'pinned',
+  'shrink_only',
+  'sealed_set',
+])
+
+/**
  * Case-insensitive text. Used for `app_user.email` so that lowercasing is a
  * property of the type rather than a call site anyone can forget.
  */

@@ -262,6 +262,21 @@ export const scheduledJob = app.table(
       .default(sql`clock_timestamp()`),
     resolvedAt: timestamp('resolved_at', { withTimezone: true }),
 
+    /**
+     * THE LEASE. Added by migration 0020 and never declared here, which is why
+     * the snapshot chain had to be reconciled: a column the database has and
+     * the schema file does not is a column `drizzle-kit generate` would offer
+     * to add a second time.
+     *
+     * `FOR UPDATE SKIP LOCKED` alone is not enough. The row lock ends when the
+     * claim's transaction commits, so the next dispatcher tick — milliseconds
+     * later, before the work is resolved — picks the same job up again. This
+     * column is what survives the transaction, and the lease it grants is
+     * deliberately shorter than the fifteen minutes after which a reminder is
+     * dropped as too late.
+     */
+    claimedAt: timestamp('claimed_at', { withTimezone: true }),
+
     /** A real domain state, not a soft delete: a reschedule cancels a reminder. */
     canceledAt: timestamp('canceled_at', { withTimezone: true }),
   },
