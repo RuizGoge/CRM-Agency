@@ -97,9 +97,15 @@
     {
       "id": "DEMO-08",
       "title": "Global owner-scoped search, Cmd/Ctrl+K, under 200ms perceived",
-      "status": "blocked",
-      "blocker": "Not built. There is no search endpoint, no prefix cache and no E.164 normalisation yet.",
-      "test": null
+      "status": "partial",
+      "test": null,
+      "missing": [
+        "DONE: the server half. /api/search reads name, phone and email — the three fields search.idle names — owner-scoped for a seller and global with an owner chip on every row for a supervisor, with the role read from the seat rather than from anything the client sends. 15 integration tests.",
+        "DONE: E.164 normalisation, which is what §7's recovery path turns on. A handset rings, the seller types the number the way she reads it, and 937-555-0142 / (937) 555-0142 / 9375550142 / +19375550142 / 1 937 555 0142 all find the record. The last four digits work too. Normalisation is deliberately NOT validation: a typo returns nothing rather than being refused, and the empty state gets the number back so it can offer a prefilled quick-add.",
+        "🔬 RECORDED, not hidden: opening the endpoint's own owner predicate to true left every test green, because contact's owner_scoped RLS policy had already scoped the rows. The silo is held by the database, which is the design working — the application predicate is the second layer. The tests prove the property, not which layer delivers it.",
+        "Absent: the overlay. Ctrl+K from any surface with focus landing in the input, arrow keys through the results, Enter to open, Escape restoring focus to whatever opened it, and the four ratified states (search.idle, search.empty with Quick-add this number, search.empty.supervisor, and the error). None of it exists yet; the endpoint it would call does.",
+        "Absent: the 200ms perceived / 500ms committed budget as a GATE. Neither number is measured, there is no perf tier for it, and name matching is an ILIKE with no trigram index — which is fine at a demo tenant's size and unproven at 500 leads per seller across fifty sellers."
+      ]
     },
     {
       "id": "DEMO-09",
