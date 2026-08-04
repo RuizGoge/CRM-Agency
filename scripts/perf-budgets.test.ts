@@ -23,6 +23,10 @@ interface Budget {
   readonly tier: string
   readonly direction: string
   readonly value: number | null
+  /** §8.1's cap on what a measurement may fix the budget at. P20 is the row that has one. */
+  readonly ceiling?: number
+  /** The date the number came from. Optional because P6's numbers are ruled, not measured. */
+  readonly measured?: string
 }
 
 const pkg = JSON.parse(readFileSync('package.json', 'utf8')) as PackageJson
@@ -64,11 +68,33 @@ describe('every budget is a one-way ratchet', () => {
     for (const b of enforced) expect(b.value).toBeTypeOf('number')
   })
 
-  it('keeps the unmeasured TTI budget declared rather than deleted', () => {
-    // Gate 11 is HALF closed and the file has to keep saying so. Deleting the
-    // row would make the gate green and the debt invisible on the same commit.
+  it('keeps the TTI budget measured, bounded and inside its ceiling', () => {
+    // 🔴 THIS TEST USED TO ASSERT `expect(p20?.value).toBeNull()`, and its name
+    // was "keeps the unmeasured TTI budget declared rather than deleted". That
+    // was the right assertion while Gate 11 was half closed: deleting the row
+    // would have made the gate green and the debt invisible on one commit.
+    //
+    // Measuring it is the other direction, and it had to be a deliberate edit
+    // for the same reason. §8.1 caps what a measurement may fix the budget at:
+    // past 3000 ms the answer is a faster board, not a bigger number, so the
+    // ceiling is asserted here rather than left as prose in the row.
     const p20 = budgets.find((b) => b.id === 'P20')
     expect(p20).toBeDefined()
-    expect(p20?.value).toBeNull()
+    expect(p20?.value).toBeTypeOf('number')
+    expect(p20?.value ?? Infinity).toBeLessThanOrEqual(p20?.ceiling ?? 0)
+    expect(p20?.measured, 'a measured budget records WHEN, or it is a number nobody can date').toBe(
+      '2026-08-03',
+    )
+  })
+
+  it('gives every budget a tier some command actually runs', () => {
+    // The check that would have caught P20 sitting in an imaginary "nightly"
+    // tier for a month. `check-perf-budgets.ts` refuses with PERF007 at build
+    // time; this says the same thing where it is cheap to read, and the two
+    // lists have to agree.
+    const runnable = new Set(['pre-merge', 'e2e', 'e2e-lighthouse', 'integration'])
+    for (const b of budgets) {
+      expect(runnable.has(b.tier), `${b.id} names tier "${b.tier}", which nothing runs`).toBe(true)
+    }
   })
 })

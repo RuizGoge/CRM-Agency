@@ -30,8 +30,29 @@ import postgres from 'postgres'
 const CLIENT_DIR = 'build/client'
 const MANIFEST = join(CLIENT_DIR, '.vite/manifest.json')
 
-/** The tier this process enforces. Nightly budgets are declared here, not run here. */
+/** The tier this process enforces. Other tiers are declared here, not run here. */
 const TIER = 'pre-merge'
+
+/**
+ * Every tier, and the command that actually runs it.
+ *
+ * 🔴 THIS MAP IS A CHECK, not documentation. The previous version printed the
+ * other budgets under the heading *"their tier does not exist yet"*, which was
+ * true when only the bundle was measured and had quietly stopped being true for
+ * two of the three rows: N13 runs in the integration suite and P6 has run under
+ * `dnd-ci` since Gate 12. A heading that lies in the reassuring direction is how
+ * a budget nobody runs hides among budgets that do.
+ *
+ * So a tier not listed here is a REFUSAL. Inventing `"tier": "nightly"` — which
+ * is exactly what P20 carried while nothing ran it — now fails the build that
+ * ships it rather than earning a line of prose.
+ */
+const TIERS: Readonly<Record<string, string>> = {
+  'pre-merge': 'this checker, inside npm run verify',
+  e2e: 'npm run test:e2e, dnd-ci profile',
+  'e2e-lighthouse': 'npm run test:e2e, lh-ci profile',
+  integration: 'npm run test, tests/integration',
+}
 
 /**
  * React Router names its client route modules with this suffix in the Vite
@@ -292,12 +313,33 @@ async function main(): Promise<void> {
 
   console.log(`\nPerformance budgets — ${TIER} tier\n${report.join('\n')}`)
 
+  const unknownTier = config.budgets.filter((b) => TIERS[b.tier] === undefined)
+  if (unknownTier.length > 0) {
+    fail([
+      'PERF007: a budget names a tier nothing runs.',
+      '',
+      ...unknownTier.map((b) => `  ${b.id} ${b.name} — tier "${b.tier}"`),
+      '',
+      'Either add the tier to TIERS with the command that runs it, or move the row to',
+      'a tier that exists. A budget parked in an imaginary tier is a number that is',
+      'never compared to anything, which is indistinguishable from having no budget.',
+    ])
+  }
+
   const declared = config.budgets.filter((b) => b.tier !== TIER)
   if (declared.length > 0) {
+    // Widest title, not a guessed constant: P20's is longer than 30 and the
+    // column tore.
+    const width = Math.max(...declared.map((b) => b.title.length))
     console.log(
-      `\nDeclared but NOT enforced here (their tier does not exist yet):\n` +
+      `\nEnforced ELSEWHERE — declared here, measured by the command named:\n` +
         declared
-          .map((b) => `  ${b.id.padEnd(4)} ${b.title} — ${b.value === null ? 'NO VALUE' : b.value}`)
+          .map(
+            (b) =>
+              `  ${b.id.padEnd(4)} ${b.title.padEnd(width)} ` +
+              `${b.value === null ? 'NO VALUE' : String(b.value).padStart(7)}  ` +
+              `← ${TIERS[b.tier] ?? ''}`,
+          )
           .join('\n'),
     )
   }

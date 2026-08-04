@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 
+import { reArmArrival } from './fixtures/arrival'
 import { signIn } from './fixtures/seller'
 
 /**
@@ -93,6 +94,18 @@ test.describe('every card is exactly one height', () => {
     //
     // The seeded board holds one card per state on purpose; the ages are fixed
     // rather than random precisely so this can be asserted at all.
+    //
+    // 🔴 EXCEPT THE FRESH ONE, WHICH EXPIRES. `fresh` is zero attempts AND an
+    // arrival less than SIXTY MINUTES old, and the seed gives Ruth "arrived when
+    // the seed ran" — so this assertion was true for one hour after
+    // `npm run db:seed` and false afterwards. It passed for weeks because the
+    // demo tenant kept being reseeded, and went red the first time a suite ran
+    // more than an hour later. The window is not widened to fix it: sixty
+    // minutes is the product's definition of a lead worth dropping everything
+    // for, and moving it so a test can pass trades the definition for the
+    // convenience.
+    expect(await reArmArrival('Ruth Alvarez'), 'the seeded fresh lead is gone').toBeGreaterThan(0)
+
     await signIn(page)
     await page.goto('/board')
     await expect(page.getByRole('heading', { name: 'Pipeline' })).toBeVisible()

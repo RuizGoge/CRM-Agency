@@ -197,6 +197,13 @@
       "when": 1785807146250,
       "tag": "0027_search_budget",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1785810746250,
+      "tag": "0028_tti_budget",
+      "breakpoints": true
     }
   ]
 }

@@ -5,6 +5,14 @@ import { defineConfig, devices } from '@playwright/test'
  * measured against these and nothing else — a budget measured on an unthrottled
  * developer laptop is a budget that passes everywhere except a seller's phone.
  */
+/**
+ * The specs that exist to produce a NUMBER rather than to assert behaviour.
+ * Listed once: the previous version repeated `drag-perf` in two `testIgnore`
+ * entries, so adding the TTI spec would have needed the same edit twice and
+ * missing one would have run a budget under the wrong profile without saying so.
+ */
+const PERF_SPECS = /(drag-perf|tti)\.spec\.ts/
+
 export default defineConfig({
   testDir: './tests/e2e',
 
@@ -33,15 +41,15 @@ export default defineConfig({
     locale: 'en-US',
   },
   projects: [
-    // Both functional profiles ignore the perf spec: it owns its own profile
-    // because its number is only meaningful under the 2x throttle, and running
-    // it unthrottled here would produce a second, easier P6 that passes.
+    // Both functional profiles ignore the perf specs: each owns its own profile
+    // because its number is only meaningful under a fixed throttle, and running
+    // them unthrottled here would produce a second, easier budget that passes.
     {
       name: 'desktop-ci',
-      testIgnore: /drag-perf\.spec\.ts/,
+      testIgnore: PERF_SPECS,
       use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 } },
     },
-    { name: 'mobile-ci', testIgnore: /drag-perf\.spec\.ts/, use: { ...devices['Pixel 7'] } },
+    { name: 'mobile-ci', testIgnore: PERF_SPECS, use: { ...devices['Pixel 7'] } },
     // `dnd-ci` is desktop-ci with a 2x CPU slowdown (04b §3.1), and the slowdown
     // is the point: it buys headroom so a green build means a comfortable 60 fps
     // on a seller's five-year-old laptop rather than on an idle CI runner.
@@ -58,6 +66,19 @@ export default defineConfig({
         // The PRODUCTION build, on its own port. See the webServer note below.
         baseURL: 'http://localhost:3001',
       },
+    },
+    // `lh-ci` runs P20. It uses NO Playwright browser at all — Lighthouse
+    // launches its own Chrome so it can drive the trace and apply its mobile
+    // preset, and the profile exists to select the spec, to hand it the
+    // production baseURL, and to keep the budget out of the functional runs.
+    //
+    // The device is not set for the same reason: overriding Lighthouse's own
+    // mobile emulation from here would silently measure something other than
+    // what `lighthouse_tti_ms` means.
+    {
+      name: 'lh-ci',
+      testMatch: /tti\.spec\.ts/,
+      use: { baseURL: 'http://localhost:3001' },
     },
   ],
   // TWO servers, and the second one is not a convenience.

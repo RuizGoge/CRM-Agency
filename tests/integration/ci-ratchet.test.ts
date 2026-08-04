@@ -204,12 +204,32 @@ describe('the budgets this project actually ships are registered', () => {
     ])
     for (const arm of arms) expect(arm.direction).toBe('monotonic_down')
 
-    // E6: the NAME is registered and the VALUE waits for the gate to measure.
-    // Deleting this assertion is how the hole stops being visible.
-    const [p20] = await sql<{ n: string }[]>`
-      SELECT count(*)::text AS n FROM ref.ci_ratchet
-      WHERE name = 'perf.P20_mobile_tti_pipeline'`
-    expect(p20?.n).toBe('0')
+    // 🔴 THIS ASSERTION USED TO READ `expect(p20?.n).toBe('0')`, and changing it
+    // is the point rather than a chore. E6 made P20 a DECLARED hole — the name
+    // registered, the value absent — and this line was what kept the hole
+    // visible: it would have gone red the moment somebody wrote a number
+    // without meaning to. Migration 0028 measured it at 2251 ms and registered
+    // 2300, so the hole closed in a diff. A hole that closes because nobody
+    // noticed it was open is the failure this arrangement exists to prevent,
+    // in either direction.
+    const [p20] = await sql<{ n: string; latest: string | null }[]>`
+      SELECT count(*)::text AS n,
+             (SELECT value_num::text FROM ref.ci_ratchet
+               WHERE name = 'perf.P20_mobile_tti_pipeline'
+               ORDER BY set_at DESC LIMIT 1) AS latest
+        FROM ref.ci_ratchet WHERE name = 'perf.P20_mobile_tti_pipeline'`
+    expect(Number(p20?.n ?? '0')).toBeGreaterThan(0)
+    expect(p20?.latest).toBe('2300')
+  })
+
+  it('refuses to loosen the measured TTI budget', async () => {
+    // The walk this arm exists to stop, on the budget most likely to invite it:
+    // P20 is MACHINE-DEPENDENT, so a slower runner measures a larger number and
+    // the tempting fix is to write the larger number down. It is not available.
+    await expect(
+      sql`INSERT INTO ref.ci_ratchet (name, value_num, set_by_run)
+          VALUES ('perf.P20_mobile_tti_pipeline', 4000, 'suite')`,
+    ).rejects.toThrow(/AP002.*2300 to 4000/s)
   })
 
   it('refuses to loosen the shipped bundle budget', async () => {
