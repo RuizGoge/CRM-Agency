@@ -7,6 +7,204 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### ⚠️ N13 TAMBIÉN DEPENDE DE LA MÁQUINA, y nadie lo había marcado (2026-08-05)
+`search-perf.test.ts` se puso rojo a las 12:09 con **199 ms contra un presupuesto de 120**. **No es mío y no es ruido.**
+
+- **Aislado falla igual y consistente:** 180,6 · 188,1 · 159,0 ms. Tres corridas, sin la suite alrededor.
+- 🎯 **Bisecado contra `HEAD` limpio (`git stash -u`): 184,8 ms.** Sin la migración 0029, sin nada de la Puerta 2. La regresión es del entorno.
+- **Y pasó verde dos veces esta misma madrugada en esta misma máquina**, después del reset de la base — 23:52 y 00:5x, ambas con la suite entera en verde. Lo que cambió en doce horas es el host.
+- **Diagnóstico medido:** 15,4 GB de RAM total y **2,2 GB libres (14,3 %)** — WSL 1,6 GB, Chrome 772 MB, dos procesos de Claude ~900 MB, Edge WebView 448 MB, Opera 363 MB. Con esa presión WSL2 pierde caché de disco y un scan de índice sobre 25.000 filas se va de 60 a 185 ms. El contenedor está sano: 96 MB de 7,4 GB, CPU 0 %, 16 núcleos.
+
+**EL PRESUPUESTO NO SE MUEVE, y tampoco se le pone una mediana de tres para que pase** — eso es aflojarlo con otra ropa. Lo que esto dice es que **N13 es tan dependiente de la máquina como P20**, y eso NO estaba anotado: se registró como si fuera un número de servidor estable. `monotonic_down` se va a negar a aflojarlo, que es el brazo funcionando. **Contrapartida real: `npm run verify` —y por lo tanto el hook de pre-commit— necesita una máquina desahogada.**
+
+### 🚨 LA CUENTA DE ALOWARE SE SUSPENDE EL 15/08/2026 (2026-08-05)
+Leído en el banner del panel real: *"we did not receive a payment for your most recent invoice … your Aloware account will be suspended on 08/15/2026."*
+
+**La Puerta 2 corre contra esa cuenta.** Si se suspende, G2 no queda pendiente: queda **imposible de correr**, y con ella el módulo 9 entero, cuatro aserciones DEMO, el estado `blocked` del riel, la señal de contacto reciente y todos los gates de cumplimiento — bloqueados por una factura y no por un límite técnico. La ventana son diez días **menos** lo que tarde la medición: la sonda de reintento puede necesitar horas y el vocabulario de disposiciones exige varias llamadas llevadas a propósito a contestada, sin respuesta, ocupado y buzón.
+
+- **Y encima cada marcado del spike es facturable.** La pestaña del two-legged avisa con estas palabras: *"Two-Legged Call API usage is considered **automated & paid**."*
+- ⚠️ **La palabra `automated` queda marcada por otra razón y sin sacar conclusión:** en TCPA la clasificación de un discador como automatizado tiene peso legal, y acá es el proveedor clasificando así su propio camino two-legged. Es pregunta de dueño, no de arquitectura.
+- **Nada en este repositorio toca el flujo de pago.**
+
+### ✅ PRIMEROS INTERCAMBIOS REALES CAPTURADOS · ⚠️ UNA LATENCIA QUE PONE EN DUDA N10 (2026-08-05)
+Cuatro sondas contra la cuenta viva, todas de sólo lectura, todas gratis, ningún teléfono sonó. **`ref.capability_probe` tiene sus primeras filas con procedencia real.**
+
+**`contact_lookup` — `GET /api/v1/webhook/contact/phone-number`, con el token en la QUERY STRING.** Tercera ubicación distinta de autenticación (cuerpo en two-legged, query acá): **no hay un esquema único que asumir**, y es la vindicación concreta de `SPIKE010` por segunda vez.
+
+- **Sujeto: `2025550100`**, del rango ficticio reservado norteamericano (555-0100..0199). No pertenece a ninguna persona y no está en los contactos de la cuenta — que es lo que lo hace un sujeto lícito para una fila que **E9 no purga nunca**.
+- ✅ **El token NO llegó a la fila permanente:** quedó `api_token=%5BREDACTED%5D`. Esa redacción se escribió **antes** de saber que este endpoint existía, y éste es exactamente el caso que protege.
+- ✅ **El CHECK del digest aguantó contra un cuerpo real del proveedor**, y el cuerpo guardado es `{"error":"Contact not found."}`, la forma 404 documentada al pie.
+- ✅ **El token sirve.** Un 404 en la forma documentada prueba que la autenticación fue aceptada; uno malo contesta 401 o 403.
+- ⚠️ **Un 404 acá NO es evidencia de `absent`** — el endpoint contestó en su propia forma documentada. `contact_lookup` sigue en `unknown`, y la razón por la que **no puede** pasar a `verified` importa: **CAP003 exige un 2xx, y un 2xx acá sería el registro de un consumidor real en una fila que no se purga jamás.** Verificarla lícitamente necesita un contacto sintético que todavía no existe, y crearlo es un cambio de cuenta — decisión de Jorge, no de la arquitectura.
+
+⚠️ **LA LATENCIA: 1447 · 1506 · 1388 · 1278 ms.** Un lookup trivial cuesta **1,3–1,5 s de forma consistente** — cuatro llamadas seguidas con 228 ms de reparto no son ruido de handshake.
+
+- **N10 fija `POST /api/calls` (gate + ack del dial) en p95 ≤ 300 ms más un ack medido en G2**, y P3 volvió a meter el dial **adentro** del request. Si el piso del proveedor son segundos y no milisegundos, ese presupuesto no se sostiene como está escrito, y los 10 s de `ARR-MVP-26` dejan de ser holgura cómoda.
+- 🔴 **DOS COSAS QUE ESTE NÚMERO NO ES, dichas antes de que alguien lo cite:** (1) **no es el dial** — el two-legged devuelve `202` al establecer, no al atender, así que puede ser mucho más rápido; (2) **se midió desde una laptop, no desde la región de producción.** G0 fijó producción en Ohio o Virginia y esto corrió desde la máquina del dueño: la distancia de red sola podría explicar casi todo. **Es un techo y una alarma, no el número de producción** — la misma salvedad de dependencia de máquina que carga P20, sobre un número al que nadie había pensado en pegársela.
+
+### 🔓 MIGRACIÓN 0030 — `two_legged_call` VERIFICADA, y el candado del módulo 9 cede (2026-08-05)
+`0030_promote_two_legged_call.sql`. **258 → 259 tests.** `npm run verify` **entero en verde**, presupuestos incluidos.
+
+**No agrega ninguna función: quita un candado.** `alowareCapability('two_legged_call')` devuelve una unión discriminada y sólo la variante `verified` tiene `.call`, así que hasta hoy la pantalla de llamadas **no compilaba**. Ahora sí.
+
+🔴 **LA DECISIÓN DE DISEÑO QUE HUBO QUE TOMAR: la evidencia VIAJA DENTRO DE LA MIGRACIÓN.** Los probes los escribe `spike:probe` contra la cuenta real, así que la fila capturada existe en **una sola laptop**. Una migración que apenas referenciara su uuid aplicaría ahí y **fallaría en toda otra base** —CI, un clon nuevo, producción— porque la fila apuntada nunca se creó. Así que los bytes capturados se transcriben en el archivo: el cuerpo (`{"message":"Two legged call established."}`), el digest y el `observed_at`. Dos consecuencias, las dos buscadas: **la evidencia es reproducible en toda base que corra la cadena**, y `capability_probe_digest_matches` **la re-verifica en cada aplicación**. Un cuerpo mal transcripto o un digest mal tipeado es un deploy fallido, no una mentira silenciosa.
+
+- **Se eligió el probe de `g2-dial-02`** sobre `g2-dial-01` —los dos con `202`— porque es el marcado que llegó hasta el final: pierna de agente atendida, pierna del lead conectada, 63 s de conversación y grabación producida. **Los dos prueban el endpoint; sólo uno prueba que la capacidad hace lo que el producto necesita.**
+- ✅ **`CAP010` es nuevo y probado por mutación:** un bloque final que se niega si la promoción resultó un no-op. Apuntando el `UPDATE` a un nombre de capacidad con typo, la migración **aborta** con *"this migration verified nothing"* en vez de pasar en verde sin verificar nada.
+- 🔴 **UN GUARDIÁN TUVO QUE CAMBIAR, que es para lo que se escribió.** El test asserteaba *"toda capacidad sembrada arranca en `unknown`"* y se puso rojo en cuanto la 0030 movió el hecho — igual que los dos guardianes del ratchet cuando se midió P20. Reemplazado por dos aserciones más fuertes: **exactamente una** capacidad verificada, y que su probe sea **de ella misma** (CAP002), **2xx** (CAP003) y con **`verified_at` = `observed_at`** (CAP004).
+
+⚠️ **LO QUE LA 0030 NO DESBLOQUEA, dicho antes de escribirla y no después:**
+
+| | |
+|---|---|
+| `two_legged_call` | ✅ verificada |
+| `sms_send` | ❌ sin probe — verificarla es un envío real y facturable; el 10DLC aprobado **no** es evidencia de que el endpoint conteste |
+| `contact_lookup` | ❌ sus cuatro probes son `404`, y un `2xx` sería un consumidor real en una fila que E9 no purga nunca |
+| `webhook_subscription` | 🔴 **no puede promoverse con la tabla como está** |
+
+🔴 **Y ése último es un hueco del diseño que sólo apareció al usar el mecanismo:** hay **20 entregas reales capturadas**, evidencia más fuerte que cualquier probe — pero `ref.capability_probe` modela **una petición saliente y su respuesta**, y un webhook es **entrante**. No hay forma para esa evidencia. Como la capacidad es `mvp_required`, **la aserción de boot sigue rechazando producción**. Es una decisión de diseño abierta (cómo se acredita una capacidad de entrada), registrada en vez de tapada inventando un probe que nunca ocurrió.
+
+### 🟢 (k) LA PREGUNTA QUE NADIE HIZO, CONTESTADA · (f) CERRADA (2026-08-05)
+G2 la señala aparte: *"la pregunta que ningún candidato hizo: ¿exige el proveedor una respuesta síncrona por debajo de ~1 s?"*. Se armó el receptor para recibir una entrega entrante real y **simplemente no contestarla**.
+
+**Retenida 110.023 ms — un minuto y cincuenta segundos — y `client_aborted: false`: Aloware NUNCA cortó**, y aceptó el 204 cuando por fin llegó. §4.2 regla 5 planteaba dos desenlaces (*"si exige sub-segundo, write-first es cómodo; si exige sub-100 ms, se mueve el límite de admisión del ingest"*): **no aplica ninguno. El límite de admisión no se mueve.** ⚠️ Los 110 s son **nuestro** techo, no el suyo: el hallazgo es una cota inferior.
+
+🔗 **Y LEÍDAS JUNTAS, (c) Y (k) DICEN ALGO QUE NINGUNA DICE SOLA:** *sin reintento nunca, y un plazo de respuesta de al menos 110 segundos.* **Un solo tiro por evento, con una ventana enorme para darlo.** La postura correcta en el borde es la inversa del reflejo:
+
+- **Nunca fallar rápido.** Un `500` devuelto en 2 ms es pérdida permanente de datos.
+- **Ser lento es casi gratis.** Tardar cinco segundos en hacer durables los bytes no le molesta al proveedor.
+- Bajo presión, el borde debe **encolar, bloquear y tomarse el tiempo** — nunca tirar carga, nunca devolver no-2xx, nunca limitar tasa. `ADR-SEC-06` ya decía *"los webhooks se admiten, no se limitan"* razonando que limitar convierte una ráfaga en una ráfaga reintentada más larga. **Ese razonamiento resulta ser demasiado generoso con el proveedor:** no hay ráfaga reintentada, porque una entrega rechazada sencillamente no vuelve. La regla es correcta y su justificación ahora es más fuerte que la que le escribieron.
+
+✅ **(f) cerrada en la misma llamada: `InboundPhoneCall-DispositionMissed`** — una disposición sobre la familia entrante, no un evento aparte. Es exactamente lo que §4.3 ya dictaba (*"una entrante perdida no es un evento separado"*). **La forma del proveedor y el modelo canónico coinciden.** ⚠️ Con el matiz de que la IA de AloAi se interpone: si atiende ella, la llamada nunca llega a estar perdida.
+
+### 🚨 (c) ALOWARE NO REINTENTA — el peor hallazgo de la puerta (2026-08-05)
+Receptor armado para contestar **`HTTP 500` a todo**, y dejado así. **Seis entregas reales rechazadas, dos familias de eventos, más de tres horas: cero reintentos.** Tres `OutboundAppointment` (ids 940968066 · 941049357 · 941081975) y, con el mismo brazo activo, los tres de una llamada entrante real (`InboundPhoneCall`, `InboundPhoneCall-DispositionCompleted`, `Recording-Saved`, id 941083416). **Ningún cuerpo repetido, ningún par `(evento, id)` repetido.**
+
+`ARR-INT-02` mandaba *"asumir at-least-once, fuera de orden, posiblemente sin firmar, hasta que el spike diga otra cosa"*. **El spike dijo otra cosa, y la verdad es la opuesta al supuesto en la dirección que duele.** Junto con todo lo demás medido:
+
+> **sin firma · sin id de evento · sin reintento · sin API de call-list**
+
+Eso es **entrega "como mucho una vez", sin ningún camino de recuperación**. Un webhook perdido porque el ingest estuvo caído treinta segundos se pierde **para siempre**: el proveedor no lo reenvía y no hay endpoint de listado contra el cual reconciliar.
+
+- **`ARR-INT-07` ("nada se descarta nunca") pasa a tener que sostenerse en el BORDE, de forma absoluta.** El diseño write-first ya era correcto; esto lo vuelve portante de un modo que antes no era. Cualquier condición en que el endpoint devuelva algo distinto de 2xx —un deploy, un reinicio, un disco lleno, un event loop saturado— es **pérdida permanente de datos**, no una demora.
+- **El DLQ deja de ser red de seguridad y pasa a ser autopsia:** sólo puede contener lo que ya recibimos.
+- **La disponibilidad del ingest se vuelve una propiedad de CORRECCIÓN, no de rendimiento.** Argumento fuerte a favor de que el bulkhead sea real (proceso propio) antes que después.
+- ⚠️ **Fan-out medido: 6 webhooks por saliente completada, 3 por entrante, 2 por saliente fallida.** Ése es el multiplicador que OQ-2 necesitaba.
+- **Tres convenciones de nombres en el mismo stream:** `OutboundPhoneCall-DispositionCompleted` · `InboundPhoneCall-DispositionCompleted` · `Recording-Saved` · y en minúscula con puntos `transcription.call.summarized`. Un mapeo contra una sola convención pierde eventos en silencio.
+- ✅ **El dial falla RÁPIDO y con motivo:** sin agente disponible devuelve `422 {"errors":{"user":["...can not find any available inbox users..."]}}` en ~2 s, y no crea llamada. Es exactamente la rama de fallo síncrono que `ARR-INT-03` pide.
+
+🔴 **Y UNA AFIRMACIÓN MÍA QUE ESTABA MAL, corregida en el documento.** Dije que el filtro `Skip lines → Local Presence` confinaba la suscripción a la Test Line. **No lo hace:** una cita **no tiene línea**, así que una exclusión por línea no puede aplicarle, y llega igual por `communication.disposed` — en el modelo de Aloware una cita también es una "comunicación". Consecuencia inmediata: **llegó tráfico de producción al receptor del spike pese a un filtro que yo había descrito como suficiente.** Y consecuencia para el producto: **un filtro por línea no sirve para acotar una suscripción de webhooks.**
+
+### 🟢 (b) CERRADA EN EL CABLE · 🔴 Y UN HALLAZGO QUE NADIE BUSCABA (2026-08-05)
+Se creó la suscripción (filtrada con `Skip lines` para saltear Local Presence, así no se copia tráfico de producción) y `Save and Test Webhook` disparó una entrega. Aloware la reporta **VALID & ACTIVE**. Lo capturado:
+
+```
+POST /hooks/aloware -> 204 en 1 ms · 21 bytes · {"test_payload":true}
+Host · User-Agent: GuzzleHttp/7 · Content-Length · Accept-Encoding: gzip
+Connection: keep-alive · Content-Type: application/json
+```
+
+**Esos seis son TODO lo que manda Aloware.** Los otros diez de la captura (`Cf-*`, `X-Forwarded-*`, `Cdn-Loop`) son del túnel — la trampa que había anotado una hora antes, viva en la primerísima entrega.
+
+**(b) queda contestada: no hay firma.** Ni `X-Aloware-Signature`, ni timestamp, ni nonce. El panel lo decía y el cable lo confirma.
+
+🔴 **Y EL HALLAZGO QUE NADIE FUE A BUSCAR: tampoco hay id de entrega ni id de evento en los headers.**
+
+- La escalera de idempotencia de §4.4 tiene como **primer peldaño** un índice único de dedupe de transporte sobre `(tenant_id, provider, provider_event_id)` — el que *"permite que una tormenta de 20.000 webhooks aterrice sin tocar el dominio"*. Y el hallazgo de la firma ya había ascendido ese mismo índice a **la única defensa contra replay que queda**, porque nada prueba frescura.
+- Así que todo ese peldaño depende ahora de que `provider_event_id` venga **en el cuerpo**, y el cuerpo de prueba es `{"test_payload":true}`: no trae ningún id. **Hasta capturar un cuerpo de evento real, no se sabe si esa columna se puede poblar.** Si no se puede: el dedupe de transporte se queda sin clave y la supresión de duplicados baja a los peldaños de call/message, que **mergean en vez de rechazar** —más caro por entrega, justo en el camino que una tormenta golpea más fuerte— y **el replay se queda sin defensa**, porque el índice que hacía de sustituto no se puede construir.
+- **Es el desconocido de mayor valor de toda la puerta, y se contesta con una sola llamada real.**
+
+**Dos datos menores que vale guardar:** `User-Agent: GuzzleHttp/7` (el emisor es PHP/Guzzle y el UA es genérico — no se puede identificar al proveedor por ahí), y `Cf-Connecting-Ip: 35.93.153.75`, o sea **AWS `us-west-2`, Oregon**. Una allowlist de IP es posible en principio, aunque un rango de nube es un control débil; y refina la latencia: el proveedor está en la costa **oeste**, mientras G0 puso producción en Ohio o Virginia.
+
+### 🔴 ALOWARE NO FIRMA SUS WEBHOOKS — `ARR-INT-02` resuelto por la mitad peor (2026-08-05)
+`/integrations/webhooks` existe, con botón **Add Webhook**. Hoy no hay ninguno configurado y el toggle de la integración está apagado. **`webhook_subscription` EXISTE.**
+
+**El formulario liquida la pregunta de la firma: `Authentication Method` es `None` · `Basic` · `Bearer`. No hay HMAC, no hay secreto de firma, no hay header de firma.** Lo que ofrece es una **credencial estática que nosotros damos y él repite**. La caracterización honesta es **autenticado pero sin firmar** — que no es lo mismo que "sin firmar y sin autenticar", y tampoco es lo mismo que una firma:
+
+| | Firma HMAC | Lo que Aloware ofrece |
+|---|---|---|
+| Ata el **cuerpo** al secreto | ✅ | ❌ |
+| Detecta payload manipulado | ✅ | ❌ |
+| Resiste replay | ✅ | ❌ — una request capturada se reproduce para siempre |
+| Prueba que quien llama tiene el secreto | ✅ | ✅ |
+
+- ✅ **§4.2 regla 3 fue diseñada exactamente para esto y aguanta.** `signature_valid boolean NULL` era nullable *"a propósito, porque el spike no estableció si Aloware firma, y un `NOT NULL` nos obligaría a registrar una mentira"*. Ahora la columna tiene significado permanente: con `Bearer` registra validez **de credencial**, que es una afirmación más débil que su nombre. **O se renombra o su comentario carga este párrafo** — un campo llamado `signature_valid` guardando un chequeo de bearer es cómo un lector futuro le cree de más a un payload.
+- 🔴 **El replay no es defendible en el borde.** Nada en la request prueba frescura, así que el índice único de dedupe de transporte `(tenant_id, provider, provider_event_id)` **deja de ser una comodidad de idempotencia y pasa a ser lo único que separa una request capturada de un replay ilimitado.** Es un control de seguridad y hay que documentarlo como tal.
+- **La línea permanente de *"no podemos verificar"* en `/admin/integration-health` deja de ser provisoria.**
+
+**12 eventos suscribibles — el vocabulario real de §4.3:** Contact Created · Contact Updated · Contact Disposed · Contact DNC Updated · Communication Initiated · Communication Disposed · Appointment Saved · **Call Disposed** · **Voicemail Saved** · **Recording Saved** · **Transcription Saved** · **Call Summarized**.
+
+- ⚠️ **No hay evento de SMS con ese nombre.** Probablemente el SMS entrante llegue como `Communication Initiated` —Aloware parece llamar "communication" a llamadas y textos por igual— pero §4.3 mapea SMS entrante a `message.received` con clave `provider_message_id`, y ese binding está **sin probar**.
+- 🔴 **NO HAY `Call Answered`. Sólo `Communication Initiated` y `Call Disposed`.** Si el proveedor empuja al arrancar y al cerrar y nada en el medio, entonces **el estado de llamada en vivo —uno de los exactamente DOS canales que SSE tiene permitido llevar— no tiene fuente de webhook.** El silencio de 5-15 segundos del two-legged es justo el intervalo sin ningún evento adentro. Después de la firma, es lo más consecuente de esta pantalla.
+- **Hay un toggle `Delay`** (segundos antes de enviar) y **filtros**: Direction · Type · Communication Disposition Status · Contacts · **Skip lines** · Duration.
+- ✅ **`Skip lines` es lo que hace posible una suscripción segura:** salteando la línea 65123 (Local Presence, producción) queda sólo la 63949 (Test Line) — sujetos sintéticos únicamente, que es lo que E9 exige y no una preferencia.
+- **`Save and Test Webhook` manda una entrega de prueba**, así que la forma de headers y cuerpo se puede observar **sin gastar una llamada facturable**. Es la primera medición más barata que existe.
+
+### 🟢 10DLC APROBADO · 🎯 EL VOCABULARIO REAL DE DISPOSICIONES · 🔴 LA CUENTA ES PRODUCCIÓN (2026-08-05)
+Lectura del panel real. **La aserción (h) de G2 CIERRA y es la mejor respuesta posible.**
+
+**Business Registration ✅ · A2P Brand ✅ · A2P Campaigns ✅ · líneas registradas ✅**, más *"your phone numbers are registered for Voice Integrity"*. El brand está **a nombre de la agencia ("Tu Familia Protegida") y ya aprobado**, así que la instrucción de G2 de *"arrancar el trámite 10DLC en paralelo porque es externo, aprobado por terceros y rechazable"* **no tiene nada que arrancar**. Contesta también la pregunta abierta de `06-conversations.md` sobre quién es dueño del registro. **La puerta A2P que hacía de SMS-dark una dependencia externa está satisfecha:** SMS-dark sigue siendo una decisión, ya no una restricción.
+
+🎯 **EL VOCABULARIO REAL: 11 disposiciones, 4.511 comunicaciones, y NO es una taxonomía de telefonía.** `No Answer` **4.066 (90,1 %)** · Call back 166 · Not interested 131 · Demo completed 36 · Voicemail 32 · Wrong number 23 · **Closed deal 22** · Disconnected 18 · Out of range 14 · DNC 2 · Interested-follow up 1.
+
+- **La lista mezcla dos preguntas en un campo.** `No Answer`/`Voicemail`/`Wrong number`/`Disconnected`/`Out of range` son telefonía; `Closed deal`/`Demo completed`/`Interested`/`Not interested`/`Call back` son **venta**. La revisión adversarial del módulo 6 exigía justamente partirlo en `connection_result` y `sales_outcome` y llamaba al campo único *"una discusión de semántica donde cada automatización dispara sobre lo equivocado"*. **La cuenta real le da la razón.**
+- **Son escritas por la agencia y bilingües**, con descripciones en español. El mapeo no puede ser un enum de strings del proveedor fijado en código: los valores crudos son dato del tenant.
+- 🔴 **`DNC - Do not call` documenta un proceso manual entre dos sistemas: *"Marcar DNC en GHL."*** La agencia corre **GoHighLevel** hoy (su toggle está encendido). Una supresión crítica de cumplimiento depende hoy de que un humano se acuerde de espejarla en otro producto — exactamente el fallo que la feature 26 existe para eliminar. **Y es un hecho de migración que nadie había registrado: este CRM reemplaza a GHL.**
+- **90,1 % de no-contesta es la forma real del trabajo**, y es lo que vuelve material —y no curioso— el hallazgo de la `RVM API`.
+
+🔴 **LA CUENTA ES PRODUCCIÓN EN VIVO, no un sandbox:** ~150 llamadas y textos por día esta semana. Dos líneas: **63949 "Test Line"** con un número (`+1 737 427 3994`) y **65123 "Local Presence" con 58 números**. Dos inboxes: **29109** (Default, con las dos líneas) y **29696** (IUL – Live Transfers, 3 usuarios). Usuario logueado **120776**, Company Admin.
+
+- **Existe una "Test Line" con un solo número**, así que el spike disca desde `line_id=63949` y nunca desde el pool de producción.
+- 🔴 **El pool de 58 números contradice el mapa de identidad como está especificado.** §5 pone `UNIQUE (tenant_id, from_number_e164)` —*un número, exactamente un vendedor*— y US-601 lo assertea. Un pool rotativo no tiene binding estable. Dos cosas lo ablandan y ninguna lo resuelve: el two-legged toma `user_id` explícito, así que la atribución **saliente** no necesita el número; y `06-conversations.md` **cortó** local presence *"porque el riesgo regulatorio y de reputación de carrier no es nuestro para asumir"* — decisión tomada sin saber que el cliente ya lo usa. Queda abierta la atribución **entrante**: una devolución a un número del pool no tiene dueño bajo el índice actual.
+
+⚠️ **La franja de 14 pestañas está leída entera y el menú de Account tiene 22 ítems: `call_list` y la suscripción de webhooks NO aparecen en ninguno de los dos.** Ahora es una ausencia **buscada** y no una sin leer — pero todavía no es conclusión: la config de webhooks puede vivir por línea, adentro de las tarjetas de Integrations, o sólo por soporte (*"If you need more API functions, please contact our support"*). **No se registra `absent` hasta chequear eso.**
+
+### 🔎 PRIMERA LECTURA DEL PANEL REAL: `two_legged_call` EXISTE, Y ME ENCONTRÓ UN DEFECTO (2026-08-05)
+`POST https://app.aloware.io/api/v1/webhook/two-legged-call` · campos `api_token`, `user_id | ring_group_id`, `contact_phone_number | contact_id`, `line_phone_number | line_id`.
+
+🔴 **EL HALLAZGO MÁS CONSECUENTE DEL SPIKE HASTA AHORA ES UN DEFECTO DEL PROPIO SPIKE.** El token va **en el cuerpo**, no en un header `Authorization: Bearer` — que es lo que mi prober asumía. Contra ese endpoint, Bearer devuelve 401, **y un 401 desde una ruta con `source` es exactamente lo que este gate lee como `absent`**, sobre la única capacidad cuya ausencia hace que el MVP no sea entregable. Corregido: la autenticación se declara por sonda y el marcador `[API_TOKEN]` —el que usa la propia documentación de Aloware— se sustituye sólo en la copia que se le entrega a `fetch`.
+
+- ✅ **Redacción probada contra un espejo local, no descrita:** el proveedor recibió `"api_token":"SUPERSECRET-TOKEN-XYZ"` y la evidencia guardó `"api_token":"[API_TOKEN]"`. **El marcador ES el mecanismo** — el cuerpo declarado es el que se loguea y físicamente no contiene el secreto.
+- **La ruta está bajo `/webhook/`**, un endpoint saliente con nombre de entrante. Ninguna cantidad de cuidado adivina eso: es la vindicación concreta de `SPIKE010`.
+- ✅ **Una pregunta abierta de Fase 2, contestada:** `line_phone_number` va **por llamada**, así que el two-legged **sí** puede presentar caller ID por vendedor en vez de discar desde una línea compartida. El mapa de identidad es construible como está especificado.
+- **`SPIKE014` es nuevo:** un `[PLACEHOLDER]` sin resolver no sale de esta máquina. Faltan `RING_GROUP_ID`, `LINE_E164` y `DESTINATION_E164`, y un cuerpo a medio llenar vuelve 4xx — otra vez indistinguible de capacidad ausente.
+- **Aparece una `RVM API`** — voicemail ringless. `06-conversations.md` lo cargaba como pregunta abierta con la advertencia explícita *"no se verificó en Fase 1 y no debe asumirse"*. Existe. Y un **MCP (BETA)** que no está en ningún lado del corpus.
+- 🔴 **Siguen sin ubicarse, y las dos son `mvp_required`:** el endpoint de **call-list** y la configuración de **suscripción de webhooks**. La franja de pestañas sigue más a la derecha de lo leído; **su ausencia en lo visto no es evidencia de ausencia.**
+
+⚠️ **DOS FORMAS EN QUE UNA SONDA MIENTE, LAS DOS PISADAS PROBANDO EL INSTRUMENTO.** (1) **Un 2xx del listener equivocado es indistinguible del éxito:** el receptor no arrancó (`EADDRINUSE`) y la sonda igual reportó `HTTP 204 in 42 ms`. `source` protege contra una **ruta** equivocada; nada protegía contra un **listener** equivocado, y sólo se destapó porque el archivo de evidencia que el receptor debía escribir no existía.
+
+- 🔴 **CORRECCIÓN, dos horas después, cuando hizo falta el puerto otra vez.** Escribí que el puerto lo tenía *"otro proceso Node ajeno"*. **Estaba mal.** Leer la línea de comando del proceso mostró que era **este mismo receptor, huérfano de una corrida en background anterior que nunca murió**: `TaskStop` mató el envoltorio de `npm` y dejó al hijo `node` escuchando. **La lección corregida es peor que la que reemplaza:** no contestaba el proceso de un extraño sino **otra instancia de nuestro propio instrumento**, así que ese `204` era exactamente lo que produce una corrida correcta —mismo status, misma clase de latencia, misma forma— porque *era* una corrida correcta, del build equivocado, escribiendo su evidencia donde nadie miraba. **Un proceso ajeno habría contestado raro y se habría notado. El nuestro contestó perfecto.** Consecuencias: un script `tsx` en background se mata **por PID**, no parando su shell; y antes de creerle a una medición local, confirmar que quien escucha es el proceso que acabás de arrancar. (2) **Un chequeo que lee la ruta equivocada pasa en el vacío:** el primer control de fuga corrió `grep` sobre un directorio inexistente por el desfase de rutas Git-Bash/Windows, así que *"el secreto no aparece"* era cierto de nada. Rehecho con rutas absolutas y contando bytes junto al veredicto. **Las dos son el mismo fallo con distinta ropa: una aserción que no distingue entre haber pasado y no haber corrido nunca.**
+
+### 🔴 PUERTA 2 (ALOWARE) ABIERTA: EL APARATO EXISTE, LA MEDICIÓN NO (2026-08-05)
+`scripts/spike/aloware-receiver.ts` · `aloware-probe.ts` · `aloware-probes.json` · migración **0029** · [`docs/sprint-0/g2-aloware.md`](docs/sprint-0/g2-aloware.md).
+
+**Ninguna de las once aserciones de G2 está contestada, y eso es el estado, no un pendiente.** Lo que existe es el instrumento. La separación está escrita en rojo en el documento del gate justamente para que el salto de *"construimos el aparato"* a *"medimos algo"* no se cruce en silencio.
+
+**E9 IMPLEMENTADA, Y TACHA EL DDL QUE `05c` §7.7.6 TODAVÍA CARGA.** El registro de cierre especifica `ref.capability_probe` con `raw_payload_id NOT NULL` apuntando a la bóveda; E9 es rango 1 y lo borra. Lo que entra: `response_body bytea NOT NULL` propio, **sin `raw_payload_id`**, y el digest comparado contra `sha256(response_body)` **en la misma fila**. El diseño tachado habría hecho que producción saliera con código distinto de cero en cada arranque, uno a tres meses después de este spike, mientras dev y CI seguían verdes todo el intervalo.
+
+- **El CHECK del digest reemplaza a media aserción de arranque:** el motor rechaza la fila en el INSERT en vez de negarse a bootear meses más tarde.
+- 🔴 **Un defecto mío atrapado antes de aplicar:** `length(response_body) > 0` habría rechazado un **204 legítimo sin cuerpo**, y un probe que no puede guardar lo que recibió es un probe presionado a inventar algo que sí pueda guardar. El carve-out es por status y por nada más (`204, 304`); un cuerpo vacío bajo un `200` sigue rechazado, que es el caso que de verdad sería alguien fabricando.
+- **`CAP002` es un agregado mío sobre lo que §7.7.6 pide.** El CHECK prueba que hay un probe *adjunto*; no puede probar que sea **el correcto**. Sin ese brazo, `two_legged_call` se marca verificada contra el probe de `contact_lookup` —un 200 de un endpoint que no tiene nada que ver con discar— y pasa todo lo demás.
+- ⚠️ **DICHO Y NO INSINUADO: esto NO es infalsificable.** Quien pueda escribir la tabla puede inventar un cuerpo y guardar su `sha256()` al lado. Lo que compra el digest es que fabricar una verificación ahora cuesta un **documento** fabricado en vez de la palabra `'spike'` en una columna de texto libre. La propiedad que pesa está antes del hash: la clase `reference` le da a `crm_app` **SELECT y nada más**, así que ningún camino de código que sirva un request puede acuñar un probe.
+- ✅ **APLICADA Y PROBADA, no sólo escrita.** La cadena entera **0000 → 0029** aplica limpia sobre una base **nueva** (volumen tirado y reconstruido), y `capability-probe.test.ts` agrega **15 aserciones** contra el motor, adentro de `npm run verify` y por lo tanto adentro del hook de pre-commit. **243 → 258 tests.** 🎯 **Tres mutaciones, cada una roja en exactamente un test:** desactivar el brazo `CAP002` · borrar el CHECK del digest · poner `immutable = false` en el registro. La suite también assertea que **el camino feliz pasa** — un gate que sólo niega no se distingue de uno roto.
+- **La primera aserción del archivo es estructural y no de comportamiento:** que la tabla **tiene** `response_body` y **no tiene** `raw_payload_id`. Existe porque `05c` §7.7.6 sigue cargando el DDL tachado, y un test es lo único que puede notar que alguien está siguiendo un documento.
+
+**LOS DOS INSTRUMENTOS, LOS DOS EJECUTADOS CONTRA SÍ MISMOS.** El receptor no parsea nunca (la forma del payload es una de las cosas que el gate viene a aprender) y captura **todo path** salvo `/_spike/*`. Cuatro entregas sintéticas probaron lo que hace falta: `aborted=true` con `response_status=null` a los **1003 ms** —la forma exacta que tendrá la respuesta a la pregunta que nadie hizo— y dos entregas con el **mismo sha256**, que es cómo se detecta un duplicado.
+
+- 🔴 **Un hueco de captura encontrado releyendo:** el handler de aborto estaba registrado adentro del de cuerpo-completo, así que un cliente que cortara **a mitad del cuerpo** no dejaba rastro alguno. Movido antes de leer el cuerpo, con guarda de escritura única — una captura escrita dos veces se leería como una entrega duplicada y corrompería justo la pregunta que el instrumento contesta.
+- **En el prober cada `request` arranca en `null` y ésa es la decisión.** Un endpoint **recordado** en vez de leído de la cuenta real devuelve un 404 indistinguible de la capacidad ausente — y `absent` sobre una fila `mvp_required` es el hallazgo que frena el MVP. `SPIKE010` se niega a correr una sonda sin `source`. 🎯 **Probado por mutación por los dos lados:** con path inventado y sin fuente → rojo y exit 1; agregándole la fuente, la misma sonda sale a la red de verdad.
+- **Un fallo de transporte NUNCA se escribe como probe.** `absent` tiene que significar que el proveedor contestó que no, no que se cayó el DNS de la laptop.
+- 🔴 **Y encontré código muerto en mi propio guard:** el filtro previo ya descartaba las sondas sin `source`, así que la negativa `SPIKE010` adentro de `execute()` **no podía dispararse nunca**. Reestructurado para que exista una sola negativa y sea la que se ve. Un guard inalcanzable que parece un guard es peor que no tenerlo.
+
+⚠️ **OQ-2 REENCUADRADA, y es una corrección al enunciado del propio gate.** Los *10.000–20.000 webhooks/día* son un supuesto desde Fase 0, y un spike no puede observar un día de tráfico real en una cuenta sin vendedores. Lo que sí se mide exacto es el **multiplicador de fan-out**: cuántos webhooks produce **una** llamada y con qué espaciado. El número diario es ese multiplicador por el volumen real de la agencia — aritmética sobre algo medido, en vez de un número que nadie midió. Queda dicho ahora y no después, cuando reportar una cifra modelada como si se hubiera observado sería gratis.
+
+⚠️ **`npm run verify` VENÍA EN ROJO, y no por esto.** El `perf` fallaba con `PERF003` — *"el manifest del cliente no tiene el chunk `node_modules/@react-router/dev/…/entry.client.tsx`"*— y **el mismo rojo aparece en `HEAD` limpio**, verificado con `stash` y no supuesto. La clave real era `../../../node_modules/…`: esta sesión corre en un **worktree cuyo `node_modules` estaba vacío**, así que todo resolvía desde el checkout padre tres niveles arriba y Vite escribió la clave relativa a eso.
+
+- **El arreglo tentador era hacer al checker tolerante al prefijo `../`, y es exactamente el movimiento que la constitución prohíbe.** El checker no estaba equivocado: se negó en vez de medir un grafo más chico del que el navegador realmente baja, que es su trabajo. **Se arregló el entorno** (`npm ci` adentro del worktree) y el gate pasó solo: P12 **111.068/128.000 bytes**, P13 **2.462/16.384**.
+- ⚠️ **Toda sesión futura en un worktree se lo come**, y parece un defecto del árbol en vez de un directorio vacío.
+
+⚠️ **Tres textos viejos que apuntan mal, anotados en el documento del gate:** `05c` §7.7.6 (tachado por E9) · las referencias a *"Puerta 7"* en §784/§1751/§2073, que son la numeración previa a la fusión de ladders —Aloware es **G2** en §9— · y `.env.example`, que decía *"Gate 11 … whether webhooks are signed"* y **se corrigió**: la Puerta 11 es bundle y first paint, y cerró el 2026-08-03.
+
 ### 🚪 PUERTA 11 CERRADA: P20 MEDIDO EN 2251 ms (2026-08-03)
 `tests/e2e/tti.spec.ts` · `fixtures/lighthouse.ts` · migración **0028** · perfil **`lh-ci`**. **241 → 243 tests · 82 → 83 e2e.** La Puerta 11 pasa de **mitad cerrada** a **cerrada**.
 

@@ -50,3 +50,15 @@ export const citext = customType<{ data: string }>({
     return 'citext'
   },
 })
+
+/**
+ * Raw bytes. Used by `ref.capability_probe` to store a provider response body
+ * exactly as it arrived — errata E9's requirement, because a body that has been
+ * decoded, re-encoded or normalised no longer hashes to the digest that
+ * certifies it.
+ */
+export const bytea = customType<{ data: Buffer }>({
+  dataType() {
+    return 'bytea'
+  },
+})

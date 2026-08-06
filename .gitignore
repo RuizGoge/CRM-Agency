@@ -10,6 +10,12 @@ playwright-report/
 test-results/
 coverage/
 
+# Sprint-0 Gate G2 raw capture. The FINDINGS belong in docs/sprint-0/, and the
+# durable evidence with provenance belongs in ref.capability_probe. What lands
+# here is verbatim provider traffic — it carries phone numbers, so it stays out
+# of the repository even though the spike's subjects are synthetic.
+evidence/
+
 # Editor / OS
 .DS_Store
 Thumbs.db
