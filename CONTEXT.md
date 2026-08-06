@@ -42,6 +42,15 @@ Cuatro sondas contra la cuenta viva, todas de sólo lectura, todas gratis, ning�
 - **N10 fija `POST /api/calls` (gate + ack del dial) en p95 ≤ 300 ms más un ack medido en G2**, y P3 volvió a meter el dial **adentro** del request. Si el piso del proveedor son segundos y no milisegundos, ese presupuesto no se sostiene como está escrito, y los 10 s de `ARR-MVP-26` dejan de ser holgura cómoda.
 - 🔴 **DOS COSAS QUE ESTE NÚMERO NO ES, dichas antes de que alguien lo cite:** (1) **no es el dial** — el two-legged devuelve `202` al establecer, no al atender, así que puede ser mucho más rápido; (2) **se midió desde una laptop, no desde la región de producción.** G0 fijó producción en Ohio o Virginia y esto corrió desde la máquina del dueño: la distancia de red sola podría explicar casi todo. **Es un techo y una alarma, no el número de producción** — la misma salvedad de dependencia de máquina que carga P20, sobre un número al que nadie había pensado en pegársela.
 
+### 🧹 SPIKE DESARMADO · Y UN HALLAZGO MÍO RETRACTADO (2026-08-05)
+Webhook borrado de la cuenta (por Jorge, en el panel), después túnel y receptor cortados **en ese orden** — nunca al revés, porque un hostname `trycloudflare` se recicla y una suscripción viva apuntando ahí entregaría datos de llamadas a un desconocido. Verificado: URL pública muerta (530), puertos libres, **cuatro procesos que sobrevivieron a `TaskStop` terminados por PID**. Evidencia conservada: 22 webhooks, 8 probes en `ref.capability_probe`.
+
+🔴 **RETRACTADO: registré que `Test & Validate` no entregaba nada. Es falso — el clic nunca aterrizaba.** El menú de acciones se cierra antes de que un clic llegue a sus ítems; se descubrió al intentar borrar el webhook, donde cinco clics de `Delete` reportaron éxito y no hicieron nada. Cuando uno finalmente conectó, `{"test_payload":true}` llegó al receptor en segundos.
+
+- **Lo que hizo sobrevivir al hallazgo falso fue verificar lo equivocado.** Consulté el receptor —correctamente— y estaba en silencio; **nunca comprobé que el clic hubiera hecho algo.** Le atribuí la ausencia de efecto a la función en vez de a mi propia entrada, y todo lo que siguió heredó el error.
+- **Es el mismo fallo que el `grep` vacuo y que el receptor huérfano, con un tercer disfraz: una observación que no distingue "no pasó" de "no lo hice".** Tres veces en una sesión, en tres formas distintas.
+- **Consecuencia práctica:** `Test & Validate` **sí** dispara entregas a demanda, así que (c), (d) y (k) se podían haber medido sin llamadas facturables. Las respuestas siguen siendo válidas; el camino fue más caro de lo necesario.
+
 ### 🔓 MIGRACIÓN 0030 — `two_legged_call` VERIFICADA, y el candado del módulo 9 cede (2026-08-05)
 `0030_promote_two_legged_call.sql`. **258 → 259 tests.** `npm run verify` **entero en verde**, presupuestos incluidos.
 

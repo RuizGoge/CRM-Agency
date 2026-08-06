@@ -363,7 +363,17 @@ It also reinterprets the first dial: that one returned `202` and then failed aft
 
 **The replacement costs one phone call and it is the owner's own:** an **inbound** call from his mobile to the Test Line `+1 737 427 3994`, left unanswered. That creates a real communication — so its webhooks flow into the armed receiver and answer (c) retry/backoff and (d) ordering — **and it is simultaneously the missed-call scenario that (f) needs.** One action, three assertions, and the only phone that rings is his.
 
-### ⚠️ `Test & Validate` does not deliver — the cheap path to (c), (d) and (k) is closed
+### 🔴 RETRACTED: `Test & Validate` **does** deliver — the section below was wrong
+
+> **This finding was false and is withdrawn.** The section that follows recorded that `Test & Validate` re-validates configuration without emitting a delivery, on the evidence that the receiver saw nothing for 75 seconds after the action was triggered.
+>
+> **The action was never triggered.** Hours later, trying to delete the same webhook, the menu turned out to close before a click on its items could land — several `Delete` clicks reported success and did nothing. The earlier `Test & Validate` click had missed in exactly the same way. When one finally connected, `{"test_payload":true}` arrived at the receiver within seconds.
+>
+> **What made the false finding survive was that I checked the wrong thing.** The receiver was polled — correctly — and it was silent. What was never checked was whether the *click* had done anything: no toast was read, no state change confirmed. The absence of an effect was attributed to the feature instead of to the input, and every subsequent conclusion inherited it. It is the same failure as the vacuous `grep` and the orphaned listener, in a third costume: **an observation that cannot tell "it did not happen" from "I did not do it."**
+>
+> The practical consequence is real: `Test & Validate` **is** a way to trigger deliveries on demand, so (c), (d) and (k) could have been measured without billable calls. They were measured with real calls instead, and the answers stand — but the route was more expensive than it needed to be.
+
+### ~~`Test & Validate` does not deliver~~ — superseded by the retraction above
 
 The webhook's `…` menu offers **Edit · Test & Validate · Disable · Delete**, and `Test & Validate` looked like a way to trigger deliveries on demand and measure retry, ordering and the response deadline **without billable calls**.
 
