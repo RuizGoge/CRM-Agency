@@ -288,7 +288,7 @@ describe('§7.3 · the eight capabilities exist as rows in a verification state'
    * directions: it must go red when something becomes verified, and it must go
    * red if something is verified that should not be.
    */
-  it('exactly one capability is verified, and only with real evidence behind it', async () => {
+  it('exactly two capabilities are verified, one per evidence direction', async () => {
     const rows = await owner<{ capability: string; status: string }[]>`
       SELECT capability, status FROM ref.provider_capability
        WHERE provider = 'aloware' AND capability NOT LIKE 'zz_test_%'
@@ -296,13 +296,20 @@ describe('§7.3 · the eight capabilities exist as rows in a verification state'
     `
     expect(rows).toHaveLength(8)
 
+    // 🔴 SECOND TIME THIS LINE HAS MOVED, and both moves were the guard working.
+    // It read "everything starts unknown" until 0030 promoted `two_legged_call`
+    // on the Gate-2 dial; it read `['two_legged_call']` until 0031 built
+    // `ref.capability_delivery` and promoted `webhook_subscription` on Aloware's
+    // own `Save and Test Webhook` delivery. The paragraph below used to explain
+    // why the second one COULD NOT be verified. It can now, and the reason it
+    // could not — an outbound-only evidence table — was the design hole 0031
+    // closed rather than a fact about the provider.
     const verified = rows.filter((r) => r.status === 'verified').map((r) => r.capability)
-    expect(verified).toEqual(['two_legged_call'])
+    expect(verified).toEqual(['two_legged_call', 'webhook_subscription'])
 
-    // Everything else stays `unknown`. Nothing is assumed present, and in
-    // particular `webhook_subscription` is NOT verified despite 20 captured
-    // deliveries — `ref.capability_probe` models an outbound exchange and a
-    // webhook is inbound, so there is no shape for that evidence yet.
+    // Everything else stays `unknown`. Nothing is assumed present — in
+    // particular `call_list`, which G2 could neither document nor discover and
+    // which is still `mvp_required`.
     expect(rows.filter((r) => r.status !== 'verified').every((r) => r.status === 'unknown')).toBe(
       true,
     )

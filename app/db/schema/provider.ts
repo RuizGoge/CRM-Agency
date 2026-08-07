@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm'
-import { check, primaryKey, smallint, text, timestamp, uuid } from 'drizzle-orm/pg-core'
+import { check, jsonb, primaryKey, smallint, text, timestamp, uuid } from 'drizzle-orm/pg-core'
 
 import { app, bytea, ref } from './_shared'
 
@@ -133,6 +133,110 @@ export const capabilityProbe = ref.table(
 )
 
 /**
+ * A captured provider DELIVERY — the inbound counterpart of `capability_probe`.
+ *
+ * 🔴 WHY THIS TABLE EXISTS AT ALL. Gate G2 captured 20 real webhook deliveries,
+ * which is stronger evidence than any probe, and `webhook_subscription` still
+ * could not be promoted: `capability_probe` models an OUTBOUND request and its
+ * response, and a webhook is INBOUND. Shoehorning one into the other means
+ * `request_url` holding OUR url, `response_body` holding THEIR request, and
+ * `http_status` holding what WE answered — three columns each saying the
+ * opposite of their name. Migration 0030 recorded that hole rather than papering
+ * over it by inventing a probe that never happened; this is the shape that was
+ * missing.
+ *
+ * The guarantees are deliberately identical to the probe's: `reference` class so
+ * `crm_app` holds SELECT and nothing else, `immutable` so the refusal binds the
+ * owner and a superuser too, and a digest CHECK so the row is internally
+ * consistent at INSERT rather than at a boot check months later.
+ *
+ * ⚠️ AND ONE GUARANTEE THAT IS DELIBERATELY NOT COPIED: there is no 2xx
+ * requirement. On the outbound side a 2xx is the provider saying the endpoint
+ * exists. On the inbound side OUR response status says nothing about their
+ * ability to deliver — G2 proved that directly by answering `500` to six real
+ * deliveries, all of which had already been delivered. Requiring 2xx here would
+ * be outbound reasoning copied across a boundary where it does not hold, and it
+ * would have refused exactly the evidence that answered assertion (c).
+ */
+export const capabilityDelivery = ref.table(
+  'capability_delivery',
+  {
+    deliveryId: uuid('delivery_id')
+      .primaryKey()
+      .default(sql`uuidv7()`),
+
+    provider: provider('provider').notNull(),
+
+    /** Free text, same as the probe: the vocabulary is §7.3's table, not an enum. */
+    capability: text('capability').notNull(),
+
+    /** When the delivery ARRIVED. Not when somebody wrote the migration. */
+    receivedAt: timestamp('received_at', { withTimezone: true }).notNull(),
+
+    requestMethod: text('request_method').notNull(),
+
+    /**
+     * The path only. Never the origin: the Gate-2 receiver sat behind an
+     * ephemeral `trycloudflare` hostname, and a permanent row naming a
+     * recyclable public hostname is a durable pointer at somebody else's
+     * server.
+     */
+    requestPath: text('request_path').notNull(),
+
+    /**
+     * Every header, verbatim and in order, as a flat array of alternating
+     * name/value strings so duplicates survive. A normalised object would have
+     * destroyed the evidence for assertion (b) — that Aloware sends six headers
+     * and none of them is a signature, a timestamp or a nonce.
+     */
+    requestHeaders: jsonb('request_headers').notNull(),
+
+    /** The bytes exactly as they arrived. */
+    requestBody: bytea('request_body').notNull(),
+    requestDigest: bytea('request_digest').notNull(),
+
+    /** What we answered. Recorded as a fact, never as a precondition — see above. */
+    responseStatus: smallint('response_status').notNull(),
+
+    probeRun: text('probe_run').notNull(),
+
+    /**
+     * The outbound action that CAUSED this delivery, when there was one.
+     *
+     * Nullable because the strongest available evidence for
+     * `webhook_subscription` has no cause: it is the provider's own
+     * `Save and Test Webhook`, triggered from the panel. When a cause does
+     * exist the pair is a closed loop — we did X, they told us about X — which
+     * is what ARR-EVT-25's correlation question is really asking.
+     */
+    causedByProbeId: uuid('caused_by_probe_id').references(() => capabilityProbe.probeId),
+  },
+  (t) => [
+    check('capability_delivery_digest_matches', sql`${t.requestDigest} = sha256(${t.requestBody})`),
+    // No 204/304 carve-out, unlike the probe. HTTP defines those as bodiless
+    // RESPONSES; a delivery with no body is not evidence that a provider can
+    // deliver anything.
+    check('capability_delivery_body_present', sql`length(${t.requestBody}) > 0`),
+    check('capability_delivery_run_present', sql`length(btrim(${t.probeRun})) > 0`),
+    check(
+      'capability_delivery_response_status_range',
+      sql`${t.responseStatus} BETWEEN 100 AND 599`,
+    ),
+    // Aloware's webhook form offers `None | Basic | Bearer`, so a subscription
+    // configured with either of the latter echoes a STATIC CREDENTIAL back to us
+    // in a header — and this row outlives every retention window in the system.
+    // A comment saying "remember to redact" is documentation; this is a refusal.
+    // Crude on purpose: a substring test over the serialised headers is legal in
+    // a CHECK, where a subquery is not.
+    check(
+      'capability_delivery_headers_redacted',
+      sql`lower(${t.requestHeaders}::text) NOT LIKE '%"authorization"%'
+          AND lower(${t.requestHeaders}::text) NOT LIKE '%"cookie"%'`,
+    ),
+  ],
+)
+
+/**
  * The registry §7.3 specifies. `crm_app` can read it and cannot write it, so a
  * capability is promoted by a migration or by the owner's console — never by
  * the running application.
@@ -153,12 +257,42 @@ export const providerCapability = ref.table(
      * captured exchange does not.
      */
     evidenceProbeId: uuid('evidence_probe_id').references(() => capabilityProbe.probeId),
+
+    /**
+     * The inbound half. A capability is evidenced by an outbound exchange we
+     * made or by an inbound delivery we received, never by both and never by
+     * neither — see `capability_verified_needs_evidence` below.
+     */
+    evidenceDeliveryId: uuid('evidence_delivery_id').references(
+      () => capabilityDelivery.deliveryId,
+    ),
   },
   (t) => [
     primaryKey({ columns: [t.provider, t.capability] }),
+    /**
+     * Was `capability_verified_needs_probe`, which could only ever be satisfied
+     * by an outbound probe — the constraint that made `webhook_subscription`
+     * unpromotable no matter how much evidence existed.
+     *
+     * `num_nonnulls(...) = 1` rather than a pair of OR'd clauses, because
+     * "exactly one" is the property: a row pointing at BOTH a probe and a
+     * delivery claims two different things proved the same capability, and the
+     * one somebody would later read is whichever the query happened to join.
+     */
     check(
-      'capability_verified_needs_probe',
-      sql`${t.status} <> 'verified' OR (${t.evidenceProbeId} IS NOT NULL AND ${t.verifiedAt} IS NOT NULL)`,
+      'capability_verified_needs_evidence',
+      sql`${t.status} <> 'verified'
+          OR (num_nonnulls(${t.evidenceProbeId}, ${t.evidenceDeliveryId}) = 1
+              AND ${t.verifiedAt} IS NOT NULL)`,
+    ),
+    // An unverified row carries no evidence at all. Without this, a capability
+    // downgraded to `absent` keeps a dangling pointer at the exchange that used
+    // to prove it, which reads on the health screen as evidence for a claim
+    // nobody is making any more.
+    check(
+      'capability_unverified_has_no_evidence',
+      sql`${t.status} = 'verified'
+          OR num_nonnulls(${t.evidenceProbeId}, ${t.evidenceDeliveryId}) = 0`,
     ),
     // A capability downgraded from `verified` must not keep its timestamp. A
     // stale `verified_at` under `absent` reads, on the health screen, as a

@@ -7,6 +7,135 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 📞 MÓDULO 9 ARRANCA: EL CANDADO DE TIPO, LA EVIDENCIA ENTRANTE Y LA SUPERFICIE DE LLAMADA (2026-08-06)
+`app/modules/communications/**` · `app/db/capability-registry.ts` · `app/routes/api/calls.ts` · `app/components/contacts/contact-drawer.tsx` · `app/components/communications/aloware-capture-panel.tsx` · migración **0031**. **259 → 272 tests · 28 → 29 archivos.** P12 sube de 111.068 a **112.924 bytes** (el drawer, +1.856 B; 88% del presupuesto). La rama de la Puerta 2 quedó **fusionada** acá (fast-forward a `ffa5c9f`).
+
+🔴 **`alowareCapability()` NO EXISTÍA, en ninguna de las dos ramas.** Está especificado en §3 desde Fase 5 y nadie lo había escrito: la 0030 promovió `two_legged_call` a `verified` **en la base** mientras el árbol no tenía nada que lo leyera. **Una fila que dice `verified` sin un tipo que la lea es un candado sin puerta.** Ahora existe, y sólo la variante `verified` tiene `.call`.
+
+- 🎯 **Probado por mutación, y es la única prueba que importa acá.** Colapsé la unión discriminada a `{ status, call? }` —que es exactamente cómo se pierde este gate sin que nadie lo note, porque compila y **todas las aserciones de runtime siguen pasando**— y el typecheck se puso rojo: `TS2578: Unused '@ts-expect-error' directive`. Verificado además que `tsconfig` incluye `**/*.ts`, o si no el `@ts-expect-error` no probaría nada.
+- **`.call` es `never` para las ocho capacidades, `two_legged_call` incluida.** El dial tiene que llegar con el token `RequestScoped` de P3.1, así que ensanchar ese tipo **es** el cambio que lo admite.
+- **Llamar al gate antes de instalar el registro tira `CAP101`.** Devolver `unknown` falla cerrado en lo angosto y **abierto en lo que importa**: un bug de cableado sería indistinguible de una capacidad que el spike nunca probó, y el producto se quedaría sin discador en silencio mientras la pantalla de admin le echa la culpa a Aloware.
+
+🔓 **MIGRACIÓN 0031 — LA FORMA QUE FALTABA PARA UNA CAPACIDAD DE ENTRADA.** `ref.capability_probe` modela una petición **saliente**; un webhook es **entrante**. `ref.capability_delivery` es el par, con las mismas garantías (`reference` + `immutable` + CHECK de digest). `webhook_subscription` pasa a `verified`.
+
+- **La evidencia es el `{"test_payload":true}` de 21 bytes que mandó el propio Aloware**, y es la única de las 22 entregas **lícita de transcribir**: las otras llevan el teléfono de un lead real del libro de producción, y esta fila no se purga nunca. Es además la evidencia **correcta**: lo que esa capacidad afirma es que Aloware puede configurarse para entregar en una URL nuestra, y eso es exactamente lo que ese payload prueba.
+- 🔴 **NO copié `CAP003` al lado entrante, y copiarlo habría sido el error.** Un 2xx saliente es el proveedor diciendo que el endpoint existe; **nuestro** status de respuesta no dice nada sobre la capacidad de ellos de entregar. La Puerta 2 lo probó contestando `500` a seis entregas que ya habían sido entregadas. Esa exigencia habría rechazado justo la evidencia que contestó la peor aserción del gate.
+- **`num_nonnulls(...) = 1`**, no dos cláusulas con OR: una fila que apunte a un probe **y** a una entrega afirma que dos cosas distintas probaron lo mismo, y la que alguien lee después es la que el JOIN haya agarrado.
+- **Un CHECK que se niega a guardar `authorization` o `cookie` en los headers.** El formulario de Aloware ofrece `Basic`/`Bearer`, así que una suscripción configurada así nos devuelve una credencial estática en un header — en una fila permanente. Un comentario que diga "acordate de redactar" es documentación; esto es una negativa.
+
+🔴 **TRES GUARDIANES SE PUSIERON ROJOS Y LOS TRES TENÍAN RAZÓN.** El de `capability-probe.test.ts` asserteaba *una* capacidad verificada; los dos míos, dos hechos que la 0031 movió. Cada uno se **editó al hecho nuevo**, ninguno se aflojó. Es la segunda vez que esa línea se mueve y las dos veces fue el guardián funcionando.
+
+🔴 **LA FIRMA DEL ESTADO COMPARTIDO, CUARTA VEZ.** Mis aserciones contra el registro real **pasaban aisladas y fallaban en la suite**: `zz_test_happy` es una fila que siembra otro archivo, y `crm_test` es compartida. Arreglado como lo arregló `snapshot-chain.test.ts` — la pregunta *"¿el árbol y el esquema nombran las mismas capacidades?"* es **estática**, así que se contesta leyendo la migración 0029. Sin base, sin orden, sin limpieza. **Sigue sin haber mecanismo, sólo el hábito de acordarse.**
+
+🔴 **LA PUERTA DE ACCESO A DATOS ME CORRIGIÓ DÓNDE PUSE UN ARCHIVO.** `readCapabilities` importaba el driver desde un módulo de dominio y el DATA-ACCESS GUARD lo rechazó por nombre. **No tomé la excepción versionada que la regla ofrece** — habría comprado nada más que mantener dos párrafos juntos. Los tipos se quedaron en el módulo (nombre y estado de una capacidad son vocabulario de dominio), la lectura se fue a `app/db/`. **Es §1.1 aplicándose sin que §1.1 exista en este árbol:** su tabla habla de `src/adapters/**`, que acá no hay.
+
+📊 **TRES HALLAZGOS NUEVOS, de releer la captura cruda — ninguno estaba en `g2-aloware.md`.**
+
+- 🔴 **`Call-Disposed` DUPLICA la disposición.** Mismo id, mismo `current_status2`, mismo `disposition_status2`, mismos 63 s de conversación, **6,6 s después**. Bytes distintos (el nombre del evento va en el cuerpo) → sha256 distinto → **los dos pasan el dedupe de transporte**. Mapear los dos nombres a `call.completed` cuenta el marcado dos veces; mapear uno solo pierde el otro si llega solo. Observado una vez, en la saliente completada y no en las entrantes.
+- 🔴 **Los eventos `transcription.*` no tienen `body.id`.** Su envoltorio es `body.{summary, transcription, contact, communication}` y el id de llamada está **dos niveles adentro**. §4.2 regla 2 especifica extracción **superficial** de claves para poblar `aloware_call_id`; superficial devuelve null ahí, y `call.enriched [ai_summary]` se queda sin clave natural.
+- 🔴 **El conjunto de campos cambia dentro de la misma familia.** `OutboundPhoneCall` no tiene `current_status`, `disposition_status`, `direct_recording_url` ni `call_disposition` — **no son null, no existen como claves**. Un mapeador escrito contra el evento de cierre y aplicado a la familia lee `undefined` y lo llama `null`.
+
+📐 **Y DOS NÚMEROS QUE CONTRADICEN TEXTO APROBADO.** `wait_time` medido: **2 s** cuando el vendedor atendió su propia pierna, **30 s** cuando la abandonó. §6 dice *"5–15 segundos"* y fija `--time-dial-silence-max = 15000ms`. El corte real del agente son **30 s**, así que la ámbar de t=20s dispara **mientras Aloware todavía está sonando**.
+
+🔴 **EL CANAL SSE DE ESTADO EN VIVO: MEDIDO, NO INFERIDO.** Entre `OutboundPhoneCall` y `OutboundPhoneCall-DispositionCompleted` hay **70,4 segundos de silencio absoluto** sobre una llamada con 63 s de conversación. **Toda la porción viva de la llamada produjo cero webhooks.** La fila `connected · {timer}` de §6.1 **no tiene fuente** y queda tachada por decisión de Jorge: la banner conserva `initiated` y `completed`, que son los dos estados que el proveedor reporta. **El canal no cae, adelgaza.**
+
+📞 **LA SUPERFICIE DE LLAMADA, con las tres ramas que el 422 hace posibles.** `POST /api/calls` distingue `no_agent` (422, ~2187 ms, **no se crea llamada**) de `degraded` (5xx/timeout). Dos consecuencias sobre reglas ya firmadas:
+
+- **El 422 NO abre el breaker.** Abre a los 3 fallos consecutivos en 60 s (P3.4), así que un vendedor con la app cerrada tocando `Call` tres veces le mostraría **a los cincuenta** un banner de caída del tenant por un problema de una sola app.
+- **La fila `call` quedaría inmortal.** P3.2 commitea la fila y `call.initiated` **antes** del dial. Con un 422 la llamada no existe en Aloware y **nunca llega un webhook**: quedaría en `initiated` para siempre, contando como intento y corrompiendo `last_activity_at`, la regla de 7 días y el riel. **ARR-EVT-18 no se revierte** — se cierra la fila con una escritura compensatoria en el mismo request.
+
+⚠️ **EL DIAL NO ESTÁ CABLEADO A PROPÓSITO, y el endpoint lo dice en su resultado en vez de fingir.** Dos razones independientes: `aloware_number_mapping` no existe, así que ningún vendedor tiene número que presentar; y **cada marcado es facturable contra una cuenta en mora**. Lo que sí está es todo el camino de decisión hasta el socket, así que la superficie, sus estados y su copy son reales y testeables hoy.
+
+🖥️ **LO QUE SE VE EN PANTALLA.** El nombre del contacto en la tarjeta abre un **drawer** (`?contact=<id>`, en la URL por la misma razón que `?move=`: back lo cierra y un link pegado sobrevive) con la primera vista, el control `Call` y sus mensajes. **El nombre es el disparador, no la tarjeta entera** — un blanco de clic de tarjeta completa pelearía con el drag por el mismo puntero. Una tarjeta cuyo contacto no es legible renderiza texto plano en vez de un link muerto.
+
+🔬 **Y EL PANEL DE INSPECCIÓN DE ALOWARE**, en la ficha completa: la secuencia real de las seis entregas con el hueco de 70,4 s dibujado, los 40+ campos agrupados con **qué hacemos con cada uno — o que no hacemos nada**, los 13 nombres de evento con sus tres convenciones, y las cuatro garantías del proveedor. **Su primer párrafo dice que es evidencia capturada y no un feed vivo**, y no es colapsable.
+
+- ⚠️ **NO ES LIVE Y NO PUEDE SERLO HOY:** el spike **borró la suscripción de webhooks** al desarmarse, así que una llamada hecha ahora no entrega nada en ningún lado. Recrearla es tocar Aloware, y la instrucción es no tocarlo.
+- **El sujeto es un contacto dummy sembrado** (`Aloware Capture (demo)`, `+1 202 555 0142`, del rango ficticio reservado) porque la llamada capturada marcó a un lead real del libro de producción. **Todos los valores no personales son reales y sin modificar.**
+
+### 🗄️ LAS DOS TABLAS DEL INGEST, Y EL MISMO ERROR MÍO DOS VECES EN UNA HORA (2026-08-06)
+`app/db/schema/communications.ts` · migración **0034** · `webhook-ingest-tables.test.ts`. **285 → 331 tests · 30 → 32 archivos.**
+
+`app.raw_payload_vault` y `app.inbound_webhook_event`. Lo que fija el motor:
+
+- **`crm_app` no puede escribir ninguna de las dos.** §4.2 regla 1 pide que la escritura al vault, el insert de dedupe y el encolado sean **una llamada en una transacción** — `app.webhook_ingest()`, que no existe todavía. **Otorgar INSERT antes de que exista es cómo el atajo se convierte en el diseño.**
+- **El digest se verifica en el INSERT.** Y ese digest **es** `provider_event_id`: el envoltorio de Aloware no trae `event_id`, `delivery_id` ni `webhook_id` en ningún lado, así que la clave se **construye**, no se recibe.
+- **El índice único de transporte es un CONTROL DE SEGURIDAD**, no una comodidad de idempotencia. Aloware no firma, nada en la request prueba frescura, y una request capturada se reproduce para siempre. Ese índice es lo único que se interpone.
+- **Una entrega que no parsea SE GUARDA**, con claves nulas. Un parser que rechazara convertiría un bug de mapeo en pérdida permanente — y G2 lo empeoró: sin reintentos, lo que el borde rechaza no vuelve.
+- **Una clave truncada se rechaza:** colisiona entre entregas no relacionadas, y sobre *este* índice una colisión significa descartar un evento real como duplicado.
+- **NO son `owner_scoped`, y la razón importa:** un webhook llega **antes** de que nadie sepa de quién es el lead. El dueño lo resuelve el merge contra `call`, así que un predicado de dueño acá tendría que satisfacerse con una columna que el borde no puede llenar — y el borde descartaría entregas que no puede atribuir.
+
+🔴 **COMETÍ EL MISMO ERROR DE CLASIFICACIÓN QUE EN LA 0033, UNA HORA DESPUÉS DE DOCUMENTARLO.** Puse `tenant_scoped` + `app_can_insert = false` y volvió a otorgar UPDATE. **La lección estaba escrita en un comentario de la migración anterior y no se pegó** — que es, literalmente, la tesis de este proyecto sobre por qué un comentario no es un mecanismo, demostrada sobre mí mismo por segunda vez en una sesión. **Lo atrapó el test, no yo.** Vale como regla operativa: `app_can_insert` gobierna el INSERT y sólo el INSERT; la clase que no otorga escritura ninguna es `tenant_scoped_read`.
+
+### 🔌 EL EXTRACTOR DEL BORDE, Y LOS TRES HALLAZGOS CONVERTIDOS EN COMPORTAMIENTO (2026-08-06)
+`app/modules/communications/aloware-ingest.ts` · `aloware-ingest.test.ts`. **38 aserciones.** Puro, sin base, sin red.
+
+§4.2 regla 2 pide **extracción superficial de claves** y la captura probó que superficial no alcanza. Los tres hallazgos ahora son comportamiento y no notas:
+
+- **Tabla exhaustiva, sin patrón.** Un regex sobre `-Disposition` sería más corto y **se tragaría un nombre que el proveedor agregue el mes que viene**, mapeándolo con confianza y mal. Un nombre no listado devuelve `canonical: null` — una entrega sin mapear visible en vez de una respuesta plausible. Y los nombres son los **del cable**, no los checkboxes del formulario de suscripción: un mapa construido desde la lista de checkboxes no machea nada.
+- **El id se busca en DOS niveles.** `transcription.*` no trae `body.id`; está en `body.communication.id`.
+- **`Call-Disposed` queda marcado `restatesDisposition`.** El merge está acotado por `aloware_call_id`, así que la fila está a salvo; lo que no lo está es todo lo que **cuenta** disposiciones — la franja de marcados del día, los totales de intentos.
+
+🔴 **DOS DEFECTOS MÍOS QUE ENCONTRARON LOS TESTS:**
+
+1. **Un arreglo `[]` pasaba como envoltorio válido.** Es `typeof 'object'`, así que se leía como *"entrega bien formada sin evento"* — **indistinguible del `{"test_payload":true}` del propio Aloware, que sí es una entrega legítima.** Si `parsed` no significa *"ésta era la forma del envoltorio"*, el contador de `unparsed` de la pantalla de admin deja de contar lo que nombra.
+2. **Un id mayor a 2⁵³ se habría redondeado en silencio.** `9007199254740993` no sobrevive un viaje por JSON, y guardar el redondeo ata un webhook a **otra llamada** — sin error, y sólo para ids grandes.
+
+**El bloque adversario son 25 entradas** — JSON truncado, no-JSON, arreglos donde van objetos, `body` nulo, anidamiento de 200 niveles, claves duplicadas, `1e400`. **La propiedad portante es que nunca tira:** Aloware no reintenta, así que una entrega que el borde rechaza se pierde para siempre. (Sin `fast-check` en el árbol, las entradas van a mano.)
+
+### 📇 LA IDENTIDAD SALIENTE DEL VENDEDOR, Y UNA CLASIFICACIÓN MÍA QUE ESTABA MAL (2026-08-06)
+`app/db/schema/communications.ts` · migración **0033** · `app/routes/api/calls.ts` · `dial.test.ts`. **280 → 285 tests.**
+
+`app.aloware_number_mapping` (§5, US-601): **un número, exactamente un vendedor; un mapeo vivo por vendedor**, los dos como índices únicos parciales. Con el mapeo sembrado, `POST /api/calls` pasa de `no_number` a `no_credentials` — un paso más cerca del socket, y la razón que queda señala lo que falta de afuera.
+
+🔴 **LA CLASIFIQUÉ MAL Y EL COMENTARIO AFIRMABA LO CONTRARIO DE LO QUE HACÍA EL MOTOR.** Puse `owner_scoped` + `app_can_insert = false` y escribí *"`crm_app` recibe SELECT y nada más"*. Leer los grants de vuelta dijo **SELECT y UPDATE**: `app_can_insert` gobierna el INSERT y sólo el INSERT, y `harden()` otorga UPDATE a toda clase que no sea inmutable ni de sólo lectura.
+
+- **Un vendedor con UPDATE sobre SU PROPIA fila —que RLS acota, lo que suena seguro y no lo es— puede apuntarla a un número que nadie le verificó, o escribirse su propio `verified_at`.** La fila decide qué caller ID presenta y a quién le rutean las devoluciones. **Es exactamente el fallo que mi comentario decía prevenir.**
+- **Los otros dos caminos eran peores.** `immutable = true` instala una negativa a nivel sentencia que ata también al dueño, así que revocar y verificar —escrituras administrativas legítimas— se vuelven imposibles. Listar todas las columnas en `protected_columns` hace que `harden()` construya `GRANT UPDATE ()`, un error de sintaxis que tira toda la pasada de endurecimiento.
+- ✅ **`tenant_scoped_read`**: SELECT y ninguna escritura. Las filas llegan por migración, por seed, o por el flujo de verificación de ADR-042 — que será una función `SECURITY DEFINER` como `app.ledger_append()` y no un endpoint con un grant.
+- ⚠️ **LO QUE CUESTA, dicho y no maquillado:** la lectura se acota al **tenant** y no al dueño, así que todo vendedor puede leer el mapeo de todos. Aceptado a propósito — un número saliente de la empresa es infraestructura y no dato del lead, y el roster ya es público en el tablero. Es un ensanchamiento real del alcance de lectura y es el precio de no tener grant de escritura.
+- 🎯 **AHORA HAY UN MECANISMO DONDE HABÍA UN COMENTARIO.** Dos tests fijan los grants, **probados por mutación**: devolviendo la clase a `owner_scoped` los dos se ponen rojos. **El segundo no es redundante** — atrapó **9 columnas** con UPDATE a nivel columna, que un chequeo de tabla habría pasado por alto porque Postgres no descompone un grant de tabla.
+
+⚠️ **EL PREDICADO DE DUEÑO EN LA CONSULTA DEL DIAL ES PORTANTE, y es el único de este árbol que lo es.** Todo el resto puede tratar su cláusula de dueño como segunda capa porque la política ya aplicó una. Ésta no: con `tenant_scoped_read`, sacarla hace que un vendedor disque presentando el caller ID de un colega.
+
+🔴 **`drizzle-kit migrate` SALIÓ CON CÓDIGO 0, SIN IMPRIMIR NADA, Y SIN APLICAR LA MIGRACIÓN.** El error real —`owner_scoped_needs_owner_column`, el registro exige nombrar la columna de dueño— sólo apareció corriendo el SQL a mano contra la base. **Una migración que falla en silencio es peor que una que revienta**, porque el árbol y la base divergen sin que nada lo diga. Vale como método: cuando `db:migrate` no imprime *"migrations applied successfully"*, no aplicó.
+
+⚠️ **Y el dev server sobrevivió a `TaskStop` otra vez**, siguió escuchando en 3000 y bloqueó `harden()` — la migración se colgó en "applying migrations". Mismo patrón que el receptor huérfano del spike. **Se mata por PID.**
+
+### 🚦 LA ASERCIÓN DE BOOT DE §3, POR FIN CABLEADA (2026-08-06)
+`app/db/schema/system.ts` · `app/db/capability-registry.ts` · `pool.ts` · migración **0032** · `tests/integration/capability-boot.test.ts`. **272 → 280 tests.**
+
+**`ref.system_constant` existía como nombre desde Fase 5 y no como tabla.** CONTEXT.md la cargaba como bloqueante de **dos** gates desde el ítem 1 del Sprint 1: el trigger de `is_demo` en producción y esta aserción. Ahora el proceso **se niega a servir** si una capacidad `mvp_required` no está verificada y la base dice que es producción.
+
+- **El candado de tipo y el de boot fallan en momentos distintos, a propósito:** `alowareCapability` hace **incallable** una capacidad no verificada (typecheck); esto la hace **inservible** (arranque).
+- 🔴 **LA ÚNICA DECISIÓN INTERESANTE ES HACIA QUÉ LADO FALLA, y la cómoda es la equivocada.** Una base sin clasificar podría asumirse `development` o `production`. **Asumir development deja todo gate colgado de esta constante en silencio justo en la máquina que existe para proteger** — porque una base de producción real está sin clasificar el día que se crea, y nada en esa máquina se vería roto. Así que una base sin clasificar **es producción y se niega**.
+- ⚠️ **Y la clasificación se DERIVA, no se pregunta.** Un paso que alguien tiene que acordarse no es un mecanismo, y éste se recordaría en todas las máquinas menos en la nueva. `app.tenant.is_demo` ya es el hecho: **una base que tiene un tenant demo no es producción.** Tu base de desarrollo se clasificó sola como `development` al aplicar la 0032, sin que nadie tocara nada.
+- 🔴 **UN AGUJERO QUE APARECIÓ ANTES DE QUE MORDIERA:** en una instalación limpia `db:migrate` corre **antes** de `db:seed`, así que la 0032 no ve tenant demo todavía, clasifica `production`, y el `ON CONFLICT DO NOTHING` lo deja así para siempre. El seed crea el tenant un momento después y ya no lo mueve. **La cadena documentada de instalación terminaba con un dev server que no arranca por `CAP200`, y la causa no se habría parecido en nada al síntoma.** El seed ahora lo declara.
+- 🔴 **`crm_test` tampoco tiene tenant demo**, así que se habría clasificado producción — y el síntoma no habría sido una aserción roja: `pool.ts` dispara el gate como efecto de import y su modo de falla es `process.exit(1)`, así que **el primer archivo de test que importara algo de `~/db` se habría llevado puesto al runner**. `global-setup.ts` ahora lo declara `test`.
+- **El ciclo de imports se rompió antes de escribirlo, no después.** `pool.ts` → `capability-registry.ts` → `pool.ts` habría corrido el chequeo de boot contra un módulo a medio inicializar. ESM probablemente lo sobreviviría por hoisting de declaraciones de función; *"probablemente"* no es una propiedad de la que colgar un gate de arranque. `capability-registry.ts` **no importa el pool** y cada función recibe su `sql`.
+- ✅ **Ocho aserciones, y la que vale es la última:** con la base diciendo `production`, el predicado real contra el registro real **rechaza nombrando `call_list`**. Este gate es **silencioso en toda máquina que lo corre** —dev, CI, esta suite— así que los tests afirman producción explícitamente. Un gate ejercitado sólo donde no hace nada es un gate que nadie probó.
+- **También assertea el camino feliz** (todo verificado en producción → pasa) y que un hueco `mvp_optional` **no** frena el arranque. Un gate que sólo niega no se distingue de uno roto.
+
+⚠️ **PENDIENTES DE ESTA TANDA, dichos y no escondidos:**
+
+1. ~~**La aserción de boot de §3 sigue sin cablear**~~ — **HECHA**, ver la entrada de arriba.
+2. 🔴 **`call_list` BLOQUEA PRODUCCIÓN HOY — y desde la 0032 eso dejó de ser teórico: hay un gate que lo ejecuta.** Es `mvp_required` y G2 no lo pudo documentar ni descubrir, mientras la celda *"si el spike devuelve absent"* de esa misma fila describe un control compensatorio **y el MVP saliendo igual**. Las dos cosas no pueden ser ciertas.
+
+   **La salida analizada, y NO es reclasificar.** Las otras dos filas `mvp_required` dicen *"el MVP no es entregable"*; ésta prescribe una degradación con nombre y sigue. Tampoco es `mvp_optional`: la celda de `sms_send` dice *"nada más se mueve"*, y acá un webhook perdido borra una llamada del historial y corrompe `last_activity_at`, la regla de 7 días y el riel. **Lo que falta es un tercer estado que vuelva PORTANTE al fallback:** producción arranca sin `call_list` sólo si el control compensatorio existe de verdad —la fila `admin_alert(kind='reconciliation_unavailable')` permanente y no reconocible— chequeada en el boot junto con la capacidad.
+
+   **Eso es más fuerte que lo escrito, no más débil:** hoy **nada** verifica el control compensatorio; la celda lo prescribe y ningún mecanismo lo produce. Bajar el tier a `mvp_optional` haría que ese control **no se construya nunca** y el hueco de reconciliación quede invisible para siempre.
+
+   ⚠️ **Y un matiz que hoy el gate no hace: `call_list` está en `unknown`, no en `absent`.** El fallback está escrito para *absent*. Bajo esa propuesta, `absent` + control compensatorio arrancaría y **`unknown` seguiría rechazando**, porque `unknown` significa que nadie preguntó. El gate hoy los trata igual (`status !== 'verified'`) — correcto para `two_legged_call`, impreciso para éste.
+
+   **Costo:** `ALTER TYPE app.capability_tier ADD VALUE` (ver la nota de la 0006) más construir `admin_alert`, que no existe. **Lo que lo haría innecesario:** que soporte de Aloware confirme el endpoint de listado — G2 lo dejó *no documentado y no descubrible*, que **no es lo mismo que probado ausente**.
+3. **La cuenta se suspende el 15/08.** Todo lo que necesite la cuenta real —el vocabulario de disposiciones sin cerrar, si `Call-Disposed` siempre acompaña, si hay configuración de anuncio saliente— hay que sacarlo antes.
+4. ⚠️ **`react-router dev` ignora el puerto que le asigna el harness** y hace su propio fallback a **3001**, que es el puerto del build de producción para Lighthouse. Un dev server vivo choca con el perfil `lh-ci`.
+
+🔴 **UN WORKTREE NO TIENE `.env`, Y EL SÍNTOMA NO SE PARECE A LA CAUSA.** `git worktree add` no copia archivos ignorados por git, así que el dev server arrancaba, anunciaba el puerto y **moría en segundos** — el navegador decía *"sin conexión"* y `preview_list` quedaba vacío. La causa estaba en la salida del propio proceso, que el harness no conservaba: `JOBS002: refusing to start… the worker needs DATABASE_URL, and it must name crm_app`. **El guard hizo exactamente lo que se escribió para hacer** —negarse a servir páginas mientras nada dispara recordatorios— y sin ver su mensaje era indistinguible de un árbol roto.
+
+- **Perdí tres intentos de verificación en pantalla sospechando de mi propio gate de boot antes de mirar la salida del proceso.** Descartarlo fue correcto y fue el segundo paso, no el primero. **El primero debió ser leer lo que el proceso imprimió al morir.** Es el mismo fallo de método que la retractación de `Test & Validate`: una observación que no distingue *"no funciona"* de *"no miré"*.
+- **Es la SEGUNDA cosa que toda sesión futura en un worktree se come**, junto con el `node_modules` vacío que ya estaba anotado. Las dos se arreglan igual: copiar del checkout padre.
+
 ### ⚠️ N13 TAMBIÉN DEPENDE DE LA MÁQUINA, y nadie lo había marcado (2026-08-05)
 `search-perf.test.ts` se puso rojo a las 12:09 con **199 ms contra un presupuesto de 120**. **No es mío y no es ruido.**
 
