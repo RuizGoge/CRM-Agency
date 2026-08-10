@@ -11,6 +11,7 @@ import {
   seedPerf500,
 } from './fixtures/perf-500'
 import { expectCount } from './fixtures/clock'
+import { MAX_RENDERED_PER_COLUMN } from '~/lib/board/virtual-window'
 
 /**
  * Sprint-0 Gate 12 — the drag holds 60 fps with 500 cards, or the build is red.
@@ -82,7 +83,27 @@ test.describe('P6 · the drag holds 60 fps on a 500-card board', () => {
     // assumed — dragging before it arms is a no-op that fails much later and
     // somewhere else.
     await expect(page.locator('main [data-drag]')).toHaveAttribute('data-drag', 'on')
-    await expectCount(page.locator('main article[draggable="true"]'), PERF_CARD_COUNT)
+
+    // 🔴 THIS USED TO BE `expectCount(main article[draggable="true"], 500)` AND
+    // IT HAD TO CHANGE. Saying that plainly matters more than the change: a
+    // loosened engagement assertion is indistinguishable, from a diff, from the
+    // exact failure this project is built to prevent.
+    //
+    // It was written to close a real hole — a green frame budget bought by
+    // measuring a board that was not there. But it expressed "the whole board"
+    // as a DOM count, and `04b` §9 R2-2 makes that same count a build failure
+    // above fourteen per column. The assertion and the specification wanted
+    // opposite things; the assertion was written second, by me, in a session
+    // where virtualization did not exist yet.
+    //
+    // So the property moved to `board-virtualization.spec.ts`, where it is
+    // stronger than it was here: the fixture still holds 500, the columns still
+    // REPORT 500 from server-computed counts, and — the assertion a board that
+    // mounts everything cannot make — scrolling reaches card 499. What stays
+    // here is the half a drag can check: the board under the pointer is the
+    // whole board, and it does not quietly re-mount into one.
+    await expect(page.locator('main [data-virtualized="on"]').first()).toBeVisible()
+    await expectCount(page.locator('main [data-drag] > section'), PERF_STAGES.length)
 
     // THREE RUNS, MEDIAN REPORTED — the profile definition, not a workaround.
     //
@@ -217,6 +238,23 @@ test.describe('P6 · the drag holds 60 fps on a 500-card board', () => {
             entered,
             ringSeen,
             rendered: document.querySelectorAll('main article[draggable="true"]').length,
+            // Server-computed, rendered per column, and unaffected by how many
+            // cards are mounted — which is what makes it survive the window
+            // where the DOM count did not.
+            reportedTotal: [...document.querySelectorAll('main [data-card-total]')].reduce(
+              (sum, el) => sum + Number(el.getAttribute('data-card-total')),
+              0,
+            ),
+            // The worst column AT THE END OF THE DRAG. R2-2 asserted while the
+            // board is under load, not only on a still page: a regression that
+            // re-mounts a whole column mid-drag is precisely the shape of thing
+            // that costs the frames this test measures.
+            worstColumn: Math.max(
+              ...[...document.querySelectorAll('main [data-virtualized="on"]')].map(
+                (el) => el.querySelectorAll('article').length,
+              ),
+              0,
+            ),
             dragoverCount,
           }
         },
@@ -234,7 +272,14 @@ test.describe('P6 · the drag holds 60 fps on a 500-card board', () => {
       // frame rate was fine while nothing happened" — the most expensive kind of
       // passing test, because it reports the very property it was written to
       // protect.
-      expect(sample.rendered, '500 cards must be mounted while measuring').toBe(PERF_CARD_COUNT)
+      expect(sample.reportedTotal, 'the board under the drag is not the whole 500-card board').toBe(
+        PERF_CARD_COUNT,
+      )
+      expect(sample.rendered, 'no cards were mounted while measuring').toBeGreaterThan(0)
+      expect(
+        sample.worstColumn,
+        `a column mounted ${sample.worstColumn} cards, over R2-2's ceiling, during the drag`,
+      ).toBeLessThanOrEqual(MAX_RENDERED_PER_COLUMN)
       expect(sample.entered, 'the drag must cross three columns').toBe(3)
       expect(sample.ringSeen, 'the drop target never lit, so no drag was in progress').toBe(true)
       expect(sample.dragoverCount).toBeGreaterThan(30)

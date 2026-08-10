@@ -1,6 +1,13 @@
-import { memo, useCallback, useEffect, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router'
 
+import {
+  SSR_WINDOW,
+  VIRTUALIZE_ABOVE,
+  windowFor,
+  withFocusHeld,
+  type CardWindow,
+} from '~/lib/board/virtual-window'
 import { format, fromWireString } from '~/lib/money/money'
 import type { BoardCard, BoardColumn } from '~/routes/api/board'
 import { BREAKPOINTS } from '~/styles/tokens/timing'
@@ -95,6 +102,14 @@ export function PipelineColumns({
     onDropCard(cardId, from.id, target.id)
   }
 
+  const handleZoneEnter = useCallback((stageId: string): void => {
+    setOverStageId(stageId)
+  }, [])
+
+  const handleZoneLeave = useCallback((stageId: string): void => {
+    setOverStageId((current) => (current === stageId ? null : current))
+  }, [])
+
   return (
     <div
       data-drag={dragEnabled === null ? undefined : dragEnabled ? 'on' : 'off'}
@@ -102,6 +117,12 @@ export function PipelineColumns({
         display: 'flex',
         gap: 'var(--space-4)',
         overflowX: 'auto',
+        // THE ROW IS NOW BOUNDED, and that is what makes a column a viewport.
+        // `minHeight: 0` on a flex child is the difference between six columns
+        // that each scroll and six columns that grow to 500 cards tall while
+        // every overflow rule sits there doing nothing.
+        flex: 1,
+        minHeight: 0,
         paddingBottom: 'var(--space-4)',
       }}
     >
@@ -117,6 +138,7 @@ export function PipelineColumns({
               flex: '0 0 17rem',
               display: 'flex',
               flexDirection: 'column',
+              minHeight: 0,
               gap: 'var(--space-3)',
             }}
           >
@@ -152,88 +174,277 @@ export function PipelineColumns({
               ) : null}
             </header>
 
-            <div
-              // dragover fires continuously; the state only changes on enter
-              // and leave. Re-rendering the board on every dragover event is
-              // how a drag stops holding 60fps.
-              onDragOver={dragEnabled === true ? (e) => e.preventDefault() : undefined}
-              onDragEnter={dragEnabled === true ? () => setOverStageId(column.id) : undefined}
-              onDragLeave={
-                dragEnabled === true
-                  ? (e) => {
-                      // Only when the pointer leaves the column itself, not
-                      // when it crosses a card inside it.
-                      if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
-                        setOverStageId((current) => (current === column.id ? null : current))
-                      }
-                    }
-                  : undefined
-              }
-              onDrop={
-                dragEnabled === true
-                  ? (e) => {
-                      e.preventDefault()
-                      handleDrop(column)
-                    }
-                  : undefined
-              }
-              style={{
-                display: 'grid',
-                gap: 'var(--space-2)',
-                alignContent: 'start',
-                minHeight: 'var(--space-16)',
-                padding: 'var(--space-2)',
-                background: over ? 'var(--color-selected-bg)' : 'var(--color-surface-2)',
-                borderRadius: 'var(--radius-lg)',
-                // An inset ring rather than a border: a border changes the box
-                // and every card below it shifts by a pixel as the pointer
-                // crosses columns.
-                boxShadow: over ? 'inset 0 0 0 2px var(--color-action-primary-bg)' : undefined,
-                // NO TRANSITION HERE, and the reason is a defect this had.
-                //
-                // With `transition: background …` the tint never arrived at
-                // all: measured on the real element, the inline style read
-                // `var(--color-selected-bg)` for a full 500ms while the
-                // computed background-color stayed on the old value the whole
-                // time. Chromium would not interpolate between two custom
-                // properties and the result was not "no animation", it was the
-                // new colour never applying. The drop target looked inert
-                // while the code said it was highlighted.
-                //
-                // Found by reading computed style over time, not by looking:
-                // the ring rendered correctly, so the column did light up and
-                // the missing tint was invisible next to it.
-              }}
-            >
-              {column.cards.length === 0 ? (
-                <p
-                  style={{
-                    margin: 0,
-                    padding: 'var(--space-4) var(--space-2)',
-                    textAlign: 'center',
-                    fontSize: 'var(--type-xs)',
-                    color: 'var(--color-text-tertiary)',
-                  }}
-                >
-                  Nothing here yet.
-                </p>
-              ) : (
-                column.cards.map((card) => (
-                  <Card
-                    key={card.id}
-                    card={card}
-                    draggable={dragEnabled === true}
-                    dragging={draggingId === card.id}
-                    pending={pendingCardId === card.id}
-                    onDragStart={handleCardDragStart}
-                    onDragEnd={handleCardDragEnd}
-                  />
-                ))
-              )}
-            </div>
+            <ColumnCards
+              column={column}
+              dragEnabled={dragEnabled === true}
+              draggingId={draggingId}
+              pendingCardId={pendingCardId}
+              over={over}
+              onCardDragStart={handleCardDragStart}
+              onCardDragEnd={handleCardDragEnd}
+              onZoneEnter={handleZoneEnter}
+              onZoneLeave={handleZoneLeave}
+              onZoneDrop={handleDrop}
+            />
           </section>
         )
       })}
+    </div>
+  )
+}
+
+/**
+ * One column's scroll container, and the window of cards inside it.
+ *
+ * THE SCROLL CONTAINER IS THE NEW PART, and it is not a styling choice. `04b`
+ * §2.1 computes its window against a *"900px column viewport"* and §3.6 says
+ * *"fixed heights let THE SCROLL CONTAINER compute offsets without measuring"* —
+ * both presume a column that is its own bounded viewport. The board had none:
+ * columns grew and the document scrolled, so there was nothing to be inside of
+ * and nothing to be outside of. ⚠️ The corpus never states the board's scroll
+ * model anywhere — there is not one `overflow-y`, one column height or one
+ * `100vh` in 1.9 MB. This is the model every other line implies (sticky column
+ * header, *"board keeps its scroll position"*, 2-D scrolling permitted as an
+ * explicit exception), chosen deliberately rather than inherited.
+ *
+ * TWO PATHS, ON PURPOSE. Below `VIRTUALIZE_ABOVE` a column is plain DOM laid out
+ * by `gap`; above it, absolute offsets. They must agree on geometry or the demo
+ * board and a real seller's board are different products — which is why
+ * `--card-gap` is DERIVED from `--card-pitch` in the token layer instead of
+ * written beside it, and why the pitch assertion runs on `perf-500` rather than
+ * on the demo tenant that never reaches thirty cards.
+ *
+ * NO LAYOUT IS READ TO POSITION ANYTHING. Offsets are `calc()` over
+ * `--card-pitch`, so a card lands where the stylesheet puts it whether or not
+ * the measurement below succeeded. The measurement only picks WHICH cards to
+ * mount, and picking wrong costs an overscan row, not a misaligned column.
+ */
+function ColumnCards({
+  column,
+  dragEnabled,
+  draggingId,
+  pendingCardId,
+  over,
+  onCardDragStart,
+  onCardDragEnd,
+  onZoneEnter,
+  onZoneLeave,
+  onZoneDrop,
+}: {
+  column: BoardColumn
+  dragEnabled: boolean
+  draggingId: string | null
+  pendingCardId: string | null
+  over: boolean
+  onCardDragStart: (e: React.DragEvent<HTMLElement>, id: string) => void
+  onCardDragEnd: () => void
+  onZoneEnter: (stageId: string) => void
+  onZoneLeave: (stageId: string) => void
+  onZoneDrop: (target: BoardColumn) => void
+}): React.JSX.Element {
+  const scroller = useRef<HTMLDivElement | null>(null)
+  const pitch = useRef(0)
+
+  const cards = column.cards
+  const total = cards.length
+  const virtualized = total > VIRTUALIZE_ABOVE
+
+  // `null` until an effect has measured, and the SERVER reads null too. That
+  // shared starting point is the whole hydration story: the server cannot know
+  // the viewport height and cannot know whether `--card-h` resolved to 120 or
+  // 156, because that swap is a media query. So both sides render `SSR_WINDOW`
+  // and the measured window only takes over afterwards. Any other first render
+  // is a hydration mismatch on the one screen this project measures LCP and TTI
+  // against.
+  const [metrics, setMetrics] = useState<{ pitch: number; viewportH: number } | null>(null)
+  const [scrollTop, setScrollTop] = useState(0)
+  const [focusedIndex, setFocusedIndex] = useState<number | null>(null)
+
+  useEffect(() => {
+    if (!virtualized) return
+
+    const measure = (): void => {
+      const el = scroller.current
+      if (!el) return
+      // A window `resize` listener rather than a ResizeObserver, which §2.1
+      // names explicitly. Two reads on a rare event; zero during scroll and
+      // zero during drag, which is the property that actually matters.
+      const next = Number.parseFloat(
+        getComputedStyle(document.documentElement).getPropertyValue('--card-pitch'),
+      )
+      pitch.current = Number.isFinite(next) ? next : 0
+      setMetrics({ pitch: pitch.current, viewportH: el.clientHeight })
+    }
+
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [virtualized])
+
+  // QUANTISED TO THE ROW, and this is the difference between a virtualizer that
+  // helps and one that costs more than it saves. A raw `setScrollTop` re-renders
+  // the column on every scroll event — dozens per second, each one producing a
+  // window identical to the last. State only moves when `floor(scrollTop/pitch)`
+  // does, which is exactly when the answer changes.
+  const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>): void => {
+    const next = e.currentTarget.scrollTop
+    setScrollTop((prev) => {
+      const p = pitch.current
+      if (p > 0 && Math.floor(prev / p) === Math.floor(next / p)) return prev
+      return next
+    })
+  }, [])
+
+  // Which card holds focus, so the window can refuse to unmount it. `04b` §1.9:
+  // *"Focus is never dropped to `<body>`"* — and a virtualizer is the one thing
+  // here that can break that rule without anybody writing a bug.
+  const handleFocus = useCallback((e: React.FocusEvent<HTMLDivElement>): void => {
+    const host = e.target instanceof Element ? e.target.closest('[data-card-index]') : null
+    const raw = host?.getAttribute('data-card-index')
+    setFocusedIndex(raw == null ? null : Number(raw))
+  }, [])
+
+  const handleBlur = useCallback((e: React.FocusEvent<HTMLDivElement>): void => {
+    // Only when focus leaves the column entirely. Moving between two cards
+    // fires blur before the next focus, and clearing here would drop the held
+    // index in the gap between them.
+    if (!e.currentTarget.contains(e.relatedTarget)) setFocusedIndex(null)
+  }, [])
+
+  const slice: CardWindow = !virtualized
+    ? { first: 0, count: total }
+    : metrics
+      ? withFocusHeld(
+          windowFor({
+            count: total,
+            scrollTop,
+            viewportH: metrics.viewportH,
+            pitch: metrics.pitch,
+          }),
+          focusedIndex,
+        )
+      : { first: 0, count: Math.min(total, SSR_WINDOW) }
+
+  const rendered = cards.slice(slice.first, slice.first + slice.count)
+
+  return (
+    <div
+      ref={scroller}
+      onScroll={virtualized ? handleScroll : undefined}
+      onFocusCapture={virtualized ? handleFocus : undefined}
+      onBlurCapture={virtualized ? handleBlur : undefined}
+      // dragover fires continuously; the state only changes on enter
+      // and leave. Re-rendering the board on every dragover event is
+      // how a drag stops holding 60fps.
+      onDragOver={dragEnabled ? (e) => e.preventDefault() : undefined}
+      onDragEnter={dragEnabled ? () => onZoneEnter(column.id) : undefined}
+      onDragLeave={
+        dragEnabled
+          ? (e) => {
+              // Only when the pointer leaves the column itself, not
+              // when it crosses a card inside it.
+              if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+                onZoneLeave(column.id)
+              }
+            }
+          : undefined
+      }
+      onDrop={
+        dragEnabled
+          ? (e) => {
+              e.preventDefault()
+              onZoneDrop(column)
+            }
+          : undefined
+      }
+      data-virtualized={virtualized ? 'on' : 'off'}
+      data-card-total={total}
+      style={{
+        flex: 1,
+        minHeight: 0,
+        overflowY: 'auto',
+        // A drag already competes with the horizontal scroll of the board. On a
+        // pointer device the wheel is the vertical axis and the two do not
+        // collide; `overscroll-behavior` stops a column that has hit its end
+        // from handing the gesture up to the page and scrolling the whole board
+        // out from under the card being dragged.
+        overscrollBehavior: 'contain',
+        padding: 'var(--space-2)',
+        background: over ? 'var(--color-selected-bg)' : 'var(--color-surface-2)',
+        borderRadius: 'var(--radius-lg)',
+        // An inset ring rather than a border: a border changes the box
+        // and every card below it shifts by a pixel as the pointer
+        // crosses columns.
+        boxShadow: over ? 'inset 0 0 0 2px var(--color-action-primary-bg)' : undefined,
+        // NO TRANSITION HERE, and the reason is a defect this had.
+        //
+        // With `transition: background …` the tint never arrived at
+        // all: measured on the real element, the inline style read
+        // `var(--color-selected-bg)` for a full 500ms while the
+        // computed background-color stayed on the old value the whole
+        // time. Chromium would not interpolate between two custom
+        // properties and the result was not "no animation", it was the
+        // new colour never applying. The drop target looked inert
+        // while the code said it was highlighted.
+        //
+        // Found by reading computed style over time, not by looking:
+        // the ring rendered correctly, so the column did light up and
+        // the missing tint was invisible next to it.
+      }}
+    >
+      {total === 0 ? (
+        <p
+          style={{
+            margin: 0,
+            padding: 'var(--space-4) var(--space-2)',
+            textAlign: 'center',
+            fontSize: 'var(--type-xs)',
+            color: 'var(--color-text-tertiary)',
+          }}
+        >
+          Nothing here yet.
+        </p>
+      ) : (
+        <div
+          style={
+            virtualized
+              ? {
+                  position: 'relative',
+                  // The scrollbar tells the truth about the whole column even
+                  // though ten cards are mounted. Written as `calc()` over the
+                  // tokens rather than as a number this component computed:
+                  // the height is then correct at first paint, before anything
+                  // has been measured and without the server having to guess
+                  // which breakpoint the browser is at.
+                  height: `calc(var(--card-pitch) * ${total - 1} + var(--card-h))`,
+                }
+              : {
+                  display: 'grid',
+                  // DERIVED from the pitch in the token layer, so the two paths
+                  // cannot lay cards out on two different rhythms.
+                  gap: 'var(--card-gap)',
+                  alignContent: 'start',
+                }
+          }
+        >
+          {rendered.map((card, i) => (
+            <Card
+              key={card.id}
+              card={card}
+              index={slice.first + i}
+              // `null` is the plain-DOM path. A string is an offset, and it is
+              // integer arithmetic handed to CSS rather than performed on a
+              // measurement — `topOfCard(i) = i × pitch`, §2.1's whole design.
+              offsetTop={virtualized ? `calc(var(--card-pitch) * ${slice.first + i})` : null}
+              draggable={dragEnabled}
+              dragging={draggingId === card.id}
+              pending={pendingCardId === card.id}
+              onDragStart={onCardDragStart}
+              onDragEnd={onCardDragEnd}
+            />
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -254,6 +465,8 @@ export function PipelineColumns({
  */
 const Card = memo(function Card({
   card,
+  index,
+  offsetTop,
   draggable,
   dragging,
   pending,
@@ -261,6 +474,10 @@ const Card = memo(function Card({
   onDragEnd,
 }: {
   card: BoardCard
+  /** Position in the WHOLE column, not in the mounted window. */
+  index: number
+  /** A `calc()` offset when the column is windowed, `null` when it is not. */
+  offsetTop: string | null
   draggable: boolean
   dragging: boolean
   pending: boolean
@@ -278,7 +495,20 @@ const Card = memo(function Card({
       draggable={draggable}
       onDragStart={draggable ? handleDragStart : undefined}
       onDragEnd={draggable ? onDragEnd : undefined}
+      // Read back by the column to hold focus against the window, and by the
+      // virtualization gate to prove that scrolling to the end of a column
+      // reaches the LAST card rather than the last one that happened to be
+      // mounted. Both need the index in the whole column, which is the one
+      // number a windowed list stops being able to infer from the DOM.
+      data-card-index={index}
       style={{
+        // Absolute only when the column is windowed. `topOfCard(i) = i × pitch`
+        // as a CSS expression: no measurement, no accumulation error, and
+        // correct at first paint on either breakpoint.
+        position: offsetTop === null ? undefined : 'absolute',
+        top: offsetTop ?? undefined,
+        left: offsetTop === null ? undefined : 0,
+        right: offsetTop === null ? undefined : 0,
         padding: 'var(--space-3)',
         background: 'var(--color-surface-1)',
         border: '1px solid var(--color-border-subtle)',

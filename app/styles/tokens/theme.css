@@ -194,6 +194,22 @@
   --size-card-h: 120px;
   --size-card-h-mobile: 156px;
 
+  /* THE ROW PITCH — card height plus the gap, and the number the virtualizer
+   * counts in. 04b §4.1 publishes it as "Desktop row stride = 128 px".
+   *
+   * ⚠️ NOT §2.1's 120. That figure is the pitch of a 112px card — the third
+   * height 04b carried, and the one finding C11 never weighed, so N17 struck
+   * 108/92 and left it standing. Copying it would slide every card 8px past
+   * where the scroll container computes it, accumulating down the column.
+   *
+   * Anchored rather than free: --card-gap below is DERIVED from this minus the
+   * card height, so the plain-DOM path and the windowed path cannot end up on
+   * two different pitches. The card height itself is pinned in ref.ci_ratchet,
+   * so this number cannot drift without the difference changing — which is what
+   * tests/integration/card-height.test.ts asserts. */
+  --size-card-pitch: 128px;
+  --size-card-pitch-mobile: 164px;
+
   /* What a card actually renders at. Desktop by default; reset.css swaps it at
    * the density breakpoint, which is the only place in this tree that number
    * is written. Ruling N17 pins both values, and `ui.card_h_desktop` /
@@ -201,6 +217,14 @@
    * changing either is a migration that has to restate the number, not an
    * edit to this line. */
   --card-h: var(--size-card-h);
+  --card-pitch: var(--size-card-pitch);
+
+  /* DERIVED, and that is the mechanism. A column under 30 cards is plain DOM
+   * laid out by `gap`, and above 30 it is absolute offsets at i × --card-pitch.
+   * Two paths, one geometry — so the gap is computed FROM the pitch rather than
+   * written next to it. A card that grows, or a pitch that is retuned, moves
+   * both paths together or neither. */
+  --card-gap: calc(var(--card-pitch) - var(--card-h));
 
   /* --- Radii ------------------------------------------------------------- */
   --radius-none: 0;

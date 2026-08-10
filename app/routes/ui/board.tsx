@@ -291,7 +291,23 @@ export default function Board({ loaderData, actionData }: Route.ComponentProps) 
     setCelebrating(new CelebrationToken(p.opportunityId, p.contactName, p.annualCents))
   }, [])
   return (
-    <main style={{ padding: 'var(--space-8) var(--space-6)' }}>
+    // THE ONE SCREEN THAT CLAIMS THE VIEWPORT. Every other route stays a
+    // content-sized flex item under the shell and scrolls the page; this one
+    // takes the remainder so each column can own a bounded scroll container.
+    // `minHeight: 0` is the half that is easy to leave out and impossible to
+    // see: without it a flex item refuses to shrink below its content, the
+    // columns grow to 500 cards tall again, and the per-column overflow never
+    // engages — the board would look exactly as it does now and virtualize
+    // nothing.
+    <main
+      style={{
+        flex: 1,
+        minHeight: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        padding: 'var(--space-8) var(--space-6)',
+      }}
+    >
       <h1
         style={{
           fontSize: 'var(--type-2xl)',

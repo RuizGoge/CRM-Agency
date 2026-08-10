@@ -50,6 +50,10 @@ body {
      foundation decision and not a component's opinion. */
   :root {
     --card-h: var(--size-card-h-mobile);
+    /* The pitch swaps with it, or the virtualizer counts in desktop rows on a
+       phone and every card below the first lands short. --card-gap is a calc
+       over these two, so it follows without a third line. */
+    --card-pitch: var(--size-card-pitch-mobile);
   }
 }
 
