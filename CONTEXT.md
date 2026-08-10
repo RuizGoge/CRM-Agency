@@ -7,6 +7,19 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 🔤 UN EVENTO INVENTADO YA NO SE PUEDE ESCRIBIR, NO SÓLO NO COMPILA (2026-08-10)
+`app/db/schema/events.ts` · migración **0042** · `tests/integration/event-vocabulary.test.ts`. **437 → 444 tests · 41 → 42 archivos.** Primera mitad del transporte de eventos (ruta A).
+
+**`app.event_name` es un ENUM de 49 etiquetas generado del MISMO registro que genera la unión de TypeScript.** La unión ya hacía de un nombre inventado un error de build **para el código que escribimos nosotros**; no hacía nada contra un nombre que llega como **DATO**: un cuerpo de webhook, un payload de job replayado, un `INSERT` a mano a las 2 de la mañana durante un incidente. **Un enum los rechaza a todos, a cualquier hora, por cualquier actor** — que es la diferencia entre una regla y un mecanismo. `'opportunity.closed_won'::app.event_name` ahora falla; hay un test que lo assertea y otro de control positivo con `opportunity.won`, porque sin él la aserción pasaría igual sobre un tipo que no existe.
+
+**`app.event_consumer`: 268 pares (consumidor, evento) sembrados desde el catálogo.** Es lo que convierte la columna `consumers` de documentación en restricción — el outbox lleva FK acá, así que **una fila de fan-out para un consumidor que no existe no se puede escribir**. El test compara contra el registro **en las dos direcciones**: declarado y ausente, o presente y no declarado. 🎯 Mutación: sacar `earnings` de los consumidores de `opportunity.won` → rojo por el lado *"declared nowhere"*, que es el que no se prueba solo.
+
+- **Comparado EN ORDEN, no como conjunto.** Postgres ordena un enum por declaración y la suite de ventana de llamada ya pagó eso una vez; un `sort()` previo escondería un reordenamiento que cambia cualquier `ORDER BY` sobre esa columna.
+- 🔴 **Un error mío corregido antes de que llegara a producción:** la primera versión del esquema leía `contracts/events/catalog.json` con `node:fs` **en tiempo de módulo**, atando el esquema —y el server— al directorio de trabajo del proceso. Anda desde la raíz del repo y habría fallado en la imagen construida. Ahora importa `catalog.generated.ts`, que es el artefacto que la puerta del contrato ya mantiene honesto.
+- 📐 **P12 subió a 112.958 y NO fue mío: medido contra el commit anterior da el MISMO número.** El salto desde 111.068 es el drawer del Módulo 9 entrando al grafo de la ruta, que su propia entrada ya había registrado en 112.924. **El catálogo no está en el bundle del cliente**, verificado buscando un nombre de evento en los chunks.
+
+⚠️ **LO QUE FALTA DEL TRANSPORTE, y es la mitad más cara:** `event_log` **particionado por mes** con `app.event_seq`, `event_outbox` **particionado por día**, `app.event_emit()` —que escribe la fila del evento **y** sus filas de fan-out en la MISMA transacción— y el relay. Sin eso el timeline (ítem 20) sigue bloqueado.
+
 ### ⚖️ FALLO: EL CONSENTIMIENTO NO ENTRA A LA PUERTA · Y EL TIMELINE CUELGA DEL TRANSPORTE (2026-08-10)
 Sin código. Un fallo de Jorge y un hallazgo de orden que cambia qué sigue.
 
