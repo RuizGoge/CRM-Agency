@@ -193,6 +193,39 @@ function fail(lines: readonly string[]): never {
   process.exit(1)
 }
 
+/**
+ * The manifest key for the default client entry, wherever npm hoisted it to.
+ *
+ * A GIT WORKTREE MOVES IT. `node_modules` is hoisted to the repository parent,
+ * so a build run from `.claude/worktrees/<name>/` — three levels down — emits
+ * the key as `../../../node_modules/@react-router/dev/…` while a plain checkout
+ * emits it with no prefix. The literal lookup therefore raised PERF003 in every
+ * worktree, which is where the perf work actually happens: the P6 and virtualisation
+ * sessions could not run the gate that measures them.
+ *
+ * THIS RESOLVES THE KEY, IT DOES NOT RELAX THE CHECK. A genuinely missing entry
+ * still fails with PERF003, and two candidates fail rather than picking one —
+ * measuring the wrong entry is the failure this checker exists to prevent, and
+ * quietly guessing would be worse than not measuring.
+ */
+function resolveClientEntry(manifest: Readonly<Record<string, ManifestChunk>>): string {
+  if (manifest[CLIENT_ENTRY] !== undefined) return CLIENT_ENTRY
+
+  const hoisted = Object.keys(manifest).filter((key) =>
+    new RegExp(`^(?:\\.\\./)+${CLIENT_ENTRY.replaceAll(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`).test(key),
+  )
+  if (hoisted.length > 1) {
+    fail([
+      `PERF008: the client manifest has ${String(hoisted.length)} candidates for the client entry.`,
+      '',
+      ...hoisted.map((key) => `  ${key}`),
+      '',
+      'Refusing to guess which one the browser loads.',
+    ])
+  }
+  return hoisted[0] ?? CLIENT_ENTRY
+}
+
 /** Every chunk the browser loads before the route is interactive. */
 function initialAssets(
   manifest: Readonly<Record<string, ManifestChunk>>,
@@ -208,7 +241,7 @@ function initialAssets(
     ])
   }
 
-  const keys = [CLIENT_ENTRY, ...chain.map((m) => `${m}${ROUTE_SUFFIX}`)]
+  const keys = [resolveClientEntry(manifest), ...chain.map((m) => `${m}${ROUTE_SUFFIX}`)]
   const seen = new Set<string>()
   const js = new Set<string>()
   const css = new Set<string>()
