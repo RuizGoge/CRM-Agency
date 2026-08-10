@@ -7,6 +7,24 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 🧹 GIT REGULARIZADO, `crm_dev` SANA, Y LA CADENA DE INSTALACIÓN QUE NO COMPLETABA (2026-08-10)
+
+**Estado: `master` = `origin/master`, todo empujado · 507 tests · 83 e2e desktop · 27 mobile · cero rojos · los cinco worktrees limpios.**
+
+⚠️ **Nada de esto se descubrió leyendo.** Los tres defectos de abajo aparecieron al **destruir el volumen y rehacer todo desde cero**, que es lo que ninguna sesión había hecho en semanas.
+
+🔴 **LA CADENA DOCUMENTADA DE INSTALACIÓN FRESCA NO COMPLETABA.** `db:reset && db:up && db:migrate && db:seed` moría con `CAP200: call_list (unknown)`: un clon nuevo, o cualquier entorno reseteado, no tenía forma de llegar a un demo corriendo. **El arreglo eran treinta líneas de orden.** El seed ya escribía `ref.system_constant.environment = 'development'` y el comentario encima describía este fallo exacto — pero la línea estaba **debajo** de `await import('../app/db')`, y `~/db` assertea las capacidades MVP **al cargar el módulo**. El remedio estaba escrito, era correcto, y estaba del lado equivocado de la cosa que debía prevenir. Verificado destruyendo el volumen y corriendo la cadena entera sin poner nada a mano.
+
+🔴 **`verify` NO PODÍA PASAR NUNCA EN EL CHECKOUT PRINCIPAL.** Prettier y eslint entraban a `.claude/worktrees/`, que es este mismo repo checkouteado adentro de sí mismo: 169 problemas de estilo en archivos que nadie tocaba, y el checkout principal era el único lugar del proyecto donde no se podía commitear nada. Git ya los salta; ahora esas dos herramientas también.
+
+🔴 **EL TAB STOP DE LA REGIÓN CON SCROLL SE MEDÍA UNA SOLA VEZ.** My Day **entra** al montar y después crece —el bloque de standing y el checklist buscan cada uno su propio dato—, así que con el demo recién sembrado axe encontró `scrollable-region-focusable` **serious**. Ahora la medición sigue al contenido con un `ResizeObserver`. Y el spec de axe esperaba al encabezado, que viene del loader: evaluaba una pantalla a medio renderizar, lo que además **le hacía perder** hallazgos en lo que todavía no había llegado. Se mantuvo condicional y no incondicional por el margen: `undo-keyboard` tope el undo en seis tabs y hoy está en cinco.
+
+**Git, ordenado:**
+
+- **Todo empujado.** `origin/master` estaba en `abd5efb` (el handoff): eran **55 commits en un solo disco**, más tres ramas con trabajo único y el tag de rescate.
+- **Los tres worktrees con trabajo suelto, commiteados en SUS ramas y sin mergear** — preservar no es adoptar. `aloware-puerta-2-spike`: 33 archivos (ingesta de webhooks, merge de llamada y mensaje, dead letter, integration health), **master no tiene nada de eso**, y sus migraciones 0035–0038 **chocan: hay que renumerar a 0047+ antes de integrar**. `repo-audit-setup`: reescribe `CLAUDE.md` al español, lo que **contradice la regla del propio documento**, más `CHECKLIST.md` y `docs/ARRANQUE.md`. `modulo-9-llamadas`: una nota de contexto.
+- **El intento abandonado de virtualización quedó en el tag `wip/virtualizacion-abandoned-attempt`**, empujado. Vivía sólo en un directorio de trabajo sobre una rama sin commits propios: un `checkout` ahí lo borraba sin dejar rastro. Lo único suyo que no estaba superado —el separador del rank-and-gap, que sacaba un solo punto en teléfono cuando ya había que sacar los dos— se portó como commit propio.
+
 ### 🔢 DOS MIGRACIONES NO PUEDEN COMPARTIR UN NÚMERO (2026-08-10)
 `scripts/guard-db-generate.ts` · `scripts/migration-index.test.ts`. **472 → 476 tests · 45 → 46 archivos.** El mecanismo que faltaba detrás de la colisión de tres ramas.
 
