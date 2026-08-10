@@ -7,6 +7,26 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 🚦 LA PUERTA ÚNICA, Y UNA FUGA DE SILO QUE ME ENCONTRÓ UN TEST (2026-08-09)
+`app/db/schema/compliance.ts` · migración **0038** · `tests/integration/compliance-gate.test.ts`. **393 → 414 tests · 37 → 38 archivos.** Ítems **11 y 12** del MVP, construidos juntos porque la puerta no puede ser correcta sin saber si hay un override activo. **El núcleo de compliance queda cerrado salvo una pregunta abierta, abajo.**
+
+**EL ORDEN ES LA SEGURIDAD, y la mayor parte de la suite assertea precedencia y no veredictos sueltos.** `blocked_suppressed` se evalúa **antes** que el reloj, así que un STOP se rechaza a las 7:30 de la tarde por la misma razón que a medianoche. Y los dos veredictos de reloj van **últimos** entre los bloqueos, porque son los únicos dos que break-glass libera: ponerlos primero habría dejado que un override alcance una pregunta que nunca debe contestar.
+
+🔴 **UNA FUGA DE SILO QUE INTRODUJE YO Y ATRAPÓ UN TEST: Ana obtuvo `allow` sobre el lead de Ben.** La causa es exacta y vale escribirla porque se va a repetir: `compliance_check` es **definer**, así que cuando delegaba en `app.calling_window_check` —que es **invoker** y saca su silo del RLS— la función interna heredaba el contexto del definer, **corría sin RLS y volvía a leer el contacto sin filtro**. Mi predicado de dueño estaba bien escrito y era decorativo. **Un invoker llamado desde adentro de un definer deja de estar acotado**, y eso no se ve leyendo ninguna de las dos funciones por separado. Cerrado con una salida temprana por visibilidad, antes de delegar.
+
+- 🎯 **Probado por mutación:** sacar esa salida temprana pone rojo exactamente ese test, con `allow` donde debía decir `blocked_timezone_unknown`.
+- 🎯 **Segunda mutación, la que la constitución prohíbe:** hacer que break-glass libere también la supresión → rojo sobre *"DOES NOT release a suppressed number"*. **Un admin bajo break-glass sigue sin poder discar un STOP, y la razón es estructural y no procedimental:** `override_scope` es un enum de **un solo valor**, así que no existe etiqueta que signifique *"levantá la supresión"*. Agregar una es `ALTER TYPE` — migración, diff y decisión deliberada.
+
+🔴 **`05b` PIDE UNA COLUMNA GENERADA QUE POSTGRES RECHAZA.** `GENERATED ALWAYS AS (started_at + interval '60 minutes') STORED` falla con *"generation expression is not immutable"*: `timestamptz + interval` está marcada **STABLE**, porque un intervalo con meses o días sí depende de la zona (un "día" cruzando DST no siempre son 24 horas). Para un intervalo **fijo y sub-diario** es genuinamente inmutable, así que se declara `app.override_expiry()` como `IMMUTABLE` —una afirmación **verdadera**, no una mentira conveniente— y la columna sigue siendo generada y almacenada, que es lo que el ruling realmente quería: **un vencimiento que nadie puede extender**. Sin job: se computa en cada lectura.
+
+⚠️ **Y CORREGÍ UN DEFECTO MÍO EN EL CONTRATO DE EVENTOS.** `compliance.send_blocked` lo había derivado de `02b` §4b; **`05-architecture.md` §5 trae el payload ratificado y outranks a Fase 2**. Tenía tres cosas mal: el campo es `verdict` y no `reason`, el vocabulario son **ocho** valores y no seis (faltaban `unknown_timezone` y `unverified_mapping`, que son justo los dos que este trabajo necesita), y faltaban `contact_phone_id` y `override_id`. **La marca `"payload": "derived"` hizo su trabajo** — por eso era encontrable.
+
+**El guardián de grabación es proporcionado y no un freno de piso:** mientras `recording_guard` está `tripped`, sólo se rechazan llamadas a estados **all-party** (CA·FL·PA·IL·WA·MA, en `ref.state_recording_regime`, en **datos** y no en un `if`). Nueva York procede. Parar cincuenta vendedores por una configuración de proveedor sin verificar es un daño mayor que la exposición que quita.
+
+- ⚠️ **Una trampa de fixture que vale registrar: Florida no sirve para probar break-glass.** Liberada de la ventana cae en `blocked_recording_unverified`, porque FL **es** all-party. La puerta tenía razón y el fixture estaba mal; los tests de override usan **Texas**, que también es de dos zonas pero one-party.
+
+❓ **LA PREGUNTA ABIERTA, y no la resolví inventando: el consentimiento NO es un paso de la cadena.** El diagrama D-SEC-4 va `sms_disabled → suppressed → zona → ventana → grabación → allow`, sin nodo de consentimiento — pero el vocabulario ratificado de `compliance.send_blocked` **incluye `no_consent`**. Son dos textos aprobados que no coinciden. Construí **la cadena que el diagrama especifica** y dejo la contradicción anotada en vez de agregarle un veredicto por mi cuenta: meter consentimiento en el choke point es un ruling, y los rulings son de Jorge.
+
 ### 🕘 LA VENTANA DE LLAMADA: LA INTERSECCIÓN, NO UNA ELECCIÓN (2026-08-09)
 `app/db/schema/timezone.ts` · migración **0037** · `tests/integration/calling-window.test.ts`. **381 → 393 tests · 36 → 37 archivos.** Ítem 10 del MVP. Construido contra **§SEC-9**, que es rango Parte I y cierra la decisión de fuente de datos.
 

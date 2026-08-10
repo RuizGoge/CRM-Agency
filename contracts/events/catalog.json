@@ -902,18 +902,18 @@
       "name": "compliance.send_blocked",
       "emitter": "compliance",
       "amendment": 1,
-      "payload": "derived",
-      "payload_fields": {
-        "contact_id": "uuid",
-        "opportunity_id": "uuid?",
+      "payload": {
         "channel": "enum:sms|call|email|whatsapp_reserved",
-        "reason": "enum:outside_window|no_consent|stop|dnc|10dlc_pending|bad_number",
+        "verdict": "enum:outside_window|no_consent|stop|dnc|10dlc_pending|bad_number|unknown_timezone|unverified_mapping",
+        "contact_id": "uuid",
+        "contact_phone_id": "uuid?",
+        "opportunity_id": "uuid?",
         "attempted_via": "string",
-        "lead_local_time": "string",
-        "blocked_at": "ts"
+        "local_time_at_contact": "string?",
+        "override_id": "uuid?"
       },
       "consumers": ["contacts", "notifications", "admin", "reporting", "audit"],
-      "note": "THE NUMBER THAT PROVES THE GATE WORKS. Without it we can count sends and failures but never REFUSALS. The plain-English reason is written to the timeline, so `reason` must stay a stable code that the microcopy maps from."
+      "note": "THE NUMBER THAT PROVES THE GATE WORKS. Without it we can count sends and failures but never REFUSALS. RATIFIED, not derived: §5 of 05-architecture.md carries this payload and Phase 5 outranks the Phase-2 amendment, so the field is `verdict` rather than `reason` and the vocabulary is eight values, not six. The two this correction restores are the two the calling-window work needs — `unknown_timezone` and `unverified_mapping`. `override_id` rides along because a permitted-under-break-glass send and a plain send must never be indistinguishable in the record."
     },
     {
       "name": "compliance.override_started",

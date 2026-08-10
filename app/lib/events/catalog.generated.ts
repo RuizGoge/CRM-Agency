@@ -745,20 +745,25 @@ export interface LeadRepostedPayload {
 }
 
 /**
- * THE NUMBER THAT PROVES THE GATE WORKS. Without it we can count sends and failures but never REFUSALS. The plain-English reason is written to the timeline, so `reason` must stay a stable code that the microcopy maps from.
- *
- * PAYLOAD IS DERIVED, NOT RATIFIED. Amendment 1 gave this event an emitter, a
- * trigger and a rationale but no field list; these fields follow from those and
- * the module that first emits it should settle them.
+ * THE NUMBER THAT PROVES THE GATE WORKS. Without it we can count sends and failures but never REFUSALS. RATIFIED, not derived: §5 of 05-architecture.md carries this payload and Phase 5 outranks the Phase-2 amendment, so the field is `verdict` rather than `reason` and the vocabulary is eight values, not six. The two this correction restores are the two the calling-window work needs — `unknown_timezone` and `unverified_mapping`. `override_id` rides along because a permitted-under-break-glass send and a plain send must never be indistinguishable in the record.
  */
 export interface ComplianceSendBlockedPayload {
-  readonly contact_id: string
-  readonly opportunity_id: string | null
   readonly channel: 'sms' | 'call' | 'email' | 'whatsapp_reserved'
-  readonly reason: 'outside_window' | 'no_consent' | 'stop' | 'dnc' | '10dlc_pending' | 'bad_number'
+  readonly verdict:
+    | 'outside_window'
+    | 'no_consent'
+    | 'stop'
+    | 'dnc'
+    | '10dlc_pending'
+    | 'bad_number'
+    | 'unknown_timezone'
+    | 'unverified_mapping'
+  readonly contact_id: string
+  readonly contact_phone_id: string | null
+  readonly opportunity_id: string | null
   readonly attempted_via: string
-  readonly lead_local_time: string
-  readonly blocked_at: string
+  readonly local_time_at_contact: string | null
+  readonly override_id: string | null
 }
 
 /**
