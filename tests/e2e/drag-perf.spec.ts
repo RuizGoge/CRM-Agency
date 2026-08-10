@@ -255,6 +255,13 @@ test.describe('P6 · the drag holds 60 fps on a 500-card board', () => {
               ),
               0,
             ),
+            // THE CLOCKS, counted while the drag is in flight. P6 refused the
+            // NEW clock twice — 116.7 ms a frame with every chip ticking — so a
+            // green run here has to mean the clocks were ON SCREEN and running,
+            // not that they had aged out of the fresh window and stopped
+            // rendering. Without this the budget silently stops covering the
+            // one feature it was the deciding gate for.
+            tickingChips: document.querySelectorAll('main span[title^="New — "]').length,
             dragoverCount,
           }
         },
@@ -280,6 +287,10 @@ test.describe('P6 · the drag holds 60 fps on a 500-card board', () => {
         sample.worstColumn,
         `a column mounted ${sample.worstColumn} cards, over R2-2's ceiling, during the drag`,
       ).toBeLessThanOrEqual(MAX_RENDERED_PER_COLUMN)
+      expect(
+        sample.tickingChips,
+        'no NEW clock was on screen, so this run did not measure them',
+      ).toBeGreaterThan(0)
       expect(sample.entered, 'the drag must cross three columns').toBe(3)
       expect(sample.ringSeen, 'the drop target never lit, so no drag was in progress').toBe(true)
       expect(sample.dragoverCount).toBeGreaterThan(30)
@@ -319,6 +330,7 @@ test.describe('P6 · the drag holds 60 fps on a 500-card board', () => {
     console.log(
       `[P6] medians of 3 runs — p95=${p95.toFixed(1)}ms max=${worst.toFixed(1)}ms ` +
         `worstLongTask=${worstLongTask.toFixed(1)}ms ` +
+        `tickingChips=${firstSample?.tickingChips ?? 0} ` +
         `(all runs max: ${runs.map((r) => r.worst.toFixed(1)).join(', ')}) ` +
         `(budget p95<=${budget.value}, frame<=${budget.max_frame}, longTask<=${budget.max_long_task})`,
     )

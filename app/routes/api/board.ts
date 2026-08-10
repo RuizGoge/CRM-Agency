@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm'
 
 import { withTenant, type SessionIdentity } from '~/db'
 import { requireIdentity } from '~/lib/auth/identity'
+import { FRESH_WINDOW_SECONDS, mmss } from '~/lib/board/tick'
 
 /**
  * The pipeline board.
@@ -65,6 +66,18 @@ export interface CardSignal {
   readonly chip: string
   /** R11's full sentence, for the accessible name and the tooltip (§2.7). */
   readonly full: string
+  /**
+   * The lead's age in seconds when the server rendered this, or `null` for a
+   * signal that does not move.
+   *
+   * The client adds its own elapsed time to this rather than reading a
+   * timestamp off its own clock. A seller whose machine is three minutes fast
+   * would otherwise open the board to `NEW 03:00` on a lead that arrived a
+   * moment ago — and speed-to-lead is *"the one number that justifies the lead
+   * spend"* (ruling R), so it is the last number allowed to be approximately
+   * right.
+   */
+  readonly tickFromSeconds: number | null
 }
 
 export interface BoardColumn {
@@ -86,7 +99,7 @@ interface HealthInput {
   readonly days_untouched: number
   readonly attempts: number
   readonly next_activity: string | null
-  readonly minutes_since_arrival: number
+  readonly seconds_since_arrival: number
   readonly overdue_minutes: number | null
   readonly cold_threshold_days: number
 }
@@ -135,7 +148,7 @@ function healthOf(row: HealthInput): CardHealth {
   // Fresh is about the LEAD's age and about never having been worked. A lead
   // that arrived twenty minutes ago and has been dialled twice is not fresh —
   // it is a lead somebody is already on.
-  if (row.attempts === 0 && row.minutes_since_arrival < 60) return 'fresh'
+  if (isFresh(row)) return 'fresh'
   if (row.days_untouched >= row.cold_threshold_days) return 'going_cold'
   return 'ok'
 }
@@ -181,18 +194,29 @@ function decayOf(row: HealthInput): number {
 function signalOf(row: HealthInput): CardSignal | null {
   if (signalsSuppressed(row)) return null
 
-  if (row.attempts === 0 && row.minutes_since_arrival < 60) {
-    const mm = String(Math.floor(row.minutes_since_arrival)).padStart(2, '0')
+  if (isFresh(row)) {
+    // The clock a browser then advances. Both strings are rendered here at the
+    // age the SERVER measured, so the client's first render — which adds zero —
+    // produces the same characters and hydration is silent.
+    const clock = mmss(row.seconds_since_arrival)
     return {
       kind: 'fresh',
-      chip: `NEW ${mm}m`,
-      full: `New — ${mm} minutes since arrival`,
+      chip: `NEW ${clock}`,
+      full: `New — ${clock} since arrival`,
+      // The only signal that moves on its own. Everything else is measured in
+      // hours or days and would be lying about its precision if it ticked.
+      tickFromSeconds: row.seconds_since_arrival,
     }
   }
 
   if (row.overdue_minutes !== null) {
     const age = humanAge(row.overdue_minutes)
-    return { kind: 'overdue', chip: `Due ${age} ago`, full: `Due ${age} ago` }
+    return {
+      kind: 'overdue',
+      chip: `Due ${age} ago`,
+      full: `Due ${age} ago`,
+      tickFromSeconds: null,
+    }
   }
 
   if (row.days_untouched >= row.cold_threshold_days) {
@@ -200,16 +224,48 @@ function signalOf(row: HealthInput): CardSignal | null {
       kind: 'going_cold',
       chip: `Going cold · ${row.days_untouched}d`,
       full: `Going cold — ${row.days_untouched} days since last touch`,
+      tickFromSeconds: null,
     }
   }
 
   // Lowest priority, and never a rail state: §2.8 says it coexists with every
   // health value, so it is a slot entry only.
   if (row.next_activity === null) {
-    return { kind: 'no_next_step', chip: 'No next step', full: 'No next step' }
+    return {
+      kind: 'no_next_step',
+      chip: 'No next step',
+      full: 'No next step',
+      tickFromSeconds: null,
+    }
   }
 
   return null
+}
+
+/**
+ * The fresh gate, in ONE place because two derivations read it — the rail in
+ * §2.8 and the signal slot in §2.7 — and they had drifted apart once already.
+ *
+ * ⚠️ `attempts === 0` IS NOT THE GATE THE CORPUS RATIFIES, and this is the
+ * honest note rather than a silent substitution. `04b` §2.7 conditions the chip
+ * on `first_touch_at IS NULL`, and Part I ruling **R** is explicit about the
+ * difference: *"the `NEW · mm:ss` clock keeps ticking until `call.completed`
+ * lands with a `connected` or `voicemail` outcome"*, and §2.7 spells out the
+ * case this gets wrong — *"a no-answer dial increments attempts and the clock
+ * keeps running"*.
+ *
+ * So a seller who dials and gets voicemail-without-answer loses the chip here
+ * and should not. The reason is not a shortcut: **there is no `first_touch_at`
+ * column.** `opportunity.first_touch_latency_seconds` exists and is a derived
+ * duration, not the timestamp the gate needs, and nothing can write either
+ * until `call.completed` arrives — which is Aloware, which is Gate 2.
+ *
+ * Ruling R gives the reason this is worth correcting rather than forgetting:
+ * *"a clock that stops when the seller TAPS measures the seller's reflex, not
+ * the lead's experience"*.
+ */
+function isFresh(row: HealthInput): boolean {
+  return row.attempts === 0 && row.seconds_since_arrival < FRESH_WINDOW_SECONDS
 }
 
 /** `25 min` · `3 h` · `2 d`, so the chip stays inside sixteen characters. */
@@ -251,7 +307,7 @@ export async function readPipelineFor(identity: SessionIdentity): Promise<Pipeli
       days_untouched: number
       attempts: number
       next_activity: string | null
-      minutes_since_arrival: number
+      seconds_since_arrival: number
       overdue_minutes: number | null
       cold_threshold_days: number
     }>(sql`
@@ -267,8 +323,14 @@ export async function readPipelineFor(identity: SessionIdentity): Promise<Pipeli
              -- days_untouched: a lead that arrived an hour ago and was never
              -- worked is FRESH, not decaying, and the two must never share a
              -- number.
-             greatest(0, (extract(epoch from clock_timestamp() - o.created_at) / 60)::integer)
-               AS minutes_since_arrival,
+             --
+             -- SECONDS, not minutes, since the chip renders mm:ss and the
+             -- client ticks forward from this. Rounded DOWN, so the first
+             -- second the browser adds moves it to a value the server would
+             -- also have produced — rounding to nearest would make the chip
+             -- read one second ahead of the lead's real age for half of them.
+             greatest(0, floor(extract(epoch from clock_timestamp() - o.created_at))::integer)
+               AS seconds_since_arrival,
              -- The MOST overdue open activity, in minutes. NULL when nothing
              -- is past due; a future-dated activity is not lateness.
              (SELECT greatest(0, (extract(epoch from clock_timestamp() - a.due_at) / 60)::integer)

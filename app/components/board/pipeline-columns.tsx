@@ -1,6 +1,13 @@
-import { memo, useCallback, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Link } from 'react-router'
 
+import {
+  FRESH_WINDOW_SECONDS,
+  mmss,
+  subscribeToTick,
+  tickServerSnapshot,
+  tickSnapshot,
+} from '~/lib/board/tick'
 import {
   SSR_WINDOW,
   VIRTUALIZE_ABOVE,
@@ -679,6 +686,62 @@ function railFill(card: BoardCard): string {
  * `Going cold · 9d`, and neither of them ever meets the banned word.
  */
 function SignalChip({ signal }: { signal: NonNullable<BoardCard['signal']> }): React.JSX.Element {
+  // SPLIT INTO TWO COMPONENTS RATHER THAN ONE WITH A CONDITIONAL HOOK, and the
+  // reason is a budget rather than a lint rule. Subscribing here unconditionally
+  // would re-render every `Due 3 h ago` and `No next step` chip on the board
+  // once a second to redraw a string measured in hours. Only the clock ticks.
+  return signal.tickFromSeconds === null ? (
+    <ChipBox signal={signal} chip={signal.chip} full={signal.full} />
+  ) : (
+    <TickingChip signal={signal} from={signal.tickFromSeconds} />
+  )
+}
+
+/**
+ * The `NEW mm:ss` clock — `04b` §2.7, and §4.2's `board.card.new_clock`.
+ *
+ * It counts UP from arrival and never down, and ruling **R** is why: the number
+ * is the LEAD's experience of waiting, not a countdown the seller is racing.
+ * *"A clock that stops when the seller taps measures the seller's reflex, not
+ * the lead's experience, and it is the one number that justifies the lead
+ * spend."*
+ *
+ * `from` is the age the SERVER measured; the store adds this browser's own
+ * monotonic elapsed time. Neither half reads a wall clock, so a machine with
+ * the wrong time renders the right number.
+ */
+function TickingChip({
+  signal,
+  from,
+}: {
+  signal: NonNullable<BoardCard['signal']>
+  from: number
+}): React.JSX.Element | null {
+  const elapsed = useSyncExternalStore(subscribeToTick, tickSnapshot, tickServerSnapshot)
+  const age = from + elapsed
+
+  // EXPIRES ON ITS OWN, because a board left open all morning is the normal
+  // case. §2.7 gates the chip on an age under the fresh window; past it the
+  // slot collapses rather than rendering a state the server says is over. The
+  // card then carries no signal until the next loader run — incomplete, not
+  // wrong, and the client cannot do better: §2.8 puts the precedence that
+  // decides what replaces it on the server, exactly so the board, My Book and
+  // My Day cannot disagree about it.
+  if (age >= FRESH_WINDOW_SECONDS) return null
+
+  const clock = mmss(age)
+  return <ChipBox signal={signal} chip={`NEW ${clock}`} full={`New — ${clock} since arrival`} />
+}
+
+function ChipBox({
+  signal,
+  chip,
+  full,
+}: {
+  signal: NonNullable<BoardCard['signal']>
+  chip: string
+  full: string
+}): React.JSX.Element {
   const [fill, text] =
     signal.kind === 'overdue'
       ? ['var(--color-danger-fill)', 'var(--color-danger-text)']
@@ -690,8 +753,14 @@ function SignalChip({ signal }: { signal: NonNullable<BoardCard['signal']> }): R
     <span
       // The full sentence, not the chip: the visible text is an abbreviation
       // and an abbreviation is not an accessible name.
-      aria-label={signal.full}
-      title={signal.full}
+      aria-label={full}
+      title={full}
+      // §4.2 registers this row as `aria-live="off"`, and stating it is the
+      // point rather than relying on the default. A clock in the attention slot
+      // is the obvious thing to make polite, and a chip that announces itself
+      // every second would make the board unusable with a screen reader while
+      // looking like an accessibility improvement in the diff.
+      aria-live="off"
       style={{
         flexShrink: 0,
         padding: '0 var(--space-15)',
@@ -701,9 +770,13 @@ function SignalChip({ signal }: { signal: NonNullable<BoardCard['signal']> }): R
         fontSize: 'var(--type-micro)',
         fontWeight: 'var(--font-weight-semibold)',
         whiteSpace: 'nowrap',
+        // Tabular digits, for the same reason the leaderboard uses them: the
+        // string changes every second, and proportional digits make the chip
+        // — and the card title beside it — twitch on every tick.
+        fontVariantNumeric: 'tabular-nums',
       }}
     >
-      {signal.chip}
+      {chip}
     </span>
   )
 }
