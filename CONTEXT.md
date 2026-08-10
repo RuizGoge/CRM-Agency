@@ -7,6 +7,19 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 📦 EL ALMACÉN DE EVENTOS Y EL OUTBOX: RUTA A COMPLETA (2026-08-10)
+`app/db/schema/event-store.ts` · migración **0043** · `tests/integration/event-store.test.ts`. **444 → 454 tests · 42 → 43 archivos.** **El transporte de eventos existe. El timeline (ítem 20) queda desbloqueado.**
+
+**LA FILA DEL EVENTO Y SUS FILAS DE FAN-OUT SE ESCRIBEN EN UNA SOLA TRANSACCIÓN**, que es el argumento entero del outbox: sin él, *"la venta ocurrió"* y *"a los consumidores se les avisó"* son dos commits, y un worker que muere entre ellos pierde una celebración o un append al ledger **en silencio, y sólo para los eventos que ocurrieron durante la caída**. La división con pg-boss es total: **el outbox es dueño del fan-out, pg-boss del scheduling.** Dos sistemas que ambos creen que entregan es cómo un lead recibe dos mensajes.
+
+🔴 **UN BUG DE DISEÑO MÍO, QUE HABRÍA CONTADO UNA VENTA DOS VECES.** Puse la idempotencia en `ON CONFLICT` sobre la **primary key** — y la PK incluye `occurred_at`, que la función misma genera con `clock_timestamp()`. La segunda emisión del **mismo `event_id`** llegaba con otra clave de partición, otra PK, y entraba como fila nueva: **Earnings se habría enterado de una venta dos veces.** `05b` ya tenía la respuesta escrita y yo no la había aplicado: *"the dedupe that actually matters for external redelivery is the natural key"* — Aloware reentregando una llamada no reusa nuestro uuid, reusa `aloware_call_id`. Movido a `(tenant, event_name, idempotency_key)`. 🎯 Mutación: sacar ese chequeo → rojo, con 2 donde debía haber 1.
+
+🔴 **Y UNA CORRECCIÓN QUE ME HIZO EL GUARDIÁN DEL SILO EN UNA CORRIDA.** `harden()` levantó `HR001` pidiendo fila de registro para `event_log_2026_08`. Mi primer arreglo fue **excluir los hijos de partición** de `security.managed_relations()` — y `silo.test.ts` se puso rojo al instante: *"app.event_log_2026_08 has RLS disabled"*. **Excluirlos habría dejado una relación gestionada sin FORCE RLS: cambiar una invariante real por una comodidad.** El arreglo correcto es que **la partición HEREDE la clasificación del padre**: `harden()` ahora resuelve el padre vía `pg_inherits` cuando la relación es una partición. Cada partición queda endurecida con exactamente la política del padre, y una tabla sin clasificar que **no** sea partición sigue levantando `HR001`.
+
+- **Las particiones se crean con `format()`**, así que el regex de `snapshot-chain` no las ve — y es correcto, no una evasión: una partición es **almacenamiento de un padre declarado**, y `event_log_2026_08` no tiene por qué estar en un archivo de esquema mientras `event_log` sí lo está. Hay un test que lo afirma en vez de dejarlo implícito. **Sin partición DEFAULT a propósito:** absorbería en silencio filas de un mes que nadie creó, y lo primero que se notaría sería un planner escaneándola para siempre.
+- **`app.outbox_claim` es el SEGUNDO de los cuatro caminos cross-tenant sancionados**, y está en la lista de excepciones del gate de definers con su razón: el despachador tiene que **encontrar trabajo en todas las agencias antes de saber de quién es**. Devuelve **cuatro columnas y ningún payload** — hay un test que lee `pg_proc` y lo assertea. Un claim que devolviera el cuerpo del evento sería una lectura cross-tenant de todo el sistema disfrazada de cola.
+- **Una fila de fan-out para un consumidor que no existe la rechaza una FK**, no un chequeo que alguien recuerda.
+
 ### 🔤 UN EVENTO INVENTADO YA NO SE PUEDE ESCRIBIR, NO SÓLO NO COMPILA (2026-08-10)
 `app/db/schema/events.ts` · migración **0042** · `tests/integration/event-vocabulary.test.ts`. **437 → 444 tests · 41 → 42 archivos.** Primera mitad del transporte de eventos (ruta A).
 

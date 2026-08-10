@@ -302,6 +302,13 @@
       "when": 1786364848880,
       "tag": "0042_event_vocabulary",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1786366260588,
+      "tag": "0043_event_store",
+      "breakpoints": true
     }
   ]
 }

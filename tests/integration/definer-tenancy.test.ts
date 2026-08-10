@@ -49,6 +49,10 @@ const EXEMPT: ReadonlyMap<string, string> = new Map([
     'Runs BEFORE a tenant exists. It maps a better-auth user id to its tenant and app_user row, which is the answer begin_request then needs — there is nothing to scope by yet, and that is the login path.',
   ],
   [
+    'app.outbox_claim',
+    'A SANCTIONED cross-tenant path, and the second of the four. The outbox dispatcher has to find work across every agency BEFORE it knows whose work it is, so there is no tenant to establish yet. It returns four columns and no payload — tenant, event, consumer, name — and dispatch sets the per-row context before touching anything else.',
+  ],
+  [
     'app.scheduled_job_claim',
     'A SANCTIONED cross-tenant path, not an omission. It fans over every tenant on purpose — DISTINCT ON (tenant_id) is fairness, so one busy agency cannot starve the rest — and returns tenant_id so the worker can establish that tenant before touching a row. It returns job coordinates only: no contact, lead or money column is reachable through it.',
   ],
@@ -130,6 +134,7 @@ describe('a definer function cannot forget the tenant', () => {
     expect([...EXEMPT.keys()].sort()).toEqual([
       'app.begin_request',
       'app.begin_system_work',
+      'app.outbox_claim',
       'app.resolve_identity',
       'app.scheduled_job_claim',
     ])
