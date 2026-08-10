@@ -7,6 +7,34 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 📉 LA PUERTA 6 NO SE PUEDE CORRER, Y MEDIRLO DESTAPÓ QUE EL PISO DE POLLING CASI NO EXISTE (2026-08-09)
+`app/lib/http/conditional.ts` · `api/board.ts` · `api/my-day.ts` · `api/leaderboard.ts` · `tests/e2e/conditional-get.spec.ts`. **91 → 102 e2e.** Sin migración.
+
+🔴 **DIJE QUE LAS PUERTAS 6–9 NO DEPENDÍAN DE NADIE Y ESO ERA FALSO PARA LA 6.** Tiene dos patas y las dos están trabadas, por cosas distintas.
+
+- **La tormenta de webhooks** necesita un endpoint de ingesta (no hay ninguno en `app/routes/api/`), la tabla **`inbound_webhook_event`** que §2268 nombra como clave de dedupe de transporte (el registry tiene 18 tablas y no está), `raw_payload_vault`/`dead_letter`, el merge por campo de `call.enriched` con la singleton key, el limitador de 429 y la fila `folded_topology_saturated`. **Todo eso es Aloware.** Y el corpus lo dice solo: la fila de cadencia de **P24 es literalmente *"Gate 2, then quarterly"*** (§2834), y §787 · §887 · §1183 · §2414 llaman a esta tormenta **"Puerta 2"**, no G6.
+- **El piso de polling** (*"50 simulated sellers sustain the polling floor: 304 p95 ≤ 80 ms"*) no depende de nadie — pero no se podía medir, y averiguar por qué es lo que produjo todo lo de abajo.
+
+🔴 **MEDIDO EN UN NAVEGADOR, NO LEÍDO: el poller que existe NO usa el camino del 304.** `leaderboard.tsx` hace `revalidator.revalidate()`, que re-corre el loader de la **ruta UI** — o sea un request a `/earnings.data`, **sin `etag`, respondiendo `200` tres de tres ticks**. Y el board **no poll-ea nada**. O sea:
+
+- **Tres superficies de polling especificadas, una construida.**
+- **La única construida no pasa por el 304**, y hace un `200` completo con round trip a la base cada cinco segundos por vendedora.
+- **La única implementación de 304 del árbol estaba en `api/leaderboard.ts`, una ruta que el producto nunca llama.** Verificado a mano: llamada directa da `200` + etag y después `304`. Correcta, y desconectada.
+- **`api/board.ts` y `api/my-day.ts` no tenían NADA** — ni etag, ni `If-None-Match`, ni 304. Y **nada en `tests/` mencionaba `etag`, `304` ni `if-none-match`**, en ninguna forma.
+
+Así que el número sobre el que descansa el modelo de costos —§1183, *"17 req/s × 2 ms = 34 ms de CPU por segundo ≈ 7% de una Starter de 0,5 CPU… **es una suposición hasta que la Puerta 2 la mida**"*— hoy no lo sostiene ninguna superficie por el camino que el producto realmente usa.
+
+**LO QUE SÍ QUEDÓ HECHO: una implementación, no tres.** `jsonConditional` en `app/lib/http/conditional.ts`, cableada en las tres rutas API. El hash pasa de un acumulador de 32 bits a **dos más el largo**: una colisión en una superficie de polling no es un render equivocado, es **una pantalla que deja de actualizarse y se queda así**, indistinguible de un día tranquilo.
+
+🔴 **EL BOARD NO PODRÍA HABER RESPONDIDO UN SOLO 304, y lo encontré antes de escribir el test.** Su payload lleva el segundo de arranque del reloj `NEW`, así que el body **difiere cada segundo** haya pasado algo o no — un tag sobre el body sería un tag nuevo en cada poll, para siempre, y el conditional GET sería estrictamente más trabajo que no tenerlo. De ahí `etagSourceOf`: el tag se calcula sobre el payload **con el reloj sacado**. Es seguro **sólo porque el reloj tictaquea en el navegador** — un cliente con 304 sigue contando desde el valor que ya tiene, que es el que debería mostrar igual. Todo lo que el cliente **no** puede re-derivar se queda adentro, `signal.kind` incluido, así que una tarjeta que cruza la ventana fresca sí cambia el tag.
+
+- 🎯 **Probado por mutación:** sacar la proyección pone **dos rojos**, uno de ellos con el mensaje *"the running clock is still in the board's etag"*. El test espera a cruzar un límite de segundo a propósito — un par de fetches adentro del mismo segundo pasaría con el defecto puesto.
+- ✅ **Los dos brazos, en las tres superficies:** 304 con el tag correcto, **200 con un tag inventado** (una ruta que contestara 304 a cualquier cosa congelaría la pantalla de todas las vendedoras y pasaría el primer test), el 304 **repitiendo el tag** (sin eso el siguiente poll va incondicional y el cache funciona exactamente la mitad de las veces), y `private, no-store` **también en el 304**.
+
+⚠️ **LO QUE ESTO NO COMPRA, dicho porque §1183 supone lo otro.** El tag sale del payload **renderizado**, así que un 304 ahorra la **transferencia y no el trabajo**: la consulta corre igual. Los 2 ms de §1183 suponen *"two index probes, no handler, no serialization"*, que es otra implementación —hace falta un watermark **más** un bucket de tiempo, porque estos payloads dependen del reloj— y construirla **antes** de medir sería adivinar. Esa medición **es** la pata del piso de la Puerta 6.
+
+⚠️ **LO QUE SIGUE FALTANDO, y es lo que impide medir el piso de verdad:** los **dos pollers de UI que no existen** (My Day y los deltas del board — `POLL_SLOW_MS` sigue con **cero consumidores**), y mover el poller del leaderboard del `revalidate()` al camino condicional. Hasta que eso pase, el producto sigue haciendo un `200` completo cada cinco segundos por vendedora.
+
 ### 🔗 EL HANDOFF JOB → REQUEST DE LA TOPOLOGÍA PLEGADA, PROBADO (2026-08-09)
 `tests/integration/folded-handoff.test.ts`. **265 → 270 tests.** Sin cambios de producción: **el mecanismo ya estaba, lo que no existía era la prueba.**
 
@@ -1094,7 +1122,7 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 | 3 | Camino del dinero | ✅ mayormente — append-only por trigger de sentencia (incluye TRUNCATE), exactly-once, transacción del gate atómica. **Falta:** proceso muerto a mitad del gate sin dejar lock |
 | 4 | Silo de punta a punta | 🟢 **(a) cerrado** (se niega a arrancar si el usuario puede saltear RLS) **y desde el 2026-08-09 el handoff job ↔ request en la misma conexión pooleada también** — `folded-handoff.test.ts`, las dos direcciones más el job que revienta más el claim cross-tenant, todas sobre filas, todas exigiendo el mismo `pg_backend_pid()`, probadas por mutación. El resto lo cubre la suite de silo |
 | 5 | Equivalencia plegado/separado | 🟡 **el pliegue EXISTE, corrió, y su borde más filoso está probado.** El worker arranca dentro del proceso web (`app/jobs/boot.ts`) y produjo **las mismas dos filas terminales** que el proceso separado — `skipped: sms_disabled` y `dropped: 40m late` — y desde el 2026-08-09 el **contexto compartido en la conexión** que sólo el pliegue produce está cerrado (`folded-handoff.test.ts`, ver la Puerta 4). Falta lo que da nombre a la puerta: equivalencia **bajo carga**, no en un caso feliz |
-| 6 | Tormenta de 20.000 webhooks | ⬜ no empezado |
+| 6 | Tormenta de 20.000 webhooks | 🔴 **NO SE PUEDE CORRER, y sus dos patas están trabadas por cosas distintas (2026-08-09).** La **tormenta** necesita el módulo Aloware entero — no hay ruta de ingesta, ni `inbound_webhook_event`, ni vault/dead_letter, ni el merge de `call.enriched`, ni 429, ni `folded_topology_saturated` — y la cadencia de **P24 dice literalmente *"Gate 2, then quarterly"***, o sea que el corpus la ancla a la Puerta 2. El **piso de polling** no depende de nadie pero todavía no es medible: faltan los dos pollers de UI y mover el del leaderboard al camino condicional. **Avanzado:** las tres rutas API responden conditional GET con una sola implementación y 11 e2e, los dos brazos, probado por mutación |
 | 7 | SSE detrás del proxy | ⬜ no empezado |
 | 8 | pg-boss bajo estrés de versión | ⬜ no empezado |
 | 9 | Simulacro de restauración | ⬜ no empezado |
