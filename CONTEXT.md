@@ -7,6 +7,29 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 🔒 EL LEDGER DE CONSENTIMIENTO, Y LA PRIMERA TABLA QUE NADIE PUEDE LEER (2026-08-09)
+`app/db/schema/consent.ts` · migración **0035** · `tests/integration/consent-ledger.test.ts`. **349 → 366 tests · 33 → 34 archivos.** Ítem 8 del MVP. Primer trabajo sobre el `master` consolidado.
+
+**LA PREGUNTA QUE ESTA TABLA CONTESTA NO ES *"¿podemos contactar a esta persona hoy?"*, es *"¿qué era cierto a las 14:07 de un martes hace diecinueve meses?"*** — y una columna de estado mutable no la contesta a ningún precio. Por eso una revocación es **una fila nueva**, la tabla es inmutable por trigger **y** por privilegio revocado, y el único escritor es `app.consent_append()`.
+
+🔴 **CAMBIÓ EL MOTOR, NO SÓLO SE AGREGÓ UNA TABLA. `harden()` otorgaba `GRANT SELECT` incondicionalmente** y confiaba en que `USING (false)` devolviera cero filas. Desde la 0035 no lo otorga para `definer_only` ni `system_cross_tenant`. **Se lee igual desde la aplicación y no es lo mismo:** un privilegio que sólo una política neutraliza está a **una política borrada** de ser una lectura tenant-wide del historial de consentimiento de cada consumidor. La constitución pone la revocación por encima de la política; `consent_ledger` es la primera tabla que necesita ese orden porque es la primera `definer_only` que existe. **Radio de explosión cero: ninguna otra tabla usa esas clases.**
+
+- **`definer_only`, no `append_only_tenant`**, que era el calce cómodo: esa clase genera `USING (tenant_id = app.current_tenant())`, o sea **legible tenant-wide**. El consentimiento es tenant-wide por necesidad —un STOP silencia un número para todos los vendedores— así que una tabla de consentimiento legible es **un oráculo entre silos**: preguntá por un número y enterate de si otro del piso está trabajando a ese consumidor.
+- **El valor se normaliza ADENTRO de la función.** Seis puntos de entrada llegan al consentimiento y un helper que los seis tienen que acordarse de llamar es un helper que uno no va a llamar. `+1 305 555 0171` que no matchea `+13055550171` es un STOP que calladamente no aplica.
+- **`previous_status` se DERIVA, nunca se pasa.** Un caller capaz de declararlo es un caller capaz de declararlo mal, y esa columna se lee como evidencia de una transición. Igual el actor: sale de `app.current_user_id()`, y `NULL` es el valor honesto para un STOP que llega del proveedor.
+- **La propiedad del silo vive DENTRO del definer**, porque un definer corre como `crm_migrator` y ahí el RLS que acota todo lo demás está apagado. Un contacto ajeno devuelve **cero filas, nunca un error**: un error confirmaría que el registro existe, que es la misma filtración con un código de estado puesto.
+
+🎯 **DOS MUTACIONES, Y LA PRIMERA ENCONTRÓ QUE MI PROPIO TEST NO SERVÍA.** Saqué el predicado de dueño de `consent_state` y **la suite quedó VERDE**. La razón: sembré consentimiento sólo para el teléfono de Ana, así que *"Ana no ve nada del contacto de Ben"* lo satisfacía **una tabla vacía**, no el predicado. Agregado el control positivo —Ben leyendo su propia fila— la misma mutación se pone roja con el síntoma real: Ana leyendo la fila de Ben. **Un test que pasa sin poder fallar no vale nada, y la única forma de descubrirlo fue mutarlo.**
+
+- 🎯 **Segunda mutación: `harden()` de vuelta a `GRANT SELECT` incondicional → dos rojos**, y el mensaje del segundo es el que vale: *"the read was not refused at all"*. Con el privilegio restaurado la lectura **tiene éxito y devuelve vacío** por la política, en vez de ser rechazada. Ésa es exactamente la distinción que ese test existe para sostener, y es la que un test escrito contra *"devuelve vacío"* no puede ver.
+
+⚠️ **TRES TRAMPAS DE POSTGRES/DRIZZLE QUE ESTE PROYECTO YA HABÍA PAGADO, y volví a pagar las tres:**
+1. **Drizzle reenvuelve el error del driver**, así que `permission denied` queda un nivel abajo en `cause`. La aserción miraba el nivel equivocado mientras la negativa funcionaba perfecto.
+2. **Una sentencia rechazada ABORTA la transacción**, así que atraparla adentro del callback deja la sesión envenenada y revienta al salir. Atrapar y después preguntar son **siempre dos unidades de trabajo**.
+3. **Postgres ordena un enum por orden de DECLARACIÓN, no alfabético** — `ORDER BY channel` da `sms` antes que `call`. El test ordena por `channel::text` y lo deja anotado en vez de codificar una expectativa que depende del orden en que alguien escribió los miembros.
+
+⚠️ **LO QUE NO ESTÁ, dicho y no insinuado:** `suppression_list` (ítem 9) y `app.compliance_check()` (ítem 11). El spec dice que `crm_app` sólo puede ejecutar `compliance_check` y `consent_state`; hoy existe la segunda. **`compliance_check` necesita la supresión para poder contestar**, así que escribirla ahora sería una puerta que contesta media pregunta — y una puerta de compliance que contesta de más es peor que ninguna.
+
 ### 🚌 EL BUS DE EVENTOS EXISTE, Y DOS PUERTAS QUE NO FUNCIONABAN EN UN WORKTREE (2026-08-09)
 `contracts/events/catalog.json` · `scripts/generate-events.ts` · `app/lib/events/catalog.generated.ts` · `app/lib/events/events.ts` · `scripts/events-contract.test.ts` · `tests/integration/setup/urls.ts` · `scripts/check-perf-budgets.ts`. **243 → 261 tests · 26 → 27 archivos.** Paso 1 del orden revisado, cerrado.
 
