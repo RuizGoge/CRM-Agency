@@ -59,6 +59,31 @@ export type DialOutcome =
       readonly status: 'blocked'
       readonly reason: 'no_capability' | 'no_number' | 'no_phone' | 'not_found' | 'no_credentials'
     }
+  /**
+   * THE COMPLIANCE GATE SAID NO, and it is a separate variant rather than more
+   * strings in the one above because these six are not operational problems the
+   * seller can fix by configuring something — they are the product refusing on
+   * legal grounds, and the seller must be told which one and why.
+   *
+   * `verdict` is the enum the gate returned; `eventVerdict` is the ratified
+   * vocabulary string the gate itself produced. Both come from the gate's own
+   * columns — reconstructing either in TypeScript would be a second table of
+   * truth that can drift from the one in the database.
+   */
+  | {
+      readonly status: 'refused'
+      readonly verdict: GateVerdict
+      readonly eventVerdict: string | null
+      readonly zones: readonly string[]
+    }
+
+/** The six the chain can return. `allow` is the seventh and is not a refusal. */
+export type GateVerdict =
+  | 'blocked_sms_disabled'
+  | 'blocked_suppressed'
+  | 'blocked_timezone_unknown'
+  | 'blocked_calling_window'
+  | 'blocked_recording_unverified'
 
 export async function dialFor(
   identity: SessionIdentity,
@@ -90,6 +115,79 @@ export async function dialFor(
 
   if (target === undefined) return { status: 'blocked', reason: 'not_found' }
   if (target.phone_e164 === null) return { status: 'blocked', reason: 'no_phone' }
+
+  // ==========================================================================
+  // 🔴 THE ONE OUTBOUND COMPLIANCE GATE. MVP item 11, and until this line it
+  // had ZERO production callers.
+  // ==========================================================================
+  // `app.compliance_check` has been complete since 0038 — five verdicts in a
+  // fixed order, break-glass releasing exactly two of them, its own ownership
+  // predicate because a definer has no RLS — and nothing in `app/` called it.
+  // A gate nobody consults is a document, and this is the surface it exists to
+  // stand in front of.
+  //
+  // BEFORE THE NUMBER MAPPING, and the order is the point. If a seller has no
+  // verified caller ID AND the lead is on a STOP, "set up your Aloware number"
+  // is the wrong sentence: it tells them to fix a setting so they can make a
+  // call they must never make. The legally binding refusal wins.
+  //
+  // THE VERDICT AND THE AUDIT ROW COMMIT TOGETHER. US-9.13 requires one audit
+  // row per ATTEMPT, unbucketed — N dials under break-glass are N rows. Two
+  // statements in one transaction means a crash cannot leave a dial that
+  // happened with no record of the verdict that let it through.
+  const gate = await withTenant(identity, async (tx) => {
+    const rows = await tx.execute<{
+      verdict: 'allow' | GateVerdict
+      event_verdict: string | null
+      override_id: string | null
+      zones: string[] | null
+    }>(sql`
+      SELECT verdict::text AS verdict, event_verdict, override_id, zones
+        FROM app.compliance_check(${input.contactId}::uuid, 'call'::app.channel)`)
+
+    const row = rows[0]
+    if (row === undefined) return undefined
+
+    // The snapshot is what makes the row a defence rather than an assertion:
+    // "the gate said no" is not an answer eighteen months later, and "the gate
+    // said no, and these were the zones it resolved and the override it saw"
+    // is. Written for ALLOW as well as for refusals — a permitted dial under
+    // break-glass is exactly the row somebody will ask about.
+    await tx.execute(sql`
+      SELECT app.audit_write(
+        'compliance.gate_checked', 'contact', ${input.contactId}::uuid,
+        NULL, NULL, NULL,
+        ${row.verdict}::app.gate_verdict,
+        ${JSON.stringify({
+          channel: 'call',
+          event_verdict: row.event_verdict,
+          zones: row.zones ?? [],
+        })}::jsonb,
+        ${row.override_id}::uuid, NULL, 'human'::app.actor_type, 0)`)
+
+    return row
+  })
+
+  // Fails CLOSED. A gate that returned nothing is a gate that did not answer,
+  // and the correct reading of no answer is refusal — the same direction the
+  // chain itself takes for an unresolvable timezone.
+  if (gate === undefined) {
+    return {
+      status: 'refused',
+      verdict: 'blocked_timezone_unknown',
+      eventVerdict: 'unknown_timezone',
+      zones: [],
+    }
+  }
+
+  if (gate.verdict !== 'allow') {
+    return {
+      status: 'refused',
+      verdict: gate.verdict,
+      eventVerdict: gate.event_verdict,
+      zones: gate.zones ?? [],
+    }
+  }
 
   const mapping = await withTenant(identity, async (tx) => {
     // ⚠️ THE OWNER PREDICATE HERE IS LOAD-BEARING, unlike everywhere else in

@@ -3,6 +3,7 @@ import {
   bigint,
   date,
   foreignKey,
+  index,
   jsonb,
   primaryKey,
   smallint,
@@ -103,7 +104,23 @@ export const eventLog = app.table(
 
     retentionClass: retentionClass('retention_class').notNull(),
   },
-  (t) => [primaryKey({ columns: [t.tenantId, t.occurredAt, t.eventId] })],
+  (t) => [
+    primaryKey({ columns: [t.tenantId, t.occurredAt, t.eventId] }),
+
+    /**
+     * The natural-key dedupe lookup `app.event_emit` opens with.
+     *
+     * Uncovered until 0054, because until 0054 nothing called the function. It
+     * now runs inside the CLOSE GATE's transaction, three times per stage move,
+     * against an API p95 budget of 300 ms and a store that only grows — a
+     * sequential scan across every monthly partition is fine today and is a
+     * problem the first month nobody is watching.
+     *
+     * On the parent, so PostgreSQL attaches a matching index to every
+     * partition, including ones `ensure_event_partitions` creates later.
+     */
+    index('event_log_natural_key_idx').on(t.tenantId, t.eventName, t.idempotencyKey),
+  ],
 )
 
 /**

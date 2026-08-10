@@ -401,6 +401,32 @@ function dialMessage(outcome: DialOutcome, firstName: string): string {
         case 'not_found':
           return 'That contact isn’t in your book.'
       }
+    // eslint-disable-next-line no-fallthrough
+    case 'refused':
+      // 🔴 THE COMPLIANCE GATE'S SENTENCES, and they follow one rule the other
+      // arm does not: NONE of them blames the seller or suggests a setting to
+      // change. A suppressed number is not a configuration problem, and copy
+      // that reads like one teaches sellers to go looking for a way around it.
+      //
+      // Each says what is true and what happens next. §11 requires the reason
+      // in plain English rather than a code, because the seller is the person
+      // who has to decide what to do instead.
+      switch (outcome.verdict) {
+        case 'blocked_suppressed':
+          return 'This person asked us not to contact them. This number stays off limits.'
+        case 'blocked_calling_window':
+          // The zones are named because a Florida lead can be in two, and "it's
+          // too early" is confusing to somebody whose own clock says 10am.
+          return outcome.zones.length > 0
+            ? `It’s outside calling hours where they live (${outcome.zones.join(', ')}). Try later today.`
+            : 'It’s outside calling hours where they live. Try later today.'
+        case 'blocked_timezone_unknown':
+          return 'We don’t know this lead’s time zone yet, so we can’t confirm it’s legal to call. Add their ZIP code and try again.'
+        case 'blocked_recording_unverified':
+          return 'Call recording isn’t verified for this state yet, and this state needs everyone’s consent. Calling is paused here.'
+        case 'blocked_sms_disabled':
+          return 'Texting isn’t switched on for this account yet.'
+      }
   }
 }
 

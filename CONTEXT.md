@@ -7,6 +7,35 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 🔊 EL PRIMER EMISOR REAL, Y LA PUERTA DE COMPLIANCE ENTRA AL DISCADO (2026-08-10)
+Migración **0054** · `app/routes/api/calls.ts` · `app/components/contacts/contact-drawer.tsx` · `tests/integration/stage-move-emits.test.ts` · `dial-gate.test.ts`. **578 → 589 tests · 57 → 59 archivos.** `verify` verde.
+
+**`app.stage_move` EMITE, y con eso el bus de eventos deja de ser una tubería sin agua.** `05c` había cerrado el hallazgo A7 afirmando que *"§7.4.1 emite `opportunity.stage_changed` incondicionalmente adentro de `app.stage_move()`"* — cierto del documento y falso del árbol. Ahora la cadena entera está probada en un solo archivo, porque cada eslabón estaba verde por separado mientras la cadena no existía: **movimiento → fila de evento → fan-out → relay → fila de auditoría, y la venta acreditada exactamente una vez a lo largo de todo eso.**
+
+🔴 **DE LOS CUATRO PAYLOADS CANDIDATOS, SÓLO UNO SE PUEDE LLENAR COMPLETO. Verificado contra el motor, no supuesto.**
+- **`opportunity.reopened` es el único íntegro.** Los ocho campos existen como columna o se derivan de una.
+- **`opportunity.won` y `stage_changed` divergen en `product_type`:** el payload lo declara no-nulo, la columna es **NULLABLE, sin escritor en todo el árbol, y NULL en 17 de 17 oportunidades**. El ítem 39 del MVP llama a esos campos *opcionales*. O sea que el contrato pide una garantía que el producto deliberadamente no da, y cerrarlo es un cambio del win gate o una errata — un ruling, no una migración.
+- **`stage_changed` diverge además en `moved_via`:** el payload lista **cuatro** etiquetas y `app.moved_via` tiene **siete**. `move_sheet`, `keyboard`, `wrap_up` y `api` no tienen ninguna, y `move_sheet` es el camino móvil, que es la mayor parte del tráfico. **Se emite el valor del MOTOR**, que es verdadero; mapear a cuatro fusionaría tres caminos distintos y hornearía esa pérdida en cada movimiento para siempre.
+- ⚠️ **`opportunity.lost` NO SE EMITE, y no es un olvido.** Su `loss_reason_code` es una lista cerrada de seis valores y los códigos sembrados en `app.lost_reason` son otros siete: **comparten exactamente UNO**. Mapear siete sobre seis sería inventar una correspondencia que nadie ratificó, y Reporting keyea por ese código. Además declara `recyclable` no-nulo y `recycle_eligible_at`, y ninguna de las dos existe como columna. **La pérdida igual queda registrada** — `stage_changed` lleva `to_stage_closed_type = 'lost'`.
+
+**La idempotencia se keyea en la TRANSICIÓN, no en la oportunidad.** `client_move_key` es nullable y el único call site de producción le pasa NULL, así que como clave no existe. `v_tid` es único por movimiento y le da al **undo su propia clave** — que es lo correcto: un undo es un segundo movimiento, y lo que hace del par un undo es `reverses_entry_id` y la distancia entre los dos, nunca la clave.
+
+📐 **Y el dedupe del emisor no tenía índice.** `event_emit` abre con una búsqueda por clave natural que nadie cubría, porque nadie llamaba a la función. Desde acá corre **dentro de la transacción de la puerta de cierre, tres veces por movimiento**, contra un presupuesto medido de API p95 < 300 ms y un almacén que sólo crece. `event_log_natural_key_idx` va declarado en el padre, así que Postgres lo adjunta a cada partición futura.
+
+🎯 **Un bug mío que sólo aparece en runtime: `text[] || 'literal'` en plpgsql.** Postgres lo resuelve como concatenación de arrays e intenta parsear el literal COMO array — `malformed array literal`. La función **compila limpia** y cada movimiento de etapa levanta 22P02. Los `::text` explícitos son portantes.
+
+---
+
+**LA PUERTA ÚNICA DE COMPLIANCE ENTRA AL DISCADO (ítem 11, mitad de discado).** `app.compliance_check` estaba completa desde la 0038 y tenía **cero llamadores**; `contact-drawer.tsx` hasta le anunciaba a un lector de pantalla un estado de compliance que ningún código calculaba.
+
+- **VA ANTES DEL MAPEO DE NÚMERO, y el orden es el punto.** Si la vendedora no tiene caller ID verificado **y** el lead tiene un STOP, *"configurá tu número de Aloware"* es la frase equivocada: le dice que arregle un setting para poder hacer una llamada que nunca debe hacer. **Gana el rechazo legal.**
+- **El veredicto y la fila de auditoría commitean juntos.** US-9.13 exige **una fila por INTENTO**, sin bucketing — N discados bajo break-glass son N filas. Dos sentencias en una transacción: un crash no puede dejar un discado que ocurrió sin registro del veredicto que lo dejó pasar. **También se audita el `allow`**, porque una llamada permitida bajo break-glass es exactamente la fila que alguien va a pedir.
+- **El vocabulario sale de la columna `event_verdict` de la puerta**, no de un `switch` en TypeScript — eso sería una segunda tabla de verdad que puede divergir.
+- **Cinco frases nuevas de microcopy en-US, y ninguna culpa a la vendedora ni sugiere un setting.** Un número suprimido no es un problema de configuración, y copy que se lee como si lo fuera le enseña a buscar cómo esquivarlo. La de ventana horaria **nombra las zonas**, porque un lead de Florida está en dos y *"es muy temprano"* es desconcertante para alguien cuyo reloj dice 10am. **El typecheck fue lo que las exigió** — la unión sin la rama `refused` no compila.
+- ⚠️ **`dial.test.ts` se puso rojo en tres tests y tenía razón:** sus contactos no tenían ZIP ni estado, así que la puerta los rechazaba antes del mapeo. Los fixtures pasaron a **Texas** — dos zonas y one-party. **Florida habría pasado los tests por la razón equivocada**, cayendo en `blocked_recording_unverified`.
+
+⚠️ **LO QUE FALTA DEL ÍTEM 11, dicho y no insinuado: el despachador de recordatorios sigue sin la puerta, y NO es cableado.** `app/modules/calendar/dispatch.ts` reimplementa el paso 1 de la cadena en TypeScript (`tenant.sms_enabled` → `skipped: sms_disabled`). Reemplazarlo choca con dos cosas medidas: (a) bajo `withSystemWork` la puerta devuelve **`blocked_timezone_unknown` para TODO contacto**, porque `begin_system_work` deja `user_id` vacío y `scope_is_global()` sólo contesta true para `tenant_read`/`tenant_admin`; y (b) el despachador **tampoco puede resolver el dueño del job** para pasar a `withTenant` — `scheduled_job` es `owner_scoped` y `scheduled_job_claim` no devuelve `owner_user_id`. Hace falta una migración que exponga el dueño o un definer que evalúe la puerta en su nombre. **Cablearlo ingenuamente habría resuelto TODOS los recordatorios como bloqueados por zona desconocida, con la fila terminal escrita y mintiendo**, pasando los tests que existen hoy.
+
 ### 📮 EL TRANSPORTE DE EVENTOS ENTREGA, Y `audit_log` EXISTE CON ESCRITOR (2026-08-10)
 Migraciones **0051–0053** · `app/modules/events/relay.ts` · `app/db/schema/audit.ts` · `tests/integration/outbox-relay.test.ts` · `audit-vocabulary.test.ts`. **566 → 578 tests · 55 → 57 archivos.** `npm run verify` verde, cadena de instalación fresca completa de cero.
 

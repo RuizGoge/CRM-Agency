@@ -379,6 +379,13 @@
       "when": 1786398661588,
       "tag": "0053_audit_log",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1786402261588,
+      "tag": "0054_stage_move_emits",
+      "breakpoints": true
     }
   ]
 }

@@ -43,10 +43,21 @@ beforeAll(async () => {
       (${TENANT}, ${OTHER_SELLER},  'other@dial.test', 'Marcus Bell',  'Marcus B.', 'seller')`
 
   await sql`
-    INSERT INTO app.contact (tenant_id, id, owner_user_id, full_name, created_via) VALUES
-      (${TENANT}, ${WITH_PHONE},    ${OWNER},        'Callable Lead',  'lead_intake'),
-      (${TENANT}, ${WITHOUT_PHONE}, ${OWNER},        'No Number Lead', 'lead_intake'),
-      (${TENANT}, ${SOMEONE_ELSES}, ${OTHER_SELLER}, 'Not Yours',      'lead_intake')`
+    -- ⚠️ THE ZIP AND STATE ARE NOT DECORATION. Since the compliance gate was
+    -- wired into dialFor, a lead whose time zone cannot be resolved is REFUSED
+    -- before the number mapping is even read — correctly, and fail-closed. This
+    -- file is about the OPERATIONAL refusals that come after compliance, so its
+    -- leads have to be callable ones.
+    --
+    -- Texas, and deliberately: two zones AND one-party recording. Florida is
+    -- also two-zone but all-party, so a Florida fixture would refuse with
+    -- blocked_recording_unverified and every assertion below would pass for the
+    -- wrong reason. CONTEXT.md records that trap being paid once already.
+    INSERT INTO app.contact
+      (tenant_id, id, owner_user_id, full_name, created_via, state_code, zip5) VALUES
+      (${TENANT}, ${WITH_PHONE},    ${OWNER},        'Callable Lead',  'lead_intake', 'TX', '75201'),
+      (${TENANT}, ${WITHOUT_PHONE}, ${OWNER},        'No Number Lead', 'lead_intake', 'TX', '75201'),
+      (${TENANT}, ${SOMEONE_ELSES}, ${OTHER_SELLER}, 'Not Yours',      'lead_intake', 'TX', '75201')`
 
   await sql`
     INSERT INTO app.contact_phone (tenant_id, contact_id, owner_user_id, phone_e164, is_primary)
