@@ -204,6 +204,20 @@
       "when": 1785810746250,
       "tag": "0028_tti_budget",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1785814346250,
+      "tag": "0043_leaderboard_read_hoists_its_clock",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1785817946250,
+      "tag": "0044_leaderboard_poll_budget",
+      "breakpoints": true
     }
   ]
 }
