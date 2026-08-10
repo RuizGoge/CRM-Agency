@@ -7,6 +7,19 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### ⚖️ FALLO: EL CONSENTIMIENTO NO ENTRA A LA PUERTA · Y EL TIMELINE CUELGA DEL TRANSPORTE (2026-08-10)
+Sin código. Un fallo de Jorge y un hallazgo de orden que cambia qué sigue.
+
+**FALLO DE JORGE — el consentimiento NO es un paso de la puerta de compliance, por ahora.** Cierra la contradicción que quedó abierta al construir el ítem 11: D-SEC-4 encadena `sms_disabled → suppressed → zona → ventana → grabación → allow` **sin nodo de consentimiento**, mientras el vocabulario ratificado de `compliance.send_blocked` sí trae `no_consent`. Dos textos aprobados que no coincidían. **Manda el diagrama.** El `consent_ledger` sigue registrando y `app.consent_state()` sigue contestando; lo que no hace es bloquear un discado. Si esto se revisa, es una migración chica y un veredicto más — no un rediseño.
+
+🔴 **EL TIMELINE (ÍTEM 20) NO ES "UNA TABLA MÁS": CUELGA DEL TRANSPORTE DE EVENTOS.** `timeline_entry` es una **proyección derivada** cuya columna `built_from_event_id` es **NOT NULL** — cada fila reclama proveniencia de un evento — y su único escritor es `app.timeline_upsert()`, llamado por el **proyector** sobre `event_log`. Y `event_log` no es una tabla suelta: va **particionada por mes**, con `event_outbox` y un relay aparte.
+
+- **Consecuencia de orden:** el bus de eventos que shippeé el 09-08 es **contrato, tipos y puerta, sin transporte** — y eso, que anoté entonces como deuda, es ahora el bloqueo del bucle diario. Construir el timeline antes obligaría a aflojar un `NOT NULL` de proveniencia para poner un id de evento que nunca existió, que es exactamente la forma de arreglo que este proyecto rechaza.
+- **Lo que del bucle diario NO depende de eventos, verificado y no supuesto:** el ítem **24** (My Book) y el ítem **27** (edición de campos + marca de número malo). Ninguno referencia `event_log`.
+- **La frase del spec que decide el diseño del timeline cuando se construya:** *"the timeline is for the seller, the audit log is for the lawyer"* — el timeline lleva **una** entrada por veredicto por contacto por ventana de 60 s; el audit log lleva una fila por **cada** intento. Dos caminos de escritura con semánticas de deduplicación distintas desde una sola evaluación.
+
+⚠️ **Y UNA SEGUNDA COLUMNA MUERTA, encontrada por el mismo método que la primera: `contact_phone.bad_number_at`.** Declarada desde la 0010, no la escribe nadie. Es la mitad del ítem 27, y su ausencia significa que hoy **un número que rebotó se sigue ofreciendo para discar**. Van dos de dos: cada vez que fui a ver de dónde iba a leer una feature, la columna estaba declarada y muerta. **Vale como método, no como anécdota** — antes de construir sobre una columna, preguntar quién la escribe.
+
 ### 🫱 EL MOTOR DE TOUCH, Y UNA COLUMNA MUERTA QUE HACÍA IMPOSIBLE AL ÍTEM 13 (2026-08-10)
 `app/db/schema/pipeline.ts` · `calendar.ts` · migración **0041** · `tests/integration/touch-engine.test.ts`. **428 → 437 tests · 40 → 41 archivos.** Ítem 25 — **primer trabajo del bucle diario**.
 
