@@ -7,6 +7,24 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 🔗 EL HANDOFF JOB → REQUEST DE LA TOPOLOGÍA PLEGADA, PROBADO (2026-08-09)
+`tests/integration/folded-handoff.test.ts`. **265 → 270 tests.** Sin cambios de producción: **el mecanismo ya estaba, lo que no existía era la prueba.**
+
+**Lo último vivo de las Puertas 4 y 5 que no dependía de nadie.** El registro decía que a la Puerta 4 le faltaba *"el contexto heredado entre job y request en la misma conexión pooleada"*, y eso **sobreestimaba el agujero**: todos los `set_config` de la 0003 son `is_local => true` y `session-context.test.ts` ya probaba que `begin_request` levanta `CTX001` sobre una conexión envenenada a mano. Lo que no tenía test era el camino realista — un job de verdad, un request de verdad, el pool de verdad, **en el orden que el proceso plegado produce cada quince segundos**.
+
+- **Las cuatro direcciones, todas sobre FILAS y no sobre un GUC:** job → request · request → job · un job que **revienta** a mitad (el ROLLBACK tiene que revertir igual que el COMMIT, y un dispatcher que muere es un martes cualquiera) · y el claim.
+- ⚠️ **Ningún test concluye nada si las dos mitades no corrieron en el MISMO backend.** Cada uno compara `pg_backend_pid()` y falla diciendo que no ejercitó ningún handoff. Un pool que entregara dos conexiones haría pasar los cuatro por una razón que no tiene nada que ver con lo que protegen — el verde más caro que existe.
+
+🔴 **EL PEOR DE LOS CUATRO ES EL DEL CLAIM, y es silencioso en las dos direcciones.** `claimDueJobs` corre **sin contexto** a propósito — es uno de los cuatro caminos cross-tenant enumerados — y sin contexto toda política compara `tenant_id` contra NULL. Si el contexto de un request quedara en la conexión, el claim **no erroraría ni devolvería cero**: devolvería **las jobs de un solo tenant** y dejaría caer los recordatorios de todos los demás, mientras esa conexión se siguiera reusando. Los recordatorios dispararían para quien hubiera cargado una página más recientemente y no para el resto, **y un recordatorio que no dispara no deja fila diciéndolo.**
+
+🎯 **PROBADO POR MUTACIÓN, y el resultado es más preciso que la intención.** Un solo `set_config('app.tenant_id', …, false)` de sesión adentro de `withSystemWork` pone **los cinco en rojo** — pero quien dispara es **`CTX001`**, desde adentro de `begin_request` y `begin_system_work`, con un hint que nombra la causa: *"A bare SET leaked across a transaction, or the pooler is in session mode."* **Las comparaciones de filas nunca llegan a correr.** Así que el reparto quedó escrito en vez de sobrevendido: un **contexto** filtrado lo rechaza el motor de una; una **política** floja deja el contexto limpio, la negativa nunca dispara, y sólo las filas lo dicen. Son dos fallos distintos y el archivo cubre los dos.
+
+🔬 **UN HALLAZGO QUE NO BUSCABA, y es una garantía más fuerte que la que fui a assertear: un job NO PUEDE LEER una tabla con dueño, ni siquiera en su propio tenant.** `withSystemWork` fija tenant y **deliberadamente no fija usuario**, así que toda política `owner_scoped` compara contra NULL y devuelve nada. Por eso `scheduled_job` —que es `owner_scoped`— lo alcanza el dispatcher sólo por definers. La consecuencia para el handoff es la parte útil: **una fuga de contexto de un request hacia un job no podría entregarle el libro de nadie**, porque el job no tiene usuario al que acotarse. Quedó asserteado para que siga siendo cierto el día que alguien le dé un user id a system work *"para que el dispatcher pueda leer la fila directo"*.
+
+- **Y una deuda declarada, mordida de a poco:** el archivo chequea por nombre que sus ids de tenant no estén tomados y falla diciendo *"pick another block"*. La única vez que esto pasó el síntoma fue un `duplicate key` en un `beforeAll`, que se lee como un fixture roto y no como dos archivos peleándose un tenant. No es el mecanismo que falta —los ids se siguen asignando a mano— pero convierte el síntoma en la causa.
+
+⚠️ **INTERMITENCIA DE CONEXIÓN OBSERVADA TRES VECES HOY, no diagnosticada.** `npm run test` falló una vez con un error de conexión en `money-path`, otra en `celebration` y una tercera sin nombrar — **las tres antes o al margen de este archivo**, y tres corridas completas seguidas después dieron 270 verdes. No es este cambio. Anotado porque un rojo que aparece una vez de cada cuatro es exactamente lo que se termina reintentando en vez de persiguiendo.
+
 ### ⏱️ EL RELOJ `NEW` ENTRA — P6 LO HABÍA RECHAZADO DOS VECES (2026-08-09)
 `app/lib/board/tick.ts` · `pipeline-columns.tsx` · `board.ts` · `tests/e2e/new-clock.spec.ts` · `tests/integration/tick.test.ts` · `fixtures/perf-500.ts`. **258 → 265 tests · 87 → 91 e2e.** Sin migración.
 
@@ -1074,8 +1092,8 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 | 1 | Sonda de plataforma | 🟡 **G1e cerrado** (`btree_gin`/uuid existe, probado con planner). Faltan `max_connections` real, PgBouncer en modo transacción, y si concede `CREATE EVENT TRIGGER` — **todo requiere la instancia de Render** |
 | 2 | Aloware contra la cuenta real | 🔴 bloqueado, es de Jorge |
 | 3 | Camino del dinero | ✅ mayormente — append-only por trigger de sentencia (incluye TRUNCATE), exactly-once, transacción del gate atómica. **Falta:** proceso muerto a mitad del gate sin dejar lock |
-| 4 | Silo de punta a punta | 🟡 **(a) cerrado** (se niega a arrancar si el usuario puede saltear RLS). El resto lo cubre la suite de silo salvo el contexto heredado entre job y request en la misma conexión pooleada |
-| 5 | Equivalencia plegado/separado | 🟡 **el pliegue EXISTE y corrió.** El worker arranca dentro del proceso web (`app/jobs/boot.ts`) y produjo **las mismas dos filas terminales** que el proceso separado — `skipped: sms_disabled` y `dropped: 40m late`. Falta lo que da nombre a la puerta: equivalencia **bajo carga y en los bordes**, no en un caso feliz |
+| 4 | Silo de punta a punta | 🟢 **(a) cerrado** (se niega a arrancar si el usuario puede saltear RLS) **y desde el 2026-08-09 el handoff job ↔ request en la misma conexión pooleada también** — `folded-handoff.test.ts`, las dos direcciones más el job que revienta más el claim cross-tenant, todas sobre filas, todas exigiendo el mismo `pg_backend_pid()`, probadas por mutación. El resto lo cubre la suite de silo |
+| 5 | Equivalencia plegado/separado | 🟡 **el pliegue EXISTE, corrió, y su borde más filoso está probado.** El worker arranca dentro del proceso web (`app/jobs/boot.ts`) y produjo **las mismas dos filas terminales** que el proceso separado — `skipped: sms_disabled` y `dropped: 40m late` — y desde el 2026-08-09 el **contexto compartido en la conexión** que sólo el pliegue produce está cerrado (`folded-handoff.test.ts`, ver la Puerta 4). Falta lo que da nombre a la puerta: equivalencia **bajo carga**, no en un caso feliz |
 | 6 | Tormenta de 20.000 webhooks | ⬜ no empezado |
 | 7 | SSE detrás del proxy | ⬜ no empezado |
 | 8 | pg-boss bajo estrés de versión | ⬜ no empezado |
