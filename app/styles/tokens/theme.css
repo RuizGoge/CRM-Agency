@@ -14,9 +14,17 @@
   --color-canvas: var(--p-n-50);
   --color-surface-1: var(--p-n-0);
   --color-surface-2: var(--p-n-25);
+  /* n-100, which §2's own primitive comment reserves for "kanban column
+   * background, skeleton base". The board used --color-surface-2 and that is
+   * one step off the canvas: there was no column on screen at all, just cards
+   * floating under a label. No new token was needed — the right one was already
+   * here and unused. */
   --color-surface-3: var(--p-n-100);
   --color-surface-inverse: var(--p-n-800);
-  --color-overlay: rgb(11 14 19 / 0.48);
+  /* Built from the primitive anchor rather than restating it: this line was the
+   * only colour literal outside primitives.css, which is the rule that file's
+   * header claims to be the only holder of. */
+  --color-overlay: rgb(var(--p-shadow-rgb) / 0.48);
   --color-border-subtle: var(--p-n-200);
   --color-border-default: var(--p-n-300);
   --color-border-strong: var(--p-n-400);
@@ -202,6 +210,15 @@
    * edit to this line. */
   --card-h: var(--size-card-h);
 
+  /* The kanban column's width (§4.5). The board carried a hard-coded `17rem`
+   * inline — 272px against the 288 the design system publishes. Below the
+   * density breakpoint reset.css widens it: at 272px on a 412px phone the next
+   * column is sliced down the middle of a card, and a card cut in half reads as
+   * a rendering bug rather than as "there is more to the right". */
+  --size-column-w: 288px;
+  --size-column-w-mobile: 78vw;
+  --column-w: var(--size-column-w);
+
   /* --- Radii ------------------------------------------------------------- */
   --radius-none: 0;
   --radius-xs: 3px;
@@ -210,6 +227,42 @@
   --radius-lg: 12px;
   --radius-xl: 16px;
   --radius-full: 999px;
+
+  /* --- Elevation: §4.6 ---------------------------------------------------- *
+   * "Elevation is a STRUCTURE token, not a decoration token, and it is never
+   * animated." A card's hover lift is a heavier resting shadow swapped in, not a
+   * box-shadow transition — animating one forces paint on every frame and is the
+   * classic way to lose the drag budget that Gate 12 measures.
+   *
+   * Published in §4.6 since Phase 4 and absent from this tree until now, which
+   * is why every card in the product was a 1px outline on a canvas one shade off
+   * white: nothing was wrong, and nothing had any depth either. */
+  --elev-0: none;
+  --elev-1: 0 1px 2px rgb(var(--p-shadow-rgb) / 0.06), 0 1px 3px rgb(var(--p-shadow-rgb) / 0.1);
+  --elev-2:
+    0 2px 4px -1px rgb(var(--p-shadow-rgb) / 0.06), 0 4px 8px -2px rgb(var(--p-shadow-rgb) / 0.1);
+  --elev-3:
+    0 4px 8px -2px rgb(var(--p-shadow-rgb) / 0.06), 0 12px 16px -4px rgb(var(--p-shadow-rgb) / 0.1);
+  --elev-4:
+    0 8px 12px -4px rgb(var(--p-shadow-rgb) / 0.06),
+    0 20px 24px -4px rgb(var(--p-shadow-rgb) / 0.12);
+  --elev-5:
+    0 12px 16px -4px rgb(var(--p-shadow-rgb) / 0.08),
+    0 32px 40px -8px rgb(var(--p-shadow-rgb) / 0.16);
+  --elev-drag: 0 16px 24px -8px rgb(var(--p-shadow-rgb) / 0.24);
+
+  /* --- Z-index: §4.7 ------------------------------------------------------ *
+   * A scale, so that "above the cards" is a name and not a number somebody
+   * picked while debugging. The undo bar carries a hand-picked 30 today; it is
+   * left alone on purpose — the last time that number moved it was chasing a
+   * pointer-interception bug, and re-numbering it is not this change. */
+  --z-base: 0;
+  --z-raised: 10;
+  --z-drag: 100;
+  --z-sticky: 200;
+  --z-pinned: 250;
+  --z-bottom-bar: 300;
+  --z-dropdown: 400;
 }
 
 /* Declared, deliberately empty. v1 hard-codes light and ships no toggle. */

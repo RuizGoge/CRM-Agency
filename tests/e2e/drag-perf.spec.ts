@@ -2,6 +2,9 @@ import { readFileSync } from 'node:fs'
 
 import { expect, test } from '@playwright/test'
 
+import { OVERSCAN } from '~/components/board/column-window'
+import { cardPitchPx } from '~/styles/tokens/geometry'
+
 import {
   PERF_CARD_COUNT,
   PERF_OPEN_STAGES,
@@ -82,7 +85,37 @@ test.describe('P6 · the drag holds 60 fps on a 500-card board', () => {
     // assumed — dragging before it arms is a no-op that fails much later and
     // somewhere else.
     await expect(page.locator('main [data-drag]')).toHaveAttribute('data-drag', 'on')
-    await expectCount(page.locator('main article[draggable="true"]'), PERF_CARD_COUNT)
+
+    // 🔴 THIS ASSERTION USED TO READ `500 cards are mounted`, AND THE COLUMN
+    // VIRTUALIZER MADE IT FALSE ON PURPOSE. It was written against the most
+    // expensive kind of passing test — a green frame rate measured while nothing
+    // was on screen — so it cannot simply be deleted; the property it protects
+    // has to be re-obtained from what is now true.
+    //
+    // It splits in two, and BOTH halves are needed. The board must DECLARE five
+    // hundred cards, which is the fixture assertion above reaching the screen
+    // rather than stopping at the database. And the DOM must hold far fewer than
+    // five hundred, which is the assertion that virtualization is actually on —
+    // without it, a regression that disabled the window would restore the old
+    // 500-node board and this gate would go quietly back to measuring it.
+    const declared = await page
+      .locator('main [data-cards]')
+      .evaluateAll((els) =>
+        els.reduce((n, el) => n + Number(el.getAttribute('data-cards') ?? '0'), 0),
+      )
+    expect(declared, 'the board must be showing the whole 500-card book').toBe(PERF_CARD_COUNT)
+
+    const viewport = page.viewportSize()
+    expect(viewport, 'dnd-ci has a fixed viewport and the cap is derived from it').not.toBeNull()
+    const pitch = cardPitchPx(false)
+    const perColumn = Math.ceil((viewport?.height ?? 0) / pitch) + OVERSCAN * 2 + 1
+    const cap = perColumn * PERF_OPEN_STAGES.length
+    const mounted = await page.locator('main article[draggable="true"]').count()
+    console.log(`[P6] ${mounted} card nodes mounted of ${PERF_CARD_COUNT} declared (cap ${cap})`)
+    expect(mounted, 'the window is not bounded — virtualization is off').toBeLessThanOrEqual(cap)
+    expect(mounted, 'the window is empty, so nothing is being dragged over').toBeGreaterThanOrEqual(
+      PERF_OPEN_STAGES.length * 4,
+    )
 
     // THREE RUNS, MEDIAN REPORTED — the profile definition, not a workaround.
     //
@@ -234,7 +267,17 @@ test.describe('P6 · the drag holds 60 fps on a 500-card board', () => {
       // frame rate was fine while nothing happened" — the most expensive kind of
       // passing test, because it reports the very property it was written to
       // protect.
-      expect(sample.rendered, '500 cards must be mounted while measuring').toBe(PERF_CARD_COUNT)
+      // The window has to still be on screen while the frames are being counted.
+      // A board that unmounted its cards mid-drag would report a beautiful frame
+      // rate for an empty column, which is the same false pass the 500-card
+      // assertion used to guard against, one virtualizer later.
+      expect(
+        sample.rendered,
+        'the board emptied while it was being measured',
+      ).toBeGreaterThanOrEqual(PERF_OPEN_STAGES.length * 4)
+      expect(sample.rendered, 'the window grew past its cap during the drag').toBeLessThanOrEqual(
+        cap,
+      )
       expect(sample.entered, 'the drag must cross three columns').toBe(3)
       expect(sample.ringSeen, 'the drop target never lit, so no drag was in progress').toBe(true)
       expect(sample.dragoverCount).toBeGreaterThan(30)

@@ -32,25 +32,53 @@ body {
     font-size: var(--type-md);
   }
 
-  /* The standing sentence on the seller home wraps on a phone, and the last
-     `·` was left hanging at the end of the first line with nothing after it.
-     Found by looking at the rendered screen, which is the only place it
-     exists — the desktop profile is one line and never shows it.
+  /* The standing sentence on the seller home wraps on a phone, and a `·` was
+     left hanging at the end of a line with nothing after it. Found by looking at
+     the rendered screen, which is the only place it exists — the desktop profile
+     is one line and never shows it.
 
-     Below this breakpoint the line break IS the separator, so the last one is
-     removed rather than orphaned. Deliberately inside the existing block: this
-     project already carries one hard-coded breakpoint number and a second copy
-     of it is how two "mobile" boundaries end up 1px apart. */
-  .standing-separator-last {
+     EVERY separator, not the last one. The first version of this rule named only
+     the trailing dot, which was the only orphan on the day it was written; the
+     sentence has since gained a line, the wrap moved, and the leading dot became
+     the orphan instead. Below this breakpoint the line break IS the separator,
+     so none of them survive. Deliberately inside the existing block: this project
+     already carries one hard-coded breakpoint number and a second copy of it is
+     how two "mobile" boundaries end up 1px apart. */
+  .standing-separator {
     display: none;
   }
 
   /* The other half of ruling N17. Mobile carries 44px targets and mobile type,
      so the same four rows need 156px — which is why the card height is a
-     foundation decision and not a component's opinion. */
+     foundation decision and not a component's opinion.
+
+     The column width swaps here too, in the same block and for the same reason
+     the block exists: a second `@media (max-width: …)` anywhere is how two
+     "mobile" boundaries end up 1px apart, and card-height.test.ts counts them. */
   :root {
     --card-h: var(--size-card-h-mobile);
+    --column-w: var(--size-column-w-mobile);
   }
+}
+
+/* The kanban card, and the only two rules on it that a style attribute cannot
+   express. §4.6: the hover lift is a HEAVIER RESTING SHADOW, never a transition
+   — animating box-shadow paints on every frame and that is the drag budget Gate
+   12 measures. Everything else about the card lives with the component. */
+.kanban-card {
+  box-shadow: var(--elev-1);
+}
+
+.kanban-card:hover {
+  box-shadow: var(--elev-2);
+}
+
+/* A standalone action on a card face. Underlined on hover and on focus, never
+   at rest: at rest it is one of four lines on a 120px card and a permanent
+   underline turns the densest surface in the product into ruled paper. */
+.card-action:hover,
+.card-action:focus-visible {
+  text-decoration: underline;
 }
 
 input,
