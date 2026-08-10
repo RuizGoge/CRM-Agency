@@ -480,7 +480,7 @@ INSERT INTO security.table_registry
    exception_reason, registered_in_migration)
 VALUES
   ('app', 'call', 'owner_scoped_read', 'owner_user_id', false, false, NULL,
-   '0036_call_merge')
+   '0048_call_merge')
 ON CONFLICT (schema_name, table_name) DO UPDATE
   SET policy_class            = EXCLUDED.policy_class,
       owner_column            = EXCLUDED.owner_column,

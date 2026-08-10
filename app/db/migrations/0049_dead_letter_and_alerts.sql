@@ -229,11 +229,11 @@ VALUES
   ('app', 'dead_letter', 'tenant_admin_only', NULL, false, false,
    ARRAY['tenant_id','id','origin','subject_type','subject_id','raw_payload_id',
          'reason','attempt_count','first_seen_at','last_seen_at'],
-   NULL, '0037_dead_letter_and_alerts'),
+   NULL, '0049_dead_letter_and_alerts'),
   ('app', 'admin_alert', 'tenant_admin_only', NULL, false, false,
    ARRAY['tenant_id','id','kind','subject_key','detail','occurrence_count',
          'first_seen_at','last_seen_at'],
-   NULL, '0037_dead_letter_and_alerts')
+   NULL, '0049_dead_letter_and_alerts')
 ON CONFLICT (schema_name, table_name) DO UPDATE
   SET policy_class            = EXCLUDED.policy_class,
       owner_column            = EXCLUDED.owner_column,

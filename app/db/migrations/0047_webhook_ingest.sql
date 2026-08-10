@@ -356,7 +356,7 @@ INSERT INTO security.table_registry
    exception_reason, registered_in_migration)
 VALUES
   ('app', 'webhook_endpoint', 'definer_only', NULL, false, false, NULL,
-   '0035_webhook_ingest')
+   '0047_webhook_ingest')
 ON CONFLICT (schema_name, table_name) DO UPDATE
   SET policy_class            = EXCLUDED.policy_class,
       owner_column            = EXCLUDED.owner_column,
