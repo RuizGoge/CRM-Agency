@@ -7,6 +7,23 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 🔌 LA INGESTA DE WEBHOOKS ENTRA A MASTER — Y `harden()` VENÍA REBOBINADO (2026-08-10)
+
+Migraciones **0047–0050** (`webhook_ingest` · `call_merge` · `dead_letter_and_alerts` · `message_merge`), renumeradas desde 0035–0038 **antes** de mergear, para que el merge nunca tuviera que sostener dos journals que discrepan sobre qué es la 0035. **566 tests · 83 e2e desktop · 27 mobile**, verde sobre una base reconstruida desde cero.
+
+🔴 **TRES DEFECTOS, y los tres existían SÓLO en el árbol mergeado.** Cada lado estaba bien solo; lo que estaba mal era el orden.
+
+**`harden()` venía rebobinado treinta migraciones.** La 0048 trae un `CREATE OR REPLACE` de `security.harden()` —agrega la clase `owner_scoped_read` que necesitan las tablas de llamada— y esa copia se tomó de una base anterior al event store y al ledger de consentimiento. Corriendo última, reemplazó la función de master por una que nunca había oído hablar de ninguno de los dos:
+
+- **La 0043** le había enseñado que una **partición hereda la clasificación de su padre**. Sin eso, la llamada siguiente levantaba `HR001: app.event_log_2026_08 has no security.table_registry row` y **la suite entera moría en `globalSetup`**.
+- **La 0035** había dejado de otorgar `SELECT` a las tablas `definer_only`. Sin eso, `consent_ledger`, `suppression_list` y el medidor de lookup volvían a **conservar un privilegio que sólo una política neutraliza** — seis tests diciendo lo mismo: un grant revocado manda sobre una política.
+
+Los dos bloques quedaron portados **literales** dentro de la 0048, con el razonamiento repetido porque un cuerpo de función no se parchea.
+
+**Las tres definers de ingreso quedaron nombradas en la lista de exentas.** La puerta `definer-tenancy` de master exige que toda `SECURITY DEFINER` llame a `app.current_tenant()` o esté listada con su razón, y `webhook_ingest`, `dead_letter_write` e `inbound_webhook_dead_letter` **no pueden**: corren **antes de que exista un tenant**. `webhook_ingest` es la función que lo **deriva** —el token del endpoint es lo único que produce un tenant—, así que pedirle que lo lea sería pedirle que lea la respuesta que calcula. Las otras dos registran ingestas que **fallaron**, que es justo cuando el tenant puede ser desconocido.
+
+✅ **Y una aserción se volvió MÁS fuerte, no más laxa.** `webhook-ingest.test.ts` afirmaba que `crm_app` podía emitir el `SELECT` sobre `app.webhook_endpoint` y leer cero filas, y que conservaba `SELECT` y nada más. Las dos eran ciertas cuando se escribieron. Bajo la 0035 la lectura se **rechaza** y la lista de grants queda **vacía** — la misma forma que `consent-ledger.test.ts` assertea para esa clase. Afirmar cero filas habría pasado sobre el comportamiento más débil de los dos y se habría callado el día que la revocación se perdiera.
+
 ### 🧹 GIT REGULARIZADO, `crm_dev` SANA, Y LA CADENA DE INSTALACIÓN QUE NO COMPLETABA (2026-08-10)
 
 **Estado: `master` = `origin/master`, todo empujado · 507 tests · 83 e2e desktop · 27 mobile · cero rojos · los cinco worktrees limpios.**
