@@ -7,6 +7,19 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### ✏️ LA MARCA DE NÚMERO MALO POR FIN TIENE ESCRITOR (2026-08-10)
+Migración **0044** · `tests/integration/contact-editing.test.ts`. **454 → 464 tests · 43 → 44 archivos.** Mitad de servidor del ítem 27 (ruta B).
+
+**`contact_phone.bad_number_at` era la segunda columna muerta**, y su consecuencia era concreta: **un número que ya rebotó se seguía ofreciendo para discar**, así que la vendedora quemaba intentos en una línea que no puede conectar y la tasa de calidad del vendor era inmedible. Ahora tiene escritor, con razón obligatoria — *"bad" no es una razón*, y una cadena vacía es cómo un campo requerido se vuelve opcional en la práctica.
+
+- **La PRIMERA marca gana.** `bad_number_at` es cuándo nos **enteramos** de que el número era malo; un discado fallido posterior no lo vuelve nuevamente malo, y sobrescribir movería en silencio la evidencia de cuándo el vendor nos vendió una línea muerta. **Y se puede levantar**, porque una marca que nadie puede sacar es un lead que nadie puede volver a llamar nunca — con verbo propio, para que no ocurra por pasarle el valor equivocado a la marca.
+- 🎯 **Las dos funciones son `SECURITY INVOKER` a propósito, y la mutación lo prueba:** convertirlas en `DEFINER` pone rojo *"cannot flag a number in another seller's book"* — Ana marcando el número de Ben. **El silo sale del RLS, no de un predicado que alguien escribió**, que es el mismo patrón que salió mejor de lo especificado en la ventana de llamada.
+- **Un ZIP editado mueve la ventana de llamada**, y hay un test que lo assertea: no es un campo cosmético, cambia **cuándo se puede llamar legalmente a ese lead**.
+
+🔴 **QUINTA VEZ QUE ESTE PROYECTO PAGA LA BASE COMPARTIDA, Y ESTA VEZ LA CAUSÉ YO — en una tabla `ref`, no en un id de tenant.** Mi fixture sembraba `33101` en `ref.zip_timezone`, que es **la fila exacta que `calling-window.test.ts` inserta sin `ON CONFLICT`**: el archivo que corriera segundo moría con clave duplicada y **se llevaba puesto su fixture entero** — 12 tests saltados, no fallados, que es la forma en que este fallo se disfraza. Las cuatro anteriores fueron ids de tenant asignados a mano; ésta fue **datos de referencia**, que nadie estaba mirando. Sigue sin haber mecanismo: sólo el hábito de que cada suite sea dueña de sus filas.
+
+📐 **HALLAZGO SOBRE MY BOOK (ítem 24), que no hay que inventar:** `04b` §1253 dice que el chip es **el enum `health` computado en el SERVIDOR**, *"so the board, My Book and My Day are byte-identical"*. O sea que My Book **no define un estado nuevo** — comparte el que el tablero ya calcula. Pero hoy `healthOf()` vive dentro de `app/routes/api/board.ts`, y §2.8 es explícito en que tres pantallas decidiendo por su cuenta son tres respuestas a una pregunta que el vendedor hace una vez. **La precondición de My Book es extraer esa función a `app/lib/**`** — que es además exactamente lo que el test de frontera cliente-servidor pide cuando algo de una ruta se necesita en otro lado, trampa que este proyecto ya pagó dos veces.
+
 ### 📦 EL ALMACÉN DE EVENTOS Y EL OUTBOX: RUTA A COMPLETA (2026-08-10)
 `app/db/schema/event-store.ts` · migración **0043** · `tests/integration/event-store.test.ts`. **444 → 454 tests · 42 → 43 archivos.** **El transporte de eventos existe. El timeline (ítem 20) queda desbloqueado.**
 

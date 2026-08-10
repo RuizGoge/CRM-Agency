@@ -309,6 +309,13 @@
       "when": 1786366260588,
       "tag": "0043_event_store",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1786366261588,
+      "tag": "0044_contact_editing",
+      "breakpoints": true
     }
   ]
 }
