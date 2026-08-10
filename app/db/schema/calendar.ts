@@ -18,12 +18,20 @@ import { opportunity } from './pipeline'
 import { actorType } from './pipeline'
 import { appUser, tenant } from './tenant'
 
+/**
+ * `note` was missing, and its absence was already load-bearing: the quick-add
+ * sheet had to drop the note field it was specified with because there was no
+ * column to put it in. A note IS a unit of work in this model — the ONE activity
+ * object rules out a separate table — so it belongs here rather than anywhere
+ * that would become a second activity model.
+ */
 export const activityType = app.enum('activity_type', [
   'call',
   'sms',
   'email',
   'task',
   'appointment_link',
+  'note',
 ])
 
 export const meetingType = app.enum('meeting_type', ['phone', 'video', 'in_person'])

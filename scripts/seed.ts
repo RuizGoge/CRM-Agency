@@ -194,6 +194,24 @@ async function main(): Promise<void> {
 
   await refuseToSeedTwice()
 
+  // 🔴 THE SEED IS WHAT MAKES A DATABASE A DEVELOPMENT DATABASE, so it is what
+  // says so. Migration 0032 derives the environment from the presence of a demo
+  // tenant and classifies an unclassified database as `production` — the right
+  // default, because a real production database is unclassified on the day it
+  // is created.
+  //
+  // But `db:migrate` runs BEFORE `db:seed` on a fresh setup, so at 0032 time
+  // there is no demo tenant yet and the database correctly classifies itself
+  // production; `ON CONFLICT DO NOTHING` then means creating the demo tenant a
+  // moment later cannot move it. Without this line the documented fresh-install
+  // chain ends with a dev server that refuses to boot on CAP200, and the cause
+  // would look nothing like the symptom.
+  await client`
+    INSERT INTO ref.system_constant (key, value, reason)
+    VALUES ('environment', 'development',
+            'Set by scripts/seed.ts. This database holds the demo tenant, so it is a development database — 0032 could not see that yet because migrations run before the seed.')
+    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, reason = EXCLUDED.reason`
+
   await seedLostReasons()
 
   for (const seller of SELLERS) {
@@ -579,6 +597,84 @@ async function seedOpenPipeline(): Promise<void> {
   }
 
   console.log(`  ${seller.name}: ${leads.length} open cards, one per health state`)
+
+  await seedAlowareCapture(seller)
+}
+
+/**
+ * The Aloware capture subject — a card that exists so the integration has a
+ * place to be looked at.
+ *
+ * 🔴 IT IS A DUMMY, AND THAT IS THE POINT RATHER THAN A SHORTCUT. The Gate-2
+ * capture dialled a real lead out of the client's production book, and their
+ * name, phone, email, city and date of birth are in those bytes. Seeding the
+ * real subject would copy a consumer's details into every developer's database
+ * and into the demo, permanently, to illustrate a payload shape. The number
+ * here is from the North American reserved fictional range (555-0100..0199) —
+ * the same lawful-subject rule errata E9 imposes on capability probes.
+ *
+ * IT IS ALSO THE ONLY SEEDED CONTACT WITH A PHONE NUMBER, which is not an
+ * oversight in the others: nothing in the product needed one until the dial
+ * existed. Without it the Call control answers `no_phone` and stops one step
+ * earlier than the state actually worth seeing, which is `no_number` — the
+ * seller has a lead to call and no calling number of their own yet.
+ */
+async function seedAlowareCapture(seller: { id: string; name: string }): Promise<void> {
+  const stage = await client<{ id: string }[]>`
+    SELECT s.id FROM app.stage s
+      JOIN app.pipeline p ON p.tenant_id = s.tenant_id AND p.id = s.pipeline_id
+     WHERE s.tenant_id = ${TENANT} AND p.owner_user_id = ${seller.id} AND s.name = 'New Lead'
+     LIMIT 1`
+
+  const stageId = stage[0]?.id
+  if (stageId === undefined) return
+
+  const [contact] = await client<{ id: string }[]>`
+    INSERT INTO app.contact (tenant_id, owner_user_id, full_name, created_via)
+    VALUES (${TENANT}, ${seller.id}, 'Aloware Capture (demo)', 'lead_intake')
+    RETURNING id`
+
+  if (contact === undefined) return
+
+  await client`
+    INSERT INTO app.contact_phone (tenant_id, contact_id, owner_user_id, phone_e164, is_primary)
+    VALUES (${TENANT}, ${contact.id}, ${seller.id}, '+12025550142', true)`
+
+  await client`
+    INSERT INTO app.opportunity
+      (tenant_id, owner_user_id, contact_id, pipeline_id, stage_id, current_stage_type,
+       created_from, created_at, stage_entered_at, last_activity_at, attempt_count)
+    SELECT ${TENANT}, ${seller.id}, ${contact.id}, p.id, ${stageId}, 'open', 'lead_intake',
+           clock_timestamp() - interval '2 days',
+           clock_timestamp() - interval '2 days',
+           clock_timestamp() - interval '2 days',
+           1
+    FROM app.pipeline p WHERE p.tenant_id = ${TENANT} AND p.owner_user_id = ${seller.id}`
+
+  console.log('  Aloware Capture (demo): the card the integration panel hangs off')
+
+  // The seller's outbound identity (§5). Without it `POST /api/calls` stops at
+  // `no_number` and the Call control can only ever say one thing.
+  //
+  // The ids are the REAL ones Gate G2 read off the account — seat `120776`,
+  // Test Line `63949`, `+1 737 427 3994` — because the demo tenant IS that
+  // account and a demo that dials from an invented line teaches the wrong shape.
+  // None of it is personal data: a business line and a seat id.
+  //
+  // ⚠️ `verified_at` IS SET HERE AND NO VERIFICATION HAPPENED. ADR-042's
+  // three-way flow does not exist, and the column is what the dial reads, so a
+  // NULL would make this row inert and the seed pointless. It is written ONLY on
+  // the tenant carrying `is_demo = true` — the one the shell already labels
+  // "Demo tenant — these numbers are seeded." A real tenant reaching this state
+  // without the flow is the thing the column exists to prevent, and this is not
+  // that.
+  await client`
+    INSERT INTO app.aloware_number_mapping
+      (tenant_id, owner_user_id, aloware_user_id, aloware_line_id, from_number_e164, verified_at)
+    VALUES (${TENANT}, ${seller.id}, 120776, 63949, '+17374273994', clock_timestamp())
+    ON CONFLICT DO NOTHING`
+
+  console.log('  outbound identity: +1 737 427 3994 (Test Line 63949, seat 120776)')
 }
 
 main()

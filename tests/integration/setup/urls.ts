@@ -21,7 +21,46 @@ const DEV_URL =
   process.env['MIGRATION_DATABASE_URL'] ??
   'postgresql://crm:crm@localhost:5432/crm_dev'
 
-export const TEST_DB = 'crm_test'
+/**
+ * The test database, named per git worktree.
+ *
+ * A GIT WORKTREE ISOLATES FILES AND NOT THE DATABASE, and until this function
+ * existed the name was the constant `crm_test` for every checkout on the
+ * machine. Two worktrees running vitest at once therefore shared one database
+ * while each one's `globalSetup` dropped and rebuilt it — so the second run
+ * wiped the first run's schema mid-flight.
+ *
+ * OBSERVED, not theorised: two sessions (`crm-strategy-discussion-b1fc64` and
+ * `virtualizacion-tablero-304005`) produced `duplicate key value violates
+ * unique constraint "tenant_pkey"`, `write CONNECTION_CLOSED` and hook
+ * timeouts, across a DIFFERENT set of files on every run, while each suite
+ * passed alone. A red build that names a different victim each time is the
+ * signature, and it costs an hour before anyone suspects the harness rather
+ * than the change.
+ *
+ * The rebuild-every-run behaviour below is right and stays: a test that leaves
+ * state behind must not make the next run pass for the wrong reason. It is only
+ * unsafe when two runs share the target, which is what this removes.
+ *
+ * Blast radius is deliberately small: a plain checkout and CI both fall through
+ * to `crm_test` and behave exactly as before. Only a path under
+ * `.claude/worktrees/` gets a suffix.
+ */
+function testDatabaseName(): string {
+  const marker = '/.claude/worktrees/'
+  const cwd = process.cwd().replaceAll('\\', '/')
+  const at = cwd.indexOf(marker)
+  if (at === -1) return 'crm_test'
+
+  const worktree = cwd.slice(at + marker.length).split('/')[0] ?? ''
+  const slug = worktree
+    .toLowerCase()
+    .replaceAll(/[^a-z0-9]+/g, '_')
+    .slice(0, 40)
+  return slug === '' ? 'crm_test' : `crm_test_${slug}`
+}
+
+export const TEST_DB = testDatabaseName()
 
 /**
  * The dev and CI password for `crm_app`. Set out of band by the setup path,

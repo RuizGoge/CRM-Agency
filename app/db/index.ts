@@ -6,3 +6,14 @@
  */
 export { claimDueJobs, withSystemWork, withTenant } from './client'
 export type { ClaimedJob, ScopeMode, SessionIdentity, Tx } from './client'
+
+/**
+ * The provider capability registry (§3), read once per process.
+ *
+ * A third export on a surface whose comment says "two functions", and the
+ * reason it belongs here rather than in the communications module is the same
+ * reason the guard exists: reading it touches the driver, and only `app/db/**`
+ * may. What the module owns is the TYPE gate — `alowareCapability` — which is
+ * where callers actually go.
+ */
+export { ensureCapabilities } from './pool'

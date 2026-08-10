@@ -206,17 +206,129 @@
       "breakpoints": true
     },
     {
+      "idx": 29,
+      "version": "7",
+      "when": 1785900939603,
+      "tag": "0029_provider_capability_probe",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1785985208833,
+      "tag": "0030_promote_two_legged_call",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1785990997963,
+      "tag": "0031_inbound_capability_evidence",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1786030738885,
+      "tag": "0032_system_constant",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1786070378444,
+      "tag": "0033_aloware_number_mapping",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1786072587380,
+      "tag": "0034_webhook_ingest_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1786330824577,
+      "tag": "0035_consent_ledger",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1786331872359,
+      "tag": "0036_suppression_list",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1786332728918,
+      "tag": "0037_calling_window",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1786333621885,
+      "tag": "0038_compliance_gate",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1786334454402,
+      "tag": "0039_recent_contact_signal",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1786334455402,
+      "tag": "0040_tz_dataset_absent",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1786363855437,
+      "tag": "0041_touch_engine",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1786364848880,
+      "tag": "0042_event_vocabulary",
+      "breakpoints": true
+    },
+    {
       "idx": 43,
       "version": "7",
-      "when": 1785814346250,
-      "tag": "0043_leaderboard_read_hoists_its_clock",
+      "when": 1786366260588,
+      "tag": "0043_event_store",
       "breakpoints": true
     },
     {
       "idx": 44,
       "version": "7",
-      "when": 1785817946250,
-      "tag": "0044_leaderboard_poll_budget",
+      "when": 1786366261588,
+      "tag": "0044_contact_editing",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1786369861588,
+      "tag": "0045_leaderboard_read_hoists_its_clock",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1786373461588,
+      "tag": "0046_leaderboard_poll_budget",
       "breakpoints": true
     }
   ]

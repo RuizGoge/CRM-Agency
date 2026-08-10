@@ -205,6 +205,17 @@ export const opportunity = app.table(
       .notNull()
       .default(sql`clock_timestamp()`),
     lastActivityAt: timestamp('last_activity_at', { withTimezone: true }),
+
+    /**
+     * The HUMAN half of the touch engine, and the reason it is a second column.
+     *
+     * `last_activity_at` moves on any touch, automated ones included. If the
+     * cold rule keyed on that, a sequence texting a dead lead every four days
+     * would keep it looking warm forever — automation would MASK abandonment,
+     * which is the exact opposite of what the going-cold signal exists to
+     * surface. Cold keys on this column; the board's freshness rail does not.
+     */
+    lastHumanTouchAt: timestamp('last_human_touch_at', { withTimezone: true }),
     attemptCount: integer('attempt_count').notNull().default(0),
     firstTouchLatencySeconds: integer('first_touch_latency_seconds'),
 

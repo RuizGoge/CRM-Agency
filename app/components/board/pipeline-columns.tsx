@@ -563,17 +563,26 @@ const Card = memo(function Card({
           gap: 'var(--space-2)',
         }}
       >
-        <span
-          style={{
-            fontSize: 'var(--type-sm)',
-            fontWeight: 'var(--font-weight-semibold)',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {card.contactName}
-        </span>
+        {/* THE NAME IS THE WAY IN, not the whole card. A card-wide click target
+            would fight the drag handler for the same pointer, and a link drags
+            itself by default — which is why `draggable={false}` is here as well
+            as on `Move`.
+
+            A card whose contact is not readable renders plain text instead of a
+            dead link. `contactId` is NULL exactly when the join found nothing,
+            so there is no record to open and the card does not pretend there
+            is. */}
+        {card.contactId === null ? (
+          <span style={nameStyle}>{card.contactName}</span>
+        ) : (
+          <Link
+            to={`?contact=${card.contactId}`}
+            draggable={false}
+            style={{ ...nameStyle, color: 'inherit', textDecoration: 'none' }}
+          >
+            {card.contactName}
+          </Link>
+        )}
 
         {/* THE SIGNAL SLOT — exactly one, or nothing. The server decides which;
             a component that picked would be a second precedence order, and §2.4
@@ -636,6 +645,19 @@ const Card = memo(function Card({
     </article>
   )
 })
+
+/**
+ * Shared so the link and the plain-text fallback are the same object on the
+ * card. Two copies of this would drift, and the drift a seller notices is a
+ * column whose names sit a pixel apart.
+ */
+const nameStyle: React.CSSProperties = {
+  fontSize: 'var(--type-sm)',
+  fontWeight: 'var(--font-weight-semibold)',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+}
 
 /**
  * The health rail, drawn as a partial fill from the top.

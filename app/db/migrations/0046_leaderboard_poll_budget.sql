@@ -33,12 +33,12 @@ INSERT INTO ref.ci_ratchet_name (name, direction, registered_in_migration, ratio
 VALUES (
   'perf.P11_leaderboard_304_p95',
   'monotonic_down',
-  '0044_leaderboard_poll_budget',
+  '0046_leaderboard_poll_budget',
   'Server p95 for a leaderboard 304 on perf-floor (50 sellers, 6400 ledger rows), 04b 3.2 P11. Registered at the RATIFIED 80ms rather than at the 14.6ms measured, because unlike P12/P20/N13 this number was signed in Phase 4 and the measurement was checking compliance, not setting the bar. 1183 assumed 2ms per 304 and built the USD 7/month cost model on it; 14.6ms is the first real figure that assumption has ever been checked against.'
 )
 ON CONFLICT (name) DO NOTHING;
 --> statement-breakpoint
 
 INSERT INTO ref.ci_ratchet (name, value_num, set_by_run)
-SELECT 'perf.P11_leaderboard_304_p95', 80, '0044_leaderboard_poll_budget'
+SELECT 'perf.P11_leaderboard_304_p95', 80, '0046_leaderboard_poll_budget'
 WHERE NOT EXISTS (SELECT 1 FROM ref.ci_ratchet WHERE name = 'perf.P11_leaderboard_304_p95');

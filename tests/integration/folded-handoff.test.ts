@@ -43,9 +43,11 @@ import { TEST_URL } from './setup/urls'
  * would cover neither of those second cases, which is why these read rows.
  *
  * ⚠️ Every test here refuses to conclude anything unless both halves ran on the
- * SAME backend. A pool that handed out two connections would make each pass for
- * a reason that has nothing to do with the handoff — the most expensive kind of
- * green, because it reports the very property it was written to protect.
+ * SAME backend, and it WAITS for that backend to come round rather than hoping
+ * two adjacent calls share one. A pair that ran on two connections would pass
+ * for a reason that has nothing to do with the handoff — the most expensive
+ * kind of green, because it reports the very property it was written to
+ * protect.
  */
 
 // The `cf` block, unused elsewhere in this suite. `crm_test` is shared and the
@@ -124,6 +126,37 @@ function sameBackend(a: Seen, b: Seen): void {
   ).toBe(a.pid)
 }
 
+/**
+ * Runs `next` until it is served by backend `pid`.
+ *
+ * 🔴 THE FIRST VERSION LOOKED FOR TWO ADJACENT UNITS OF WORK ON ONE BACKEND,
+ * AND THAT CAN NEVER HAPPEN. Measured rather than assumed: postgres-js
+ * round-robins, so the pids cycle 56801 → 56802 → 56803 → 56801 in a strict
+ * rotation and two CONSECUTIVE calls are guaranteed to differ. The original
+ * passed only while the pool had a single connection open, which was never
+ * something it promised — and the moment master merged in and the process held
+ * three, all three tests went red saying, correctly, that they had not
+ * exercised a handoff.
+ *
+ * The fix is not a retry, it is a better question. A handoff is not two calls
+ * in a row: it is a connection RETURNED to the pool and later REUSED by
+ * something else, which is exactly what the rotation produces a few calls
+ * later. Waiting for the same backend to come round is the production shape,
+ * not an approximation of it.
+ */
+async function onBackend(pid: number, next: () => Promise<Seen>): Promise<Seen> {
+  const seen: number[] = []
+  for (let attempt = 0; attempt < 24; attempt += 1) {
+    const result = await next()
+    if (result.pid === pid) return result
+    seen.push(result.pid)
+  }
+  throw new Error(
+    `backend ${pid} never came round again in 24 units of work (saw ${[...new Set(seen)].join(', ')}), ` +
+      `so this test could not exercise a handoff and refuses to report a result.`,
+  )
+}
+
 beforeAll(async () => {
   sql = postgres(TEST_URL, { max: 1, onnotice: () => {} })
 
@@ -168,7 +201,7 @@ describe('a job does not leave its tenant on the connection a request then takes
     // dispatcher wakes, does cross-tenant work, and hands the connection back
     // to a pool a seller's page load is about to draw from.
     const job = await asJob(TENANT_JOB)
-    const request = await asSeller(TENANT_WEB, SELLER_WEB)
+    const request = await onBackend(job.pid, () => asSeller(TENANT_WEB, SELLER_WEB))
     sameBackend(job, request)
 
     expect(job.tenants).toEqual(['Folded Job Tenant'])
@@ -206,16 +239,19 @@ describe('a job does not leave its tenant on the connection a request then takes
     // dispatcher that dies mid-job is an ordinary Tuesday (an SMS provider
     // timing out, a lease expiring), not an exotic case, so the guarantee is
     // worth holding rather than assuming.
-    const before = await asJob(TENANT_JOB)
-
+    // The pid is read INSIDE the job that then fails, so the request below
+    // waits for the very connection the ROLLBACK happened on. Anything else
+    // would test a connection that never carried the failure.
+    let thrownOn = -1
     await expect(
-      withSystemWork(TENANT_JOB, () => {
+      withSystemWork(TENANT_JOB, async (tx) => {
+        thrownOn = shape((await tx.execute<ProbeRow>(PROBE))[0]).pid
         throw new Error('the provider timed out mid-job')
       }),
     ).rejects.toThrow('the provider timed out mid-job')
+    expect(thrownOn, 'the failing job never reached the database').toBeGreaterThan(0)
 
-    const request = await asSeller(TENANT_WEB, SELLER_WEB)
-    sameBackend(before, request)
+    const request = await onBackend(thrownOn, () => asSeller(TENANT_WEB, SELLER_WEB))
     expect(request.contacts, 'a failed job left its tenant on the connection').toEqual([
       'WEB-ONLY Contact',
     ])
@@ -229,7 +265,7 @@ describe('a request does not leave its tenant on the connection a job then takes
     // is the door the dispatcher WRITES through, so it would fire one tenant's
     // reminder against another tenant's records.
     const request = await asSeller(TENANT_WEB, SELLER_WEB)
-    const job = await asJob(TENANT_JOB)
+    const job = await onBackend(request.pid, () => asJob(TENANT_JOB))
     sameBackend(request, job)
 
     expect(job.tenant).toBe(TENANT_JOB)
