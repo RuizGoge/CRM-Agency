@@ -7,6 +7,19 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### ✅ EL PISO DE POLLING QUEDA COMPLETO: LAS TRES SUPERFICIES SON CONDICIONALES (2026-08-09)
+`routes/ui/leaderboard.tsx` · `use-conditional-poll.ts` · `polling.spec.ts`. **107 → 109 e2e.** Sin migración.
+
+**La tercera y más cara.** El leaderboard poll-eaba con `revalidator.revalidate()` cada **5 s por vendedora** — un `/earnings.data` sin tag que respondía `200` siempre. Ahora usa el mismo hook contra `/api/leaderboard`. **Medido en navegador: `200` y después `304`, `304`, y CERO polls a `.data`.**
+
+- **El período viaja en el path** (`?period=all_time`), porque el selector es una navegación real y `readBoard` lo lee de la URL. Poll-ear la ruta pelada le habría servido All-time en silencio a alguien mirando Today.
+- **El tag se suelta cuando cambia el path.** Verificado: al cambiar a Today sale `?period=day` con `200` y después `304`. Un tag que sobrevive al recurso que describe es la forma exacta de un 304 rancio.
+- **Ésta es la superficie que §1183 supone barata** — los 2 ms por 304 que hacen que un poll de cinco segundos sea compatible con USD 7/mes de cómputo. Hasta hoy cada uno de esos requests era una consulta completa y una serialización completa.
+
+**Consecuencia: la pata del PISO de la Puerta 6 ya es medible.** Las tres superficies responden conditional GET por el camino que el producto realmente usa, con 16 e2e sobre los dos brazos. Lo que falta para correrla es el generador de carga —50 vendedoras simuladas— y ése no depende de nadie.
+
+⚠️ **Sigue sin comprar lo que §1183 modela:** el tag sale del payload renderizado, así que un 304 ahorra la transferencia y no el trabajo. La medición del piso es lo que debe decidir si hace falta la forma barata (watermark + bucket de tiempo), y no al revés.
+
 ### 🔁 LOS DOS POLLERS QUE FALTABAN, Y DOS TESTS MÍOS QUE CORRÍAN CARRERAS (2026-08-09)
 `app/lib/http/use-conditional-poll.ts` · `routes/ui/board.tsx` · `routes/ui/my-day.tsx` · `tests/e2e/polling.spec.ts`. **102 → 107 e2e.** Sin migración.
 
