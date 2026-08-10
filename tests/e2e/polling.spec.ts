@@ -3,17 +3,23 @@ import { expect, test, type Page, type Response } from '@playwright/test'
 import { createOpenCard, removeCard, type FixtureCard } from './fixtures/board-data'
 import { expectCount, expectUrl } from './fixtures/clock'
 import { signIn } from './fixtures/seller'
-import { POLL_SLOW_MS } from '~/styles/tokens/timing'
+import { POLL_FAST_MS, POLL_SLOW_MS } from '~/styles/tokens/timing'
 
 /**
- * The two pollers that did not exist.
+ * All three polled surfaces, on the conditional path.
  *
- * `POLL_SLOW_MS` named My Day and the board as its two consumers and had **zero
- * readers** — the constant sat in the tokens module while neither screen polled
- * at all. Both cover what OTHER systems did: a meeting that ended, a task that
- * came due, a card that went overdue. A seller who left either open through a
- * morning was reading a screen that stopped being today's the moment it
- * rendered.
+ * TWO OF THEM DID NOT POLL AT ALL. `POLL_SLOW_MS` named My Day and the board as
+ * its two consumers and had **zero readers** — the constant sat in the tokens
+ * module while neither screen polled. Both cover what OTHER systems did: a
+ * meeting that ended, a task that came due, a card that went overdue. A seller
+ * who left either open through a morning was reading a screen that stopped
+ * being today's the moment it rendered.
+ *
+ * THE THIRD POLLED AND BYPASSED THE MECHANISM. The leaderboard called
+ * `revalidator.revalidate()`, which re-runs the UI loader: an `/earnings.data`
+ * request with no entity tag, answering `200` three ticks out of three, every
+ * five seconds per seller. It is the most expensive surface in the floor and
+ * §1183's whole cost model assumes it is the cheapest.
  *
  * A FAKE CLOCK, so fifteen seconds costs nothing — the same
  * `page.clock.install()` the celebration suite uses. Waiting real intervals
@@ -29,11 +35,17 @@ import { POLL_SLOW_MS } from '~/styles/tokens/timing'
  */
 
 const desktopOnly = 'one poll mechanism, one profile'
-const TICK = POLL_SLOW_MS + 1_000
 
+/**
+ * THE INTERVAL IS PER SURFACE, not one constant for all three. The leaderboard
+ * runs at `POLL_FAST_MS`; fast-forwarding it by the SLOW interval would fire it
+ * three times inside one "tick" and the 200-then-304 sequence would be read off
+ * the wrong response.
+ */
 const SURFACES = [
-  { screen: '/board', api: '/api/board', label: 'the board' },
-  { screen: '/my-day', api: '/api/my-day', label: 'My Day' },
+  { screen: '/board', api: '/api/board', label: 'the board', every: POLL_SLOW_MS },
+  { screen: '/my-day', api: '/api/my-day', label: 'My Day', every: POLL_SLOW_MS },
+  { screen: '/earnings', api: '/api/leaderboard', label: 'the public board', every: POLL_FAST_MS },
 ] as const
 
 /** Every response this surface produced, collected driver-side. */
@@ -57,12 +69,12 @@ function collector(page: Page, api: string): Response[] {
  * pass — the same code, decided by which screen hydrates faster, which is the
  * same shape of flake `fixtures/clock.ts` records for the undo suite.
  */
-async function nextTick(page: Page, seen: Response[]): Promise<Response> {
+async function nextTick(page: Page, seen: Response[], every: number): Promise<Response> {
   const before = seen.length
   await expect
     .poll(
       async () => {
-        await page.clock.fastForward(TICK)
+        await page.clock.fastForward(every + 1_000)
         return seen.length
       },
       { timeout: 15_000 },
@@ -93,7 +105,7 @@ test.describe('the polled surfaces actually poll', () => {
       // the loader rendered through the framework rather than through
       // `jsonConditional`, so there is no entity tag to inherit and the poller
       // has nothing to send until it has been answered once.
-      const first = await nextTick(page, seen)
+      const first = await nextTick(page, seen, surface.every)
       expect(first.status()).toBe(200)
       const tag = first.headers()['etag']
       expect(tag, `${surface.api} served no tag, so no later tick can be conditional`).toBeTruthy()
@@ -106,7 +118,7 @@ test.describe('the polled surfaces actually poll', () => {
       // REAL path: its payload carries the NEW clock's starting second, so
       // without that projection the tag would differ on every tick and this
       // would be a 200 for ever.
-      const second = await nextTick(page, seen)
+      const second = await nextTick(page, seen, surface.every)
       expect(second.status(), `${surface.api} re-sent an unchanged payload`).toBe(304)
       expect(second.headers()['etag']).toBe(tag)
     })
@@ -127,7 +139,7 @@ test.describe('the polled surfaces actually poll', () => {
       const seen = collector(page, surface.api)
       // Drain one tick, so the count below is about the hidden tab rather than
       // about the poller not having started.
-      await nextTick(page, seen)
+      await nextTick(page, seen, surface.every)
       const beforeHidden = seen.length
 
       await page.evaluate(() => {
@@ -138,7 +150,7 @@ test.describe('the polled surfaces actually poll', () => {
         document.dispatchEvent(new Event('visibilitychange'))
       })
 
-      await page.clock.fastForward(TICK * 3)
+      await page.clock.fastForward((surface.every + 1_000) * 3)
       // Three intervals of nothing. Given from Node, so a frozen page clock
       // cannot make this pass by never checking.
       await expect.poll(() => seen.length, { timeout: 3_000 }).toBe(beforeHidden)
@@ -182,7 +194,7 @@ test.describe('the polled surfaces actually poll', () => {
       const seen = collector(page, '/api/board')
       // Let a tick land first, so there IS a fetched payload for the move to
       // have to beat.
-      await nextTick(page, seen)
+      await nextTick(page, seen, POLL_SLOW_MS)
 
       const holder = page.locator('main section').filter({ hasText: card.contactName }).first()
       const fromName = (await holder.getAttribute('aria-label')) ?? ''
@@ -210,7 +222,7 @@ test.describe('the polled surfaces actually poll', () => {
 
       // And it STAYS moved across the next tick, which is exactly where a hook
       // that preferred its own cache would put it back.
-      await nextTick(page, seen)
+      await nextTick(page, seen, POLL_SLOW_MS)
       await expect.poll(landedIn, { timeout: 10_000 }).not.toBe(fromName)
     } finally {
       await removeCard(card)

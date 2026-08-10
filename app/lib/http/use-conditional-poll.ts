@@ -68,6 +68,13 @@ export function useConditionalPoll<T>(options: {
     let cancelled = false
     let timer: ReturnType<typeof setInterval> | undefined
 
+    // A HELD TAG BELONGS TO A PATH. The leaderboard's path carries the selected
+    // period, so without this a seller switching to Today would send All-time's
+    // tag. The server would answer 200 rather than anything wrong, so the cost
+    // is one request — but a tag that outlives the resource it describes is the
+    // shape of a stale-304 bug, and it is cheaper to not have one.
+    tag.current = null
+
     const tick = (): void => {
       // NEVER TWO AT ONCE. A slow response on a 15-second interval would
       // otherwise stack requests against a server that is already the reason
