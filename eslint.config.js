@@ -4,7 +4,17 @@ import tseslint from 'typescript-eslint'
 
 export default tseslint.config(
   {
-    ignores: ['build/**', '.react-router/**', 'node_modules/**', 'app/db/migrations/**'],
+    // `.claude/worktrees/**` is the same repository checked out again inside
+    // itself. Git skips them; eslint would otherwise lint every sibling
+    // branch's tree from here, which is what made `verify` unpassable in the
+    // main checkout. See the note in .prettierignore.
+    ignores: [
+      'build/**',
+      '.react-router/**',
+      'node_modules/**',
+      'app/db/migrations/**',
+      '.claude/worktrees/**',
+    ],
   },
 
   js.configs.recommended,

@@ -6,3 +6,14 @@ package-lock.json
 docs/
 CONTEXT.md
 PROMPT-MAESTRO-Levantamiento-CRM-Leads.md
+
+# A worktree is a second checkout of THIS repository living inside the first.
+# Git knows that and skips them; prettier and eslint do not, so every tool run
+# in the main checkout walked into every sibling branch's files. The symptom was
+# `verify` failing in the main checkout with 169 style issues in code that was
+# not being changed there — which made the main checkout the one place in this
+# project where nothing could be committed at all.
+#
+# Each worktree formats and lints its own tree. Nothing is skipped; it is
+# checked once, where it is being edited, instead of N times from N branches.
+.claude/worktrees/
