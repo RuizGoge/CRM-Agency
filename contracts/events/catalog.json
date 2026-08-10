@@ -1,0 +1,1210 @@
+{
+  "$about": [
+    "The 49-event contract of docs/02b-integration-map.md, made mechanical.",
+    "",
+    "CLAUDE.md describes app/lib/events/** as 'the 49-event contract, generated",
+    "from contracts/events/' and states that 'an event outside the canonical 49",
+    "is a bug, not a feature'. NEITHER DIRECTORY EXISTED. The contract lived only",
+    "as prose in a 57 KB markdown table, which means the rule was documentation",
+    "and the constitution's own test — a type that does not compile, a build that",
+    "goes red — was not met by it.",
+    "",
+    "This file is the source. scripts/generate-events.ts turns it into",
+    "app/lib/events/catalog.generated.ts and scripts/events-contract.test.ts",
+    "makes drift a red build in both directions.",
+    "",
+    "WHY THE GHOSTS MATTER AS MUCH AS THE CATALOG. §2 of 02b calls them 'the real",
+    "finding': 262 declared events reconciled to 40, and every collision was a",
+    "silent integration failure that would have shipped. A module waiting for",
+    "`opportunity.closed_won` never fires on a sale, and nothing anywhere goes",
+    "red — the sale simply is not celebrated, tasks are not closed, and reporting",
+    "is short one row. A positive registry cannot catch that: the ghost name never",
+    "appears in the catalog, so a checker that only validates catalog membership",
+    "sees a name it does not know rather than a name that was RULED OUT and knows",
+    "the difference matters. The ghosts carry their remap target and their",
+    "consequence so the failure names itself.",
+    "",
+    "TWO PLACES WHERE THIS FILE DEPARTS FROM THE DOCUMENT, both deliberate:",
+    "",
+    "1. MONEY. §4's payloads name money fields with a `_usd` suffix —",
+    "   `deal_value_annual_premium_usd`, `delta_usd`, `amount_usd`. That suffix",
+    "   invites a JS number, which CLAUDE.md makes a build error outside",
+    "   app/lib/money/**. Every one of them is typed `money` here and generates as",
+    "   the branded Money type, crossing JSON as a string of whole cents. The",
+    "   suffix is dropped from the field name so the wire shape cannot be read as",
+    "   dollars. This is a naming change, not a semantic one.",
+    "",
+    "2. THE ENVELOPE IS NOT REPEATED IN PAYLOADS. §4's first row spells the nine",
+    "   envelope fields into lead.created's payload and then writes 'ENVELOPE, …'",
+    "   for the rest. Repeating them per event is how two definitions drift, so",
+    "   the envelope is declared once, here, and composed by the generator.",
+    "",
+    "PAYLOAD PROVENANCE IS MARKED, because the two halves of the catalog were not",
+    "specified to the same depth. The 40 of §4 carry a ratified field list. The 9",
+    "of §4b Amendment 1 carry an emitter, a trigger and a rationale but NO payload",
+    "table — so their fields here are derived from those three sentences and are",
+    "flagged `\"payload\": \"derived\"`. A derived payload is a proposal that compiles,",
+    "not a ratified contract, and the module that first emits one should be the",
+    "thing that settles it."
+  ],
+
+  "count": {
+    "core": 40,
+    "amendment_1": 9,
+    "total": 49
+  },
+
+  "envelope": {
+    "$note": "§3. Not one of the 262 originally-declared events carried one. Default-deny scoping: every consumer filters by tenant_id and, unless it is the leaderboard projection, by owner_user_id.",
+    "fields": {
+      "event_id": "uuid",
+      "tenant_id": "uuid",
+      "owner_user_id": "uuid",
+      "actor_user_id": "uuid?",
+      "occurred_at_utc_ms": "ts_ms",
+      "recorded_at_utc_ms": "ts_ms",
+      "schema_version": "int",
+      "source_system": "enum:app|aloware|vendor_post|scheduler|import",
+      "correlation_id": "uuid"
+    }
+  },
+
+  "events": [
+    {
+      "name": "lead.created",
+      "emitter": "lead-intake",
+      "payload": {
+        "contact_id": "uuid",
+        "opportunity_id": "uuid",
+        "source_channel": "enum:vendor_ping_post|web_form|inbound_call|manual|csv_import|referral",
+        "vendor_id": "uuid?",
+        "vendor_lead_id": "string?",
+        "received_at_utc_ms": "ts_ms",
+        "phone_e164": "string",
+        "email": "string?",
+        "contact_timezone": "string",
+        "state_code": "string",
+        "product_interest": "enum:final_expense|iul",
+        "tcpa_consent_flag": "bool",
+        "consent_certificate_url": "string?",
+        "consent_captured_at": "ts?",
+        "dedupe_status": "enum:unique|auto_merged|flagged_for_review"
+      },
+      "consumers": [
+        "pipeline",
+        "activities",
+        "notifications",
+        "communications",
+        "automations",
+        "contacts",
+        "reporting",
+        "audit"
+      ],
+      "note": "Starts the speed-to-lead clock; received_at_utc_ms is millisecond precision because the measurement runs from here. NEVER emit without owner_user_id — in a silo model an unowned lead is invisible to everyone."
+    },
+    {
+      "name": "lead.duplicate_detected",
+      "emitter": "lead-intake",
+      "payload": {
+        "incoming_payload_ref": "string",
+        "incoming_source_channel": "enum:vendor_ping_post|web_form|inbound_call|manual|csv_import|referral",
+        "matched_contact_id": "uuid",
+        "matched_owner_user_id": "uuid",
+        "match_basis": "enum:phone_e164|email|name_dob",
+        "match_confidence": "int",
+        "incoming_tcpa_consent_flag": "bool",
+        "incoming_consent_certificate_url": "string?",
+        "resolution": "enum:auto_merged|queued_for_review|rejected"
+      },
+      "consumers": ["contacts", "notifications", "admin", "reporting", "audit"],
+      "note": "Silo rule: the payload may name matched_owner_user_id, but no consumer may render the other seller's lead detail to the incoming path."
+    },
+    {
+      "name": "lead.import_completed",
+      "emitter": "lead-intake",
+      "payload": {
+        "import_id": "uuid",
+        "rows_total": "int",
+        "rows_created": "int",
+        "rows_merged": "int",
+        "rows_rejected": "int",
+        "reject_reasons": "string[]",
+        "declared_consent_source": "string",
+        "default_product_interest": "enum:final_expense|iul"
+      },
+      "consumers": ["notifications", "contacts", "pipeline", "reporting", "audit"],
+      "note": "Import is the second dedupe checkpoint, not a bypass of the first."
+    },
+    {
+      "name": "contact.created",
+      "emitter": "contacts",
+      "payload": {
+        "contact_id": "uuid",
+        "created_via": "enum:lead_intake|manual|inbound_call|import|merge_survivor",
+        "phone_e164": "string",
+        "email": "string?",
+        "full_name": "string"
+      },
+      "consumers": ["audit", "search", "reporting"],
+      "note": "Deliberately low-consumption. NOT an automation trigger — the plain-English vocabulary uses 'lead created'. Keeping both prevents Intake and Contacts from double-emitting the same business fact."
+    },
+    {
+      "name": "contact.merged",
+      "emitter": "contacts",
+      "payload": {
+        "surviving_contact_id": "uuid",
+        "merged_contact_id": "uuid",
+        "surviving_owner_user_id": "uuid",
+        "merged_owner_user_id": "uuid",
+        "field_resolution_map": "json",
+        "opportunities_moved": "json[]",
+        "timeline_entries_moved_count": "int",
+        "consent_resolution": "enum:most_restrictive_wins"
+      },
+      "consumers": [
+        "pipeline",
+        "communications",
+        "earnings",
+        "activities",
+        "contacts",
+        "reporting",
+        "audit"
+      ],
+      "note": "The cross-silo landmine: a merge can move a closed-won deal between sellers and therefore move money on a public leaderboard. Consent resolution takes the most restrictive value — an opt-out on either record wins."
+    },
+    {
+      "name": "contact.became_client",
+      "emitter": "contacts",
+      "payload": {
+        "contact_id": "uuid",
+        "first_policy_opportunity_id": "uuid",
+        "first_policy_product_type": "enum:final_expense|iul",
+        "annual_premium": "money",
+        "issued_at": "ts",
+        "cross_sell_eligible_products": "string[]",
+        "age_band": "string?",
+        "state_code": "string"
+      },
+      "consumers": ["automations", "pipeline", "activities", "reporting", "audit"],
+      "note": "Consumed from opportunity.won on the contact's FIRST win. This is what turns a one-shot FE sale into a second opportunity on the same contact."
+    },
+    {
+      "name": "consent.updated",
+      "emitter": "contacts",
+      "payload": {
+        "contact_id": "uuid",
+        "channel": "enum:sms|call|email|whatsapp_reserved",
+        "status": "enum:granted|revoked|dnc_suppressed",
+        "reason": "enum:stop_keyword|manual|dnc_list|vendor_certificate|recycle_revalidation",
+        "evidence_ref": "string?",
+        "effective_at": "ts",
+        "previous_status": "enum:granted|revoked|dnc_suppressed?"
+      },
+      "consumers": [
+        "communications",
+        "automations",
+        "pipeline",
+        "notifications",
+        "admin",
+        "reporting",
+        "audit"
+      ],
+      "note": "ONE canonical consent event. Aloware enforces DNC/STOP on its side; we mirror it so our UI never offers a button that will be refused, and so we can prove state at any point in time."
+    },
+    {
+      "name": "opportunity.created",
+      "emitter": "pipeline",
+      "payload": {
+        "opportunity_id": "uuid",
+        "contact_id": "uuid",
+        "pipeline_id": "uuid",
+        "stage_id": "uuid",
+        "product_type": "enum:final_expense|iul",
+        "deal_value_annual_premium": "money?",
+        "created_from": "enum:cross_sell|recycle|manual|lead_intake",
+        "parent_opportunity_id": "uuid?"
+      },
+      "consumers": ["activities", "automations", "contacts", "reporting", "audit"],
+      "note": "Intake-born opportunities are announced by lead.created, which carries opportunity_id — this one is cross-sell, recycle or manual."
+    },
+    {
+      "name": "opportunity.stage_changed",
+      "emitter": "pipeline",
+      "payload": {
+        "opportunity_id": "uuid",
+        "contact_id": "uuid",
+        "from_stage_id": "uuid",
+        "from_stage_name": "string",
+        "to_stage_id": "uuid",
+        "to_stage_name": "string",
+        "to_stage_is_closed": "bool",
+        "to_stage_closed_type": "enum:won|lost?",
+        "deal_value_annual_premium": "money?",
+        "product_type": "enum:final_expense|iul",
+        "days_in_previous_stage": "int",
+        "moved_via": "enum:kanban_drag|command_palette|mobile|automation",
+        "required_fields_satisfied": "string[]"
+      },
+      "consumers": [
+        "automations",
+        "activities",
+        "contacts",
+        "notifications",
+        "reporting",
+        "communications",
+        "audit"
+      ],
+      "note": "Must carry to_stage_is_closed/closed_type RESOLVED AT MOVE TIME — stage config is per-seller mutable, so a consumer re-reading config later can reach a different answer than the moment of the move. Earnings deliberately does NOT consume this; it consumes opportunity.won only."
+    },
+    {
+      "name": "opportunity.won",
+      "emitter": "pipeline",
+      "payload": {
+        "opportunity_id": "uuid",
+        "contact_id": "uuid",
+        "deal_value_annual_premium": "money",
+        "product_type": "enum:final_expense|iul",
+        "carrier": "string?",
+        "policy_number": "string?",
+        "stage_id": "uuid",
+        "closed_at": "ts",
+        "source_channel": "enum:vendor_ping_post|web_form|inbound_call|manual|csv_import|referral?",
+        "vendor_id": "uuid?",
+        "days_from_lead_created": "int?",
+        "touches_to_close": "json"
+      },
+      "consumers": [
+        "earnings",
+        "notifications",
+        "contacts",
+        "activities",
+        "automations",
+        "communications",
+        "reporting",
+        "audit"
+      ],
+      "note": "THE money event. deal_value_annual_premium is non-null and enforced by the win gate, which is what guarantees Earnings math is never blank."
+    },
+    {
+      "name": "opportunity.lost",
+      "emitter": "pipeline",
+      "payload": {
+        "opportunity_id": "uuid",
+        "contact_id": "uuid",
+        "loss_reason_code": "enum:price_affordability|not_contactable|already_insured|does_not_qualify|not_interested|no_funds",
+        "loss_reason_note": "string?",
+        "stage_id_at_loss": "uuid",
+        "deal_value_at_loss": "money?",
+        "product_type": "enum:final_expense|iul",
+        "recyclable": "bool",
+        "recycle_eligible_at": "ts?"
+      },
+      "consumers": ["automations", "activities", "contacts", "reporting", "notifications", "audit"],
+      "note": "Loss reasons are tenant-configurable but the code list must stay stable; Reporting keys on loss_reason_code, never the label."
+    },
+    {
+      "name": "opportunity.value_changed",
+      "emitter": "pipeline",
+      "payload": {
+        "opportunity_id": "uuid",
+        "contact_id": "uuid",
+        "old_value": "money",
+        "new_value": "money",
+        "is_closed_won": "bool",
+        "stage_id": "uuid",
+        "changed_by_user_id": "uuid",
+        "reason_note": "string?"
+      },
+      "consumers": ["earnings", "reporting", "notifications", "audit"],
+      "note": "The single most-forgotten link in the money chain. If Earnings only listens to opportunity.won, editing a premium after close silently corrupts a PUBLIC all-time leaderboard."
+    },
+    {
+      "name": "opportunity.reopened",
+      "emitter": "pipeline",
+      "payload": {
+        "opportunity_id": "uuid",
+        "contact_id": "uuid",
+        "from_stage_id": "uuid",
+        "previous_closed_type": "enum:won|lost",
+        "to_stage_id": "uuid",
+        "deal_value_reversed": "money",
+        "reason_note": "string?",
+        "reopened_by_user_id": "uuid"
+      },
+      "consumers": ["earnings", "reporting", "notifications", "activities", "audit"],
+      "note": "Non-negotiable for an ALL-TIME board: with no monthly reset, an un-reversed bad win is wrong forever. This is why earnings is an append-only delta ledger, not a mutable total."
+    },
+    {
+      "name": "opportunity.went_cold",
+      "emitter": "pipeline",
+      "payload": {
+        "opportunity_id": "uuid",
+        "contact_id": "uuid",
+        "stage_id": "uuid",
+        "stage_name": "string",
+        "last_activity_at": "ts?",
+        "last_activity_type": "string?",
+        "days_since_last_activity": "int",
+        "threshold_days": "int",
+        "deal_value_annual_premium": "money?",
+        "tcpa_consent_flag": "bool"
+      },
+      "consumers": ["pipeline", "activities", "automations", "notifications", "reporting", "audit"],
+      "note": "ONE event, not four — 'stale', 'rotting', 'idle', 'dormant' all collapse here. Fires once per crossing (idempotent per opportunity per cold episode) or it becomes notification spam. R1.7: one threshold, cold_threshold_days, default 7. Board rot styling is derived from last_activity_at, not from a second event."
+    },
+    {
+      "name": "opportunity.recycled",
+      "emitter": "pipeline",
+      "payload": {
+        "opportunity_id": "uuid",
+        "contact_id": "uuid",
+        "previous_outcome": "enum:lost|cold",
+        "previous_loss_reason_code": "string?",
+        "recycled_into_stage_id": "uuid",
+        "consent_revalidated": "bool",
+        "consent_age_days": "int",
+        "tcpa_consent_flag": "bool",
+        "new_opportunity_id": "uuid?"
+      },
+      "consumers": [
+        "activities",
+        "automations",
+        "communications",
+        "contacts",
+        "reporting",
+        "audit"
+      ],
+      "note": "Recycling aged leads is a TCPA landmine: consent gathered 14 months ago may no longer be defensible. consent_age_days must ride the event so Communications can refuse."
+    },
+    {
+      "name": "call.initiated",
+      "emitter": "communications",
+      "payload": {
+        "call_id": "uuid",
+        "aloware_call_id": "string?",
+        "contact_id": "uuid",
+        "opportunity_id": "uuid?",
+        "direction": "enum:outbound|inbound",
+        "initiated_via": "enum:call_now_button|power_dialer|chrome_extension|manual",
+        "tcpa_consent_flag": "bool",
+        "consent_evidence_ref": "string?",
+        "dnc_checked": "bool",
+        "contact_timezone": "string",
+        "local_time_at_contact": "string",
+        "seller_caller_id": "string",
+        "initiated_at_utc_ms": "ts_ms"
+      },
+      "consumers": ["activities", "pipeline", "contacts", "reporting", "automations", "audit"],
+      "note": "Emitted by us before Aloware confirms; reconciled by call.completed on aloware_call_id. Carrying consent + local time on the dial event is what makes TCPA provable per call rather than per contact."
+    },
+    {
+      "name": "call.completed",
+      "emitter": "communications",
+      "payload": {
+        "call_id": "uuid",
+        "aloware_call_id": "string",
+        "contact_id": "uuid",
+        "opportunity_id": "uuid?",
+        "direction": "enum:outbound|inbound",
+        "disposition_raw": "string",
+        "disposition_canonical": "enum:connected|no_answer|voicemail|busy|missed|wrong_number|dnc_request|callback_requested",
+        "talk_time_seconds": "int",
+        "ring_time_seconds": "int",
+        "recording_url": "string?",
+        "started_at": "ts",
+        "ended_at": "ts",
+        "agent_user_id": "uuid"
+      },
+      "consumers": [
+        "contacts",
+        "activities",
+        "pipeline",
+        "automations",
+        "reporting",
+        "earnings",
+        "notifications",
+        "audit"
+      ],
+      "note": "Idempotent on aloware_call_id — webhooks retry and arrive out of order. 'Missed call' in the automation vocabulary is this event filtered to direction=inbound + disposition_canonical=missed; it is NOT a separate event."
+    },
+    {
+      "name": "call.enriched",
+      "emitter": "communications",
+      "payload": {
+        "call_id": "uuid",
+        "aloware_call_id": "string",
+        "contact_id": "uuid",
+        "opportunity_id": "uuid?",
+        "parts_available": "string[]",
+        "recording_url": "string?",
+        "transcript_url": "string?",
+        "ai_summary_text": "string?",
+        "detected_next_steps": "string[]",
+        "sentiment": "string?"
+      },
+      "consumers": ["contacts", "activities", "pipeline", "reporting", "audit"],
+      "note": "Three Aloware webhooks (recording / transcript / summary) collapse into ONE internal event with parts_available[] so consumers need one handler, not three. Updates the EXISTING timeline entry in place — never a duplicate row."
+    },
+    {
+      "name": "message.sent",
+      "emitter": "communications",
+      "payload": {
+        "message_id": "uuid",
+        "channel": "enum:sms|email|whatsapp_reserved",
+        "contact_id": "uuid",
+        "opportunity_id": "uuid?",
+        "template_id": "uuid?",
+        "body": "string",
+        "sent_by": "enum:user|automation",
+        "sequence_enrollment_id": "uuid?",
+        "related_appointment_id": "uuid?",
+        "tcpa_consent_flag": "bool",
+        "provider_message_id": "string?",
+        "provider_status": "string?"
+      },
+      "consumers": ["contacts", "activities", "pipeline", "reporting", "automations", "audit"],
+      "note": "Channel-agnostic by design — the whatsapp_reserved slot is how WhatsApp arrives later without a new event family. Appointment reminders ARE messages: there is no separate appointment.reminder_sent event, it is this with related_appointment_id."
+    },
+    {
+      "name": "message.received",
+      "emitter": "communications",
+      "payload": {
+        "message_id": "uuid",
+        "channel": "enum:sms|email|whatsapp_reserved",
+        "contact_id": "uuid?",
+        "opportunity_id": "uuid?",
+        "body": "string",
+        "intent_hint": "enum:stop|help|reply|out_of_office?",
+        "provider_message_id": "string",
+        "received_at": "ts",
+        "unknown_sender": "bool"
+      },
+      "consumers": [
+        "automations",
+        "notifications",
+        "activities",
+        "communications",
+        "contacts",
+        "pipeline",
+        "reporting",
+        "audit"
+      ],
+      "note": "AUTO-PAUSES every active sequence — the reply rule. A lead replying while a robot keeps texting is the fastest way to lose trust and invite a TCPA complaint, so this must reach Automations before the next sequence step is due. intent_hint=stop drives consent.updated."
+    },
+    {
+      "name": "message.delivery_failed",
+      "emitter": "communications",
+      "payload": {
+        "message_id": "uuid",
+        "channel": "enum:sms|email|whatsapp_reserved",
+        "contact_id": "uuid",
+        "opportunity_id": "uuid?",
+        "error_code": "string",
+        "provider_error": "string",
+        "is_hard_bounce": "bool",
+        "suggested_action": "enum:mark_bad_number|mark_bad_email|retry"
+      },
+      "consumers": [
+        "contacts",
+        "communications",
+        "activities",
+        "notifications",
+        "reporting",
+        "audit"
+      ],
+      "note": "Bad-contact-data rate per vendor_id is a purchasing lever for the owner, not just a technical error log."
+    },
+    {
+      "name": "appointment.scheduled",
+      "emitter": "calendar",
+      "payload": {
+        "appointment_id": "uuid",
+        "contact_id": "uuid",
+        "opportunity_id": "uuid?",
+        "starts_at_utc": "ts",
+        "contact_timezone": "string",
+        "duration_minutes": "int",
+        "appointment_type": "enum:phone|video|in_person",
+        "dial_number_or_location": "string?",
+        "created_via": "enum:pipeline_card|my_day|command_palette|during_call",
+        "google_event_id": "string?",
+        "reminder_plan": "json[]"
+      },
+      "consumers": [
+        "pipeline",
+        "activities",
+        "automations",
+        "notifications",
+        "contacts",
+        "calendar",
+        "reporting",
+        "audit"
+      ],
+      "note": "starts_at_utc + contact_timezone are both mandatory: reminders fired in the wrong local time are both useless and a TCPA hours risk. Booking also auto-pauses nurture sequences — booked means stop selling the meeting."
+    },
+    {
+      "name": "appointment.rescheduled",
+      "emitter": "calendar",
+      "payload": {
+        "appointment_id": "uuid",
+        "contact_id": "uuid",
+        "opportunity_id": "uuid?",
+        "old_starts_at_utc": "ts",
+        "new_starts_at_utc": "ts",
+        "contact_timezone": "string",
+        "reason": "string?",
+        "rescheduled_by": "enum:seller|contact|automation_recovery",
+        "originating_no_show_id": "uuid?"
+      },
+      "consumers": [
+        "activities",
+        "automations",
+        "pipeline",
+        "calendar",
+        "notifications",
+        "reporting",
+        "audit"
+      ],
+      "note": "originating_no_show_id is what lets Reporting prove the no-show recovery flow actually recovers revenue."
+    },
+    {
+      "name": "appointment.canceled",
+      "emitter": "calendar",
+      "payload": {
+        "appointment_id": "uuid",
+        "contact_id": "uuid",
+        "opportunity_id": "uuid?",
+        "scheduled_start_utc": "ts",
+        "canceled_by": "enum:seller|contact|system",
+        "reason": "string?"
+      },
+      "consumers": ["activities", "automations", "pipeline", "notifications", "reporting", "audit"],
+      "note": "US spelling with one L, matching the catalog. The ghost `meeting.cancelled` is the two-L British form and is registered as such."
+    },
+    {
+      "name": "appointment.completed",
+      "emitter": "calendar",
+      "payload": {
+        "appointment_id": "uuid",
+        "contact_id": "uuid",
+        "opportunity_id": "uuid?",
+        "scheduled_start_utc": "ts",
+        "actual_duration_minutes": "int?",
+        "outcome_note": "string?",
+        "linked_call_id": "uuid?",
+        "marked_by": "enum:seller|auto_from_call"
+      },
+      "consumers": [
+        "pipeline",
+        "activities",
+        "automations",
+        "contacts",
+        "reporting",
+        "earnings",
+        "audit"
+      ],
+      "note": "linked_call_id is what ties an Aloware phone appointment to its recording and AI summary in one timeline entry."
+    },
+    {
+      "name": "appointment.no_showed",
+      "emitter": "calendar",
+      "payload": {
+        "appointment_id": "uuid",
+        "contact_id": "uuid",
+        "opportunity_id": "uuid?",
+        "scheduled_start_utc": "ts",
+        "contact_timezone": "string",
+        "marked_at": "ts",
+        "marked_by": "enum:seller|auto_after_grace",
+        "grace_minutes": "int",
+        "attempt_call_ids": "uuid[]",
+        "tcpa_consent_flag": "bool",
+        "reschedule_attempt_number": "int"
+      },
+      "consumers": [
+        "activities",
+        "automations",
+        "pipeline",
+        "notifications",
+        "reporting",
+        "contacts",
+        "audit"
+      ],
+      "note": "Plain-English named on purpose, not a generic appointment.status_changed — the automation vocabulary must read like a sentence a seller would say."
+    },
+    {
+      "name": "calendar.sync_failed",
+      "emitter": "calendar",
+      "payload": {
+        "user_id": "uuid",
+        "provider": "enum:google",
+        "error_code": "string",
+        "error_message": "string",
+        "affected_appointment_ids": "uuid[]",
+        "retry_count": "int",
+        "connection_state": "enum:expired_token|revoked|rate_limited"
+      },
+      "consumers": ["notifications", "admin", "audit"],
+      "note": "Silent calendar drift is how a seller misses a meeting and blames the CRM. Self-service reconnection is the point. Google Calendar sync itself is deferred to V1.1 — this event exists so the deferral does not have to be undone by adding a name later."
+    },
+    {
+      "name": "activity.created",
+      "emitter": "activities",
+      "payload": {
+        "activity_id": "uuid",
+        "type": "enum:call|sms|email|task|appointment_link|note",
+        "contact_id": "uuid",
+        "opportunity_id": "uuid?",
+        "title": "string",
+        "due_at_utc": "ts?",
+        "priority": "string?",
+        "created_by": "enum:user|automation|system_rule",
+        "source_event_id": "uuid?",
+        "source_event_name": "string?",
+        "linked_appointment_id": "uuid?"
+      },
+      "consumers": ["my-day", "pipeline", "notifications", "reporting", "audit"],
+      "note": "source_event_name is what lets a seller ask 'why is this on my list today' and get a real answer. A single Activity object is what makes My Day possible."
+    },
+    {
+      "name": "activity.completed",
+      "emitter": "activities",
+      "payload": {
+        "activity_id": "uuid",
+        "type": "enum:call|sms|email|task|appointment_link|note",
+        "contact_id": "uuid",
+        "opportunity_id": "uuid?",
+        "completed_at": "ts",
+        "outcome": "string?",
+        "auto_completed": "bool",
+        "completing_event_id": "uuid?",
+        "completing_event_name": "string?"
+      },
+      "consumers": ["pipeline", "earnings", "reporting", "contacts", "automations", "audit"],
+      "note": "Auto-completion from call/SMS events is the whole point: the seller never does bookkeeping, and the cold-lead rule stays honest because last_activity_at is real."
+    },
+    {
+      "name": "activity.overdue",
+      "emitter": "activities",
+      "payload": {
+        "activity_id": "uuid",
+        "type": "enum:call|sms|email|task|appointment_link|note",
+        "contact_id": "uuid",
+        "opportunity_id": "uuid?",
+        "due_at_utc": "ts",
+        "hours_overdue": "int",
+        "escalation_level": "int"
+      },
+      "consumers": ["notifications", "my-day", "pipeline", "reporting", "audit"],
+      "note": "Idempotent per activity per escalation_level, or it becomes the notification firehose that trains sellers to ignore the app."
+    },
+    {
+      "name": "sequence.enrolled",
+      "emitter": "automations",
+      "payload": {
+        "enrollment_id": "uuid",
+        "sequence_id": "uuid",
+        "sequence_name": "string",
+        "contact_id": "uuid",
+        "opportunity_id": "uuid?",
+        "enrolled_by": "enum:user|automation",
+        "trigger_event_id": "uuid?",
+        "steps_count": "int",
+        "first_step_due_at": "ts",
+        "tcpa_consent_flag": "bool",
+        "aloware_sequence_id": "string?"
+      },
+      "consumers": ["communications", "activities", "contacts", "reporting", "audit"],
+      "note": "Enrollment state is OURS even when Aloware executes. Two engines with two states is how a replied lead keeps getting texted."
+    },
+    {
+      "name": "sequence.paused",
+      "emitter": "automations",
+      "payload": {
+        "enrollment_id": "uuid",
+        "sequence_id": "uuid",
+        "contact_id": "uuid",
+        "opportunity_id": "uuid?",
+        "pause_reason": "enum:contact_replied|appointment_booked|opportunity_closed|consent_revoked|dnc|manual",
+        "triggering_event_id": "uuid?",
+        "triggering_event_name": "string?",
+        "paused_at": "ts",
+        "steps_remaining": "int"
+      },
+      "consumers": ["communications", "contacts", "notifications", "reporting", "audit"],
+      "note": "ONE pause event with a reason, not four differently-named ones. pause_reason=consent_revoked has legal weight and must stay distinguishable from a friendly reply-pause forever. Communications MUST call Aloware disenroll or Aloware keeps sending."
+    },
+    {
+      "name": "sequence.completed",
+      "emitter": "automations",
+      "payload": {
+        "enrollment_id": "uuid",
+        "sequence_id": "uuid",
+        "contact_id": "uuid",
+        "opportunity_id": "uuid?",
+        "steps_executed": "int",
+        "outcome": "enum:no_response|replied_late|booked"
+      },
+      "consumers": ["activities", "automations", "reporting", "audit"],
+      "note": "Creates a human-touch task — a finished robot must hand back to a person."
+    },
+    {
+      "name": "automation.executed",
+      "emitter": "automations",
+      "payload": {
+        "automation_id": "uuid",
+        "template_id": "uuid",
+        "trigger_event_name": "string",
+        "trigger_event_id": "uuid",
+        "contact_id": "uuid?",
+        "opportunity_id": "uuid?",
+        "actions_performed": "string[]",
+        "result": "enum:success|partial|failed",
+        "error_code": "string?",
+        "error_message": "string?"
+      },
+      "consumers": ["admin", "notifications", "reporting", "audit"],
+      "note": "This is the answer to 'why did the system text my lead?'. Without it, automation becomes a black box sellers distrust and disable. Note what is NOT here: automation.action_requested was deleted so automations call the owning module's command path instead of writing through a parallel path that bypasses every gate."
+    },
+    {
+      "name": "earnings.updated",
+      "emitter": "earnings",
+      "payload": {
+        "seller_user_id": "uuid",
+        "delta": "money",
+        "new_total_all_time": "money",
+        "period_key": "string",
+        "triggering_opportunity_id": "uuid",
+        "triggering_event_id": "uuid",
+        "triggering_event_name": "string",
+        "product_type": "enum:final_expense|iul?",
+        "effective_at": "ts"
+      },
+      "consumers": [
+        "leaderboard",
+        "seller-dashboard",
+        "admin",
+        "notifications",
+        "reporting",
+        "audit"
+      ],
+      "note": "Append-only SIGNED deltas with a period_key on every row. Never store a mutable total as the source of truth. delta is signed: a reversal is a negative append, not an edit — the ledger is forward-only and there is no recompute job."
+    },
+    {
+      "name": "leaderboard.rank_changed",
+      "emitter": "earnings",
+      "payload": {
+        "period_key": "string",
+        "seller_user_id": "uuid",
+        "seller_display_name": "string",
+        "seller_avatar_url": "string?",
+        "old_rank": "int?",
+        "new_rank": "int",
+        "new_total_all_time": "money",
+        "podium_entered": "bool",
+        "podium_displaced_user_id": "uuid?",
+        "overtaken_seller_user_id": "uuid?",
+        "computed_at": "ts"
+      },
+      "consumers": ["leaderboard", "kiosk", "notifications", "celebration", "reporting", "audit"],
+      "note": "Carries names, avatars, totals and ranks ONLY — never lead data. This is how performance stays public while books of business stay private, and it is the one legitimate cross-silo broadcast."
+    },
+    {
+      "name": "celebration.triggered",
+      "emitter": "notifications",
+      "payload": {
+        "celebration_type": "enum:closed_won|podium_entry|personal_best|most_improved",
+        "seller_user_id": "uuid",
+        "seller_display_name": "string",
+        "amount": "money?",
+        "product_type": "enum:final_expense|iul?",
+        "source_event_id": "uuid",
+        "message_template_id": "string",
+        "broadcast_scope": "enum:tenant_wide|kiosk_only|owner_only",
+        "muted_for_user_ids": "uuid[]"
+      },
+      "consumers": ["in-app-toast", "kiosk", "push", "leaderboard", "reporting", "audit"],
+      "note": "Fired AFTER the undo window (undo_deadline, 5000 ms) — never at the moment of the drag. amount display is a supervisor policy toggle; some floors celebrate the win, not the number."
+    },
+    {
+      "name": "pipeline.stage_config_changed",
+      "emitter": "admin",
+      "payload": {
+        "pipeline_id": "uuid",
+        "scope": "enum:tenant_template|user_override",
+        "affected_user_ids": "uuid[]",
+        "stages_before": "json[]",
+        "stages_after": "json[]",
+        "closed_flags_changed": "json[]",
+        "required_fields_changed": "json[]",
+        "affected_opportunity_count": "int",
+        "migration_map": "json"
+      },
+      "consumers": ["pipeline", "earnings", "automations", "reporting", "notifications", "audit"],
+      "note": "The nastiest hidden dependency in the system: a per-seller stage tweak can silently move a PUBLIC leaderboard. Almost every module spec forgets this event exists. Automations with stage-bound rules may now point at a deleted stage — must be flagged, not silently broken."
+    },
+    {
+      "name": "admin.setting_changed",
+      "emitter": "admin",
+      "payload": {
+        "setting_key": "string",
+        "scope": "enum:tenant|user",
+        "scoped_to_user_id": "uuid?",
+        "old_value": "string?",
+        "new_value": "string?",
+        "changed_by_user_id": "uuid"
+      },
+      "consumers": ["reporting", "notifications", "audit"],
+      "note": "Deliberately generic ONLY for low-blast-radius settings. Anything that can move money — stage closed flags — gets its own explicit event. Routed to the owning module by setting_key."
+    },
+    {
+      "name": "user.deactivated",
+      "emitter": "admin",
+      "payload": {
+        "user_id": "uuid",
+        "role": "enum:seller|supervisor|admin",
+        "book_of_business_size": "int",
+        "open_opportunity_ids": "uuid[]",
+        "reassign_to_user_id": "uuid?",
+        "earnings_disposition": "enum:keep_in_history|exclude_from_board",
+        "closed_won_total": "money"
+      },
+      "consumers": [
+        "earnings",
+        "pipeline",
+        "communications",
+        "calendar",
+        "notifications",
+        "reporting",
+        "audit"
+      ],
+      "note": "An all-time leaderboard with no departure policy eventually shows a #1 who left two years ago. earnings_disposition forces the decision at the moment it matters."
+    },
+
+    {
+      "name": "lead.reposted",
+      "emitter": "lead-intake",
+      "amendment": 1,
+      "payload": "derived",
+      "payload_fields": {
+        "contact_id": "uuid",
+        "opportunity_id": "uuid",
+        "vendor_id": "uuid",
+        "vendor_lead_id": "string",
+        "previous_received_at_utc_ms": "ts_ms",
+        "received_at_utc_ms": "ts_ms",
+        "fields_updated": "string[]"
+      },
+      "consumers": ["contacts", "reporting", "audit"],
+      "note": "A vendor re-posts a lead the same seller already owns; the record updates in place instead of creating a second card. Without it the re-post is invisible: no timeline entry, and the vendor's duplicate rate cannot be measured."
+    },
+    {
+      "name": "compliance.send_blocked",
+      "emitter": "compliance",
+      "amendment": 1,
+      "payload": "derived",
+      "payload_fields": {
+        "contact_id": "uuid",
+        "opportunity_id": "uuid?",
+        "channel": "enum:sms|call|email|whatsapp_reserved",
+        "reason": "enum:outside_window|no_consent|stop|dnc|10dlc_pending|bad_number",
+        "attempted_via": "string",
+        "lead_local_time": "string",
+        "blocked_at": "ts"
+      },
+      "consumers": ["contacts", "notifications", "admin", "reporting", "audit"],
+      "note": "THE NUMBER THAT PROVES THE GATE WORKS. Without it we can count sends and failures but never REFUSALS. The plain-English reason is written to the timeline, so `reason` must stay a stable code that the microcopy maps from."
+    },
+    {
+      "name": "compliance.override_started",
+      "emitter": "admin",
+      "amendment": 1,
+      "payload": "derived",
+      "payload_fields": {
+        "override_id": "uuid",
+        "scope": "enum:tenant",
+        "reason": "string",
+        "started_by_user_id": "uuid",
+        "expires_at": "ts?"
+      },
+      "consumers": ["communications", "notifications", "admin", "reporting", "audit"],
+      "note": "Break-glass. Legally load-bearing: who opened the door, and when."
+    },
+    {
+      "name": "compliance.override_ended",
+      "emitter": "admin",
+      "amendment": 1,
+      "payload": "derived",
+      "payload_fields": {
+        "override_id": "uuid",
+        "ended_by": "enum:admin|expiry",
+        "ended_by_user_id": "uuid?",
+        "duration_seconds": "int",
+        "sends_permitted_count": "int"
+      },
+      "consumers": ["communications", "notifications", "admin", "reporting", "audit"],
+      "note": "Duration is what an auditor asks for. sends_permitted_count answers the second question they ask."
+    },
+    {
+      "name": "appointment.starting_soon",
+      "emitter": "calendar",
+      "amendment": 1,
+      "payload": "derived",
+      "payload_fields": {
+        "appointment_id": "uuid",
+        "contact_id": "uuid",
+        "opportunity_id": "uuid?",
+        "starts_at_utc": "ts",
+        "minutes_until": "int"
+      },
+      "consumers": ["notifications", "my-day", "audit"],
+      "note": "T-15m. The notification trigger both the flows and the stories assumed existed. Distinct from the T-1h SMS reminder, which is a message.sent with related_appointment_id."
+    },
+    {
+      "name": "opportunity.gate_blocked",
+      "emitter": "pipeline",
+      "amendment": 1,
+      "payload": "derived",
+      "payload_fields": {
+        "opportunity_id": "uuid",
+        "contact_id": "uuid",
+        "to_stage_id": "uuid",
+        "to_stage_type": "enum:earning|lost",
+        "missing_fields": "string[]",
+        "attempted_via": "enum:kanban_drag|command_palette|mobile|automation|api",
+        "blocked_at": "ts"
+      },
+      "consumers": ["reporting", "audit"],
+      "note": "Proves the win/loss guard is FIRING rather than being bypassed. Binds to stage_type, never to a stage name — renaming a column must change nothing."
+    },
+    {
+      "name": "contact.owner_changed",
+      "emitter": "admin",
+      "amendment": 1,
+      "payload": "derived",
+      "payload_fields": {
+        "contact_id": "uuid",
+        "old_owner_user_id": "uuid",
+        "new_owner_user_id": "uuid",
+        "opportunities_moved": "uuid[]",
+        "closed_won_moved": "money",
+        "reason": "string",
+        "changed_by_user_id": "uuid"
+      },
+      "consumers": ["pipeline", "earnings", "communications", "reporting", "audit"],
+      "note": "Ownership moves leads AND money between books; it cannot be silent. Admin-only and single-record by design — this is the exact seam where a routing engine would get smuggled in against the silo rule."
+    },
+    {
+      "name": "contact.bad_number_flagged",
+      "emitter": "contacts",
+      "amendment": 1,
+      "payload": "derived",
+      "payload_fields": {
+        "contact_id": "uuid",
+        "phone_e164": "string",
+        "flagged_via": "enum:failed_dial|delivery_failure|manual",
+        "source_event_id": "uuid?",
+        "flagged_at": "ts"
+      },
+      "consumers": ["communications", "pipeline", "reporting", "audit"],
+      "note": "Drives dial suppression and vendor data-quality reporting. A number marked bad must stop being offered by every surface that dials, or the seller keeps burning attempts on a line that cannot connect."
+    },
+    {
+      "name": "integration.mapping_verified",
+      "emitter": "admin",
+      "amendment": 1,
+      "payload": "derived",
+      "payload_fields": {
+        "user_id": "uuid",
+        "provider": "enum:aloware",
+        "provider_number_e164": "string",
+        "verified_via": "enum:test_call|test_sms",
+        "verified_at": "ts"
+      },
+      "consumers": ["communications", "admin", "notifications", "audit"],
+      "note": "THE ROLLOUT GUARD: an unverified map silently routes leads into the wrong book. This is item 1 of the first-run checklist, which cannot complete until this event can be emitted."
+    }
+  ],
+
+  "ghosts": {
+    "$note": [
+      "Names that were RULED OUT, with the remap target and the consequence of",
+      "using them. §2 calls these the real finding — each one is a silent",
+      "integration failure, so the gate reports the consequence and not just",
+      "'unknown event'.",
+      "",
+      "PRECEDENCE NOTE: §2 remapped `lead.assigned_owner_changed` to",
+      "`lead.owner_changed`, admin-only. §4b Amendment 1 then landed",
+      "`contact.owner_changed` in the catalog instead. `lead.owner_changed` is",
+      "therefore NOT one of the 49 and is itself a ghost — an intermediate ruling",
+      "that reads like a decision if you stop at §2."
+    ],
+    "names": [
+      {
+        "ghost": "opportunity.closed_won",
+        "use": "opportunity.won",
+        "consequence": "Six modules were waiting for this name. Celebration, task-closing and reporting never fire on a sale — and nothing goes red."
+      },
+      {
+        "ghost": "lead.went_cold",
+        "use": "opportunity.went_cold",
+        "consequence": "The 7-day cold rule has no home; board badges never appear. Cold is a property of the opportunity, not of the lead."
+      },
+      {
+        "ghost": "email.received",
+        "use": "message.received",
+        "consequence": "Sequences never auto-pause on reply — robots keep texting people who already answered."
+      },
+      {
+        "ghost": "sms.received",
+        "use": "message.received",
+        "consequence": "Same as email.received. The channel is an enum on one event, which is also how WhatsApp arrives later without touching a consumer."
+      },
+      {
+        "ghost": "sms.opt_out_received",
+        "use": "consent.updated",
+        "consequence": "A STOP is honored on SMS but NOT on the dialer. One canonical consent event is what makes a revocation reach every channel."
+      },
+      {
+        "ghost": "meeting.booked",
+        "use": "appointment.scheduled",
+        "consequence": "Booked meetings never reach My Day or the card."
+      },
+      {
+        "ghost": "meeting.cancelled",
+        "use": "appointment.canceled",
+        "consequence": "Booked meetings never reach My Day or the card. Note the spelling: the catalog is en-US with one L."
+      },
+      {
+        "ghost": "task.created",
+        "use": "activity.created",
+        "consequence": "Two activity models. My Day becomes a lie because half the work is in the other one."
+      },
+      {
+        "ghost": "task.completed",
+        "use": "activity.completed",
+        "consequence": "Two activity models, and the staleness clock reads the wrong one — so the cold rule fires on leads that were just worked."
+      },
+      {
+        "ghost": "task.overdue",
+        "use": "activity.overdue",
+        "consequence": "Two activity models; overdue escalation silently covers half the work."
+      },
+      {
+        "ghost": "tenant.settings_changed",
+        "use": "admin.setting_changed",
+        "consequence": "Cold threshold changes are silently ignored."
+      },
+      {
+        "ghost": "pipeline.settings_updated",
+        "use": "pipeline.stage_config_changed",
+        "consequence": "Stage-flag changes are silently ignored — which means a closed_won toggle moves a PUBLIC leaderboard with no recompute."
+      },
+      {
+        "ghost": "automation.action_requested",
+        "use": "",
+        "consequence": "DELETED, not remapped. Four modules expected it. Automations call the owning module's command path instead; a dedicated action event is a parallel write path that bypasses every gate — including the one compliance gate."
+      },
+      {
+        "ghost": "lead.assigned_owner_changed",
+        "use": "contact.owner_changed",
+        "consequence": "Routing sneaking in the back door. Ownership is bound deterministically at the source; there is no routing engine."
+      },
+      {
+        "ghost": "lead.owner_changed",
+        "use": "contact.owner_changed",
+        "consequence": "§2's intermediate remap target, superseded by §4b. Reading §2 alone and stopping there produces this name."
+      },
+      {
+        "ghost": "speed_to_lead.stopped",
+        "use": "call.completed",
+        "consequence": "Derived, not an event. First-touch latency is a field on the opportunity computed from call.completed. An event here would be a second source of truth for a number the board already shows."
+      },
+      {
+        "ghost": "earnings.credited",
+        "use": "earnings.updated",
+        "consequence": "Redundant. earnings.updated carries a SIGNED delta plus the triggering event; three names for one fact re-creates the drift this catalog exists to prevent."
+      },
+      {
+        "ghost": "earnings.reversed",
+        "use": "earnings.updated",
+        "consequence": "Redundant — a reversal is a negative delta on the one event. A separate name invites a mutable total."
+      },
+      {
+        "ghost": "earnings.adjusted",
+        "use": "earnings.updated",
+        "consequence": "Redundant — an admin adjustment is a signed delta with its own triggering_event_name."
+      },
+      {
+        "ghost": "notification.dispatched",
+        "use": "",
+        "consequence": "No consumer in the MVP. The notification-fatigue metric it would feed is out of scope."
+      },
+      {
+        "ghost": "book.viewed",
+        "use": "",
+        "consequence": "Rejected: surveillance with no operational payoff."
+      },
+      {
+        "ghost": "touch.recorded",
+        "use": "activity.completed",
+        "consequence": "A projection, not an event. last_activity_at is derived; a second writer is how it stops matching the timeline."
+      },
+      {
+        "ghost": "conversation.needs_reply",
+        "use": "message.received",
+        "consequence": "Derived. It is a state on the thread, not an event."
+      },
+      {
+        "ghost": "meeting.outcome_recorded",
+        "use": "appointment.completed",
+        "consequence": "Remapped — the outcome is carried by appointment.completed or appointment.no_showed, which is what makes held-rate reporting possible."
+      },
+      {
+        "ghost": "stage_config.changed",
+        "use": "pipeline.stage_config_changed",
+        "consequence": "Stage-flag changes silently ignored, including the closed_won toggle that moves money."
+      },
+      {
+        "ghost": "lead.imported",
+        "use": "lead.import_completed",
+        "consequence": "The import is a job with a result, not a per-row fact. Per-row emission would flood every consumer."
+      },
+      {
+        "ghost": "call.recording_ready",
+        "use": "call.enriched",
+        "consequence": "Three Aloware webhooks collapse into one internal event with parts_available[]. Three names means three handlers and three chances to duplicate the timeline row."
+      },
+      {
+        "ghost": "call.transcript_ready",
+        "use": "call.enriched",
+        "consequence": "Same collapse — parts_available[] carries which half arrived."
+      },
+      {
+        "ghost": "call.summary_ready",
+        "use": "call.enriched",
+        "consequence": "Same collapse — the AloAi summary is a part, not an event."
+      },
+      {
+        "ghost": "sms.sent",
+        "use": "message.sent",
+        "consequence": "Channel is an enum on one event. A per-channel event family is what makes WhatsApp a rewrite instead of a new enum member."
+      },
+      {
+        "ghost": "email.sent",
+        "use": "message.sent",
+        "consequence": "Channel is an enum on one event. Email itself is deferred to V1.1; the slot is already here."
+      },
+      {
+        "ghost": "meeting.reminder_sent",
+        "use": "message.sent",
+        "consequence": "A reminder IS a message — message.sent with related_appointment_id. A separate event would let a reminder skip the one compliance gate that every message passes."
+      },
+      {
+        "ghost": "pipeline.card_moved",
+        "use": "opportunity.stage_changed",
+        "consequence": "The board is not an event source. A card is a rendering of an opportunity; emitting from the UI is how a move made by API never reaches a consumer."
+      }
+    ]
+  }
+}
