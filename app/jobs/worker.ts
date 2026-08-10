@@ -1,6 +1,8 @@
 import { PgBoss } from 'pg-boss'
 
+import { ensurePartitions } from '~/db'
 import { dispatchDueJobs } from '~/modules/calendar/dispatch'
+import { relayOnce } from '~/modules/events/relay'
 import { mergeCallFromEvent, type CallMergeJob } from '~/modules/communications/call-merge'
 import { mergeMessageFromEvent, type MessageMergeJob } from '~/modules/communications/message-merge'
 
@@ -24,6 +26,55 @@ import { CALL_MERGE_QUEUE, DISPATCH_CRON, DISPATCH_QUEUE, MESSAGE_MERGE_QUEUE } 
  */
 
 let boss: PgBoss | null = null
+
+/**
+ * The relay's poll floor.
+ *
+ * ADR-005 applies the NOTIFY-carries-a-watermark rule internally too: a wake-up
+ * may be missed, and missing one must cost at most a second rather than the
+ * event. One second is not a pg-boss cron — its floor is a minute — which is
+ * why the relay runs its own timer instead of becoming a queue.
+ */
+const RELAY_INTERVAL_MS = 1_000
+
+let relayTimer: NodeJS.Timeout | null = null
+let relayStopped = false
+
+/**
+ * setTimeout that re-arms AFTER the pass, never setInterval.
+ *
+ * With an interval, a pass that takes longer than the period overlaps itself,
+ * and two passes racing means two claims of the same lease window — which the
+ * `FOR UPDATE SKIP LOCKED` claim survives but the handler workload does not
+ * need to. Re-arming after the pass makes overlap impossible by construction.
+ */
+function scheduleRelay(): void {
+  if (relayStopped) return
+  relayTimer = setTimeout(() => {
+    void (async () => {
+      try {
+        const outcome = await relayOnce()
+        if (outcome.claimed > 0) {
+          console.log(
+            `[relay] claimed ${outcome.claimed}: ${outcome.delivered} delivered, ` +
+              `${outcome.failed} failed, ${outcome.unhandled} unhandled`,
+          )
+        }
+      } catch (err: unknown) {
+        // The loop must survive its own failures. A relay that dies on one bad
+        // pass stops delivering everything, and the symptom — an outbox that
+        // fills — looks identical to no traffic.
+        console.error('[relay] pass failed:', err instanceof Error ? err.message : String(err))
+      } finally {
+        scheduleRelay()
+      }
+    })()
+  }, RELAY_INTERVAL_MS)
+
+  // Do not hold the process open on this timer alone. A web process folded with
+  // the worker should still exit when its server closes.
+  relayTimer.unref()
+}
 
 export function workerEnabled(): boolean {
   // Default ON when unset, so a deployment that forgets the variable runs the
@@ -62,7 +113,27 @@ export async function startWorker(): Promise<PgBoss | null> {
 
   await instance.start()
 
+  // 🔴 RE-ASSERTED AT BOOT, and this is not defensive tidying.
+  //
+  // `event_outbox` is partitioned by DAY with no default partition, and
+  // `app.event_emit` writes its fan-out rows inside the EMITTING transaction.
+  // The first insert past the last partition raises 23514 and takes the whole
+  // emitting transaction with it — which, once `app.stage_move` emits, is a
+  // seller watching a sale refuse to commit.
+  //
+  // 0043 called `ensure_event_partitions` ONCE, inside itself, and nothing has
+  // called it since: the horizon it created ran to 2026-08-24 and then stopped.
+  // The constitution accepts three kinds of guarantee and "a job somebody
+  // scheduled once" is none of them, so this runs at boot AND on the tick
+  // below.
+  await ensurePartitions()
+
   await instance.work(DISPATCH_QUEUE, async () => {
+    // Cheap and idempotent — CREATE TABLE IF NOT EXISTS across a fixed horizon.
+    // On the tick as well as at boot because a process that has been up for a
+    // month has not re-asserted anything since the month it started in.
+    await ensurePartitions()
+
     const outcome = await dispatchDueJobs()
     if (outcome.claimed > 0) {
       console.log(
@@ -112,11 +183,24 @@ export async function startWorker(): Promise<PgBoss | null> {
   // install.
   await instance.schedule(DISPATCH_QUEUE, DISPATCH_CRON)
 
+  // The outbox relay is NOT a pg-boss queue, and the reason is the poll floor:
+  // ADR-005 wants one second and cron's floor is a minute. The outbox owns
+  // fan-out, pg-boss owns scheduling, and giving the relay to pg-boss would put
+  // both of them in charge of delivery.
+  relayStopped = false
+  scheduleRelay()
+
   boss = instance
   return instance
 }
 
 export async function stopWorker(): Promise<void> {
+  relayStopped = true
+  if (relayTimer !== null) {
+    clearTimeout(relayTimer)
+    relayTimer = null
+  }
+
   if (!boss) return
   const instance = boss
   boss = null

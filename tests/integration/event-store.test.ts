@@ -36,6 +36,40 @@ const catalog = JSON.parse(readFileSync('contracts/events/catalog.json', 'utf8')
 const WON_CONSUMERS =
   catalog.events.find((e) => e.name === 'opportunity.won')?.consumers.length ?? 0
 
+/**
+ * 🔴 THE FAN-OUT IS NOT THE CONSUMER LIST. Migration 0051 filters it by
+ * delivery tier, and `earnings` is `inline` for this event because
+ * `app.stage_move` already appends to the ledger inside the emitting
+ * transaction (0019_undo_pairs.sql:257). An outbox row for it would ask the
+ * relay to credit the same sale a second time — permanently, since the ledger
+ * is append-only with no recompute job.
+ *
+ * Derived rather than written down, so that promoting a consumer back to
+ * `outbox` in a migration moves this number instead of leaving a stale literal.
+ */
+const WON_INLINE = ['earnings']
+
+/**
+ * And 0052 withholds a second group: a consumer whose handler does not exist in
+ * the tree gets no fan-out row either, because an outbox row means "this
+ * consumer still owes this event" and a module that was never built owes
+ * nothing. Today `audit` is the only built handler, so the fan-out for any
+ * event is exactly one row.
+ *
+ * READ FROM THE ENGINE rather than written down, so that building the second
+ * handler moves this number instead of leaving a literal that lies. The
+ * assertions below then check WHICH consumers are present and absent, which is
+ * the part a count cannot express.
+ */
+async function fanoutWidth(eventName: string): Promise<number> {
+  const [row] = await sql<{ n: number }[]>`
+    SELECT count(*)::int AS n FROM app.event_consumer
+     WHERE event_name = ${eventName}::app.event_name
+       AND delivery IN ('outbox', 'pgboss')
+       AND handler_built`
+  return row?.n ?? 0
+}
+
 let sql: postgres.Sql
 
 const EVENT_A = '01999999-0000-7000-8000-00000000ea01'
@@ -85,10 +119,46 @@ describe('the event and its fan-out land together', () => {
     const [out] = await sql<{ n: number }[]>`
       SELECT count(*)::int AS n FROM app.event_outbox
        WHERE tenant_id = ${TENANT} AND event_id = ${EVENT_A}`
-    // Exactly the catalog's consumers for this event — the registry is the
-    // fan-out list, which is what the foreign key makes true rather than hoped.
-    expect(out?.n).toBe(WON_CONSUMERS)
+    // The registry is the fan-out list — what the foreign key makes true rather
+    // than hoped — minus the two groups that must not receive a row.
+    expect(out?.n).toBe(await fanoutWidth('opportunity.won'))
+
+    // The gap is REAL and it is the point: the catalog declares eight consumers
+    // for this event and one of them can be delivered to. Asserted so that the
+    // day it closes, somebody reads this line and understands why it moved.
     expect(WON_CONSUMERS).toBeGreaterThan(5)
+    expect(await fanoutWidth('opportunity.won')).toBeLessThan(WON_CONSUMERS)
+  })
+
+  it('gives an INLINE consumer no fan-out row, so a sale is credited once', async () => {
+    // 🎯 THE ASSERTION THAT STOPS A DOUBLE CREDIT, and it names the consumer
+    // instead of counting rows. Before 0051 the fan-out ignored the delivery
+    // tier, so `earnings` received an outbox row for a sale `app.stage_move`
+    // had ALREADY appended to the ledger. Nothing was broken yet only because
+    // no relay handler existed; the day one did, one sale would have produced
+    // two credits and the public board would have read double, forever.
+    //
+    // Mutation: drop `AND ec.delivery IN ('outbox','pgboss')` from
+    // app.event_emit and this goes red with earnings present.
+    const rows = await sql<{ consumer_name: string }[]>`
+      SELECT consumer_name FROM app.event_outbox
+       WHERE tenant_id = ${TENANT} AND event_id = ${EVENT_A}`
+    const names = rows.map((r) => r.consumer_name)
+
+    for (const inline of WON_INLINE) {
+      expect(names, `${inline} runs inline and must not be delivered again`).not.toContain(inline)
+    }
+
+    // THE POSITIVE CONTROL, and without it this test passes over an empty
+    // outbox — the shape of assertion this project has already been bitten by,
+    // where "sees nothing" is satisfied by there being nothing.
+    expect(names).toContain('audit')
+
+    // And the other withheld group, stated separately because it is withheld
+    // for a different reason: `reporting` is declared for this event and has no
+    // handler in the tree, so it gets no row either. Same absence, different
+    // cause, and conflating them would hide the day one of them changes.
+    expect(names).not.toContain('reporting')
   })
 
   it('is idempotent on event_id, and does not fan out twice', async () => {
@@ -105,7 +175,7 @@ describe('the event and its fan-out land together', () => {
        WHERE tenant_id = ${TENANT} AND event_id = ${EVENT_A}`
 
     expect(ev?.n).toBe(1)
-    expect(out?.n).toBe(WON_CONSUMERS)
+    expect(out?.n).toBe(await fanoutWidth('opportunity.won'))
   })
 
   it('refuses to emit outside a tenant session', async () => {
@@ -175,9 +245,14 @@ describe('a partition inherits the parent, rather than escaping it', () => {
 })
 
 describe('the claim crosses tenants and carries no payload', () => {
-  it('returns four columns and none of them is the event body', async () => {
+  it('returns coordinates only, and none of them is the event body', async () => {
     // A claim that returned the payload would be a cross-tenant read of every
     // event body in the system wearing the costume of a queue.
+    //
+    // ⚠️ THIS LIST GREW FROM FOUR TO FIVE IN 0051, and the fifth is a partition
+    // key rather than anything about the event. `created_day` is part of the
+    // outbox primary key, so without it the ack cannot name the row it is
+    // acknowledging and would have to search every partition for it.
     const cols = await sql<{ name: string }[]>`
       SELECT p.proargnames[i] AS name
         FROM pg_proc p
@@ -185,12 +260,17 @@ describe('the claim crosses tenants and carries no payload', () => {
              generate_subscripts(p.proargnames, 1) i
        WHERE n.nspname = 'app' AND p.proname = 'outbox_claim'
          AND p.proargmodes[i] IN ('o', 't')`
-    expect(cols.map((c) => c.name).sort()).toEqual([
-      'consumer_name',
-      'event_id',
-      'event_name',
-      'tenant_id',
-    ])
+    const names = cols.map((c) => c.name).sort()
+
+    expect(names).toEqual(['consumer_name', 'created_day', 'event_id', 'event_name', 'tenant_id'])
+
+    // Stated as its own assertion rather than left implicit in the list above.
+    // The list is what someone edits when they add a column; this is what
+    // refuses the specific column that would matter, so widening the claim by
+    // one convenient field cannot pass by bumping an array.
+    for (const forbidden of ['payload', 'subject_id', 'owner_user_id', 'idempotency_key']) {
+      expect(names, `the claim must not carry ${forbidden}`).not.toContain(forbidden)
+    }
   })
 
   it('finds work in more than one agency in a single claim', async () => {

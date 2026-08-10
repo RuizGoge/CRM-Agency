@@ -135,8 +135,20 @@ describe('the snapshot chain is level with the migrations', () => {
     const created = new Set<string>()
     for (const file of readdirSync(MIGRATIONS).filter((f) => f.endsWith('.sql'))) {
       const statements = readFileSync(join(MIGRATIONS, file), 'utf8')
+      // ⚠️ `\s+ON\s` IS LOad-BEARING, and without it this gate reports an index
+      // called "IF". A dynamically created index reads
+      // `CREATE UNIQUE INDEX IF NOT EXISTS %I ON app.%I (...)` inside a
+      // format() string; `%` is not in the name class, so the engine backtracks
+      // past the optional `IF NOT EXISTS ` and captures `IF` as the name.
+      //
+      // Requiring the name to be followed by ON rejects that and — the point —
+      // skips the dynamic form entirely, which is the SAME treatment the table
+      // check above already gives a `format()` partition and for the same
+      // reason: an index created alongside a partition is storage for a
+      // declared parent, not something anybody models in Drizzle. Every
+      // literal CREATE INDEX still parses, which is what this gate is for.
       for (const match of statements.matchAll(
-        /CREATE (?:UNIQUE )?INDEX (?:CONCURRENTLY )?(?:IF NOT EXISTS )?"?([a-z0-9_]+)"?/gi,
+        /CREATE (?:UNIQUE )?INDEX (?:CONCURRENTLY )?(?:IF NOT EXISTS )?"?([a-z0-9_]+)"?\s+ON\s/gi,
       )) {
         const index = match[1]
         if (index !== undefined) created.add(index)

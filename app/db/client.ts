@@ -149,6 +149,77 @@ export async function claimDueJobs(limit = 50): Promise<ClaimedJob[]> {
   })
 }
 
+/** One owed delivery. Coordinates only — the body is fetched per tenant, after. */
+export interface ClaimedDelivery {
+  readonly tenantId: string
+  readonly createdDay: string
+  readonly eventId: string
+  readonly consumerName: string
+  readonly eventName: string
+}
+
+/**
+ * Takes a lease on the next batch of owed outbox deliveries, across all tenants.
+ *
+ * THE FIRST of the four sanctioned cross-tenant paths, and the same shape as
+ * `claimDueJobs` for the same reason: a function that runs one statement and
+ * returns rows, rather than a general-purpose `withoutTenantContext(fn)` escape
+ * hatch sitting in the one module that exists to make sure there is not one.
+ *
+ * IT CARRIES NO PAYLOAD, and that is asserted over `pg_proc` rather than
+ * trusted. The relay learns that consumer X owes event Y in tenant Z, then
+ * opens `withSystemWork(Z)` before reading a single byte of the body. A claim
+ * that returned the event body would be a cross-tenant read of every event in
+ * the system wearing the costume of a queue.
+ */
+export async function claimOutbox(limit = 50, worker = 'relay'): Promise<ClaimedDelivery[]> {
+  return db.transaction(async (tx) => {
+    await tx.execute(dropPrivilege)
+    const rows = await tx.execute<{
+      tenant_id: string
+      // `date` comes back as a string from this driver, and it stays one all
+      // the way to `app.outbox_ack`. Parsing it into a Date would re-introduce
+      // a timezone to a value that deliberately has none: it is a partition
+      // key, not an instant.
+      created_day: string
+      event_id: string
+      consumer_name: string
+      event_name: string
+    }>(sql`SELECT tenant_id, created_day::text AS created_day, event_id,
+                  consumer_name, event_name::text AS event_name
+             FROM app.outbox_claim(${limit}, interval '5 minutes', ${worker})`)
+
+    return [...rows].map((r) => ({
+      tenantId: r.tenant_id,
+      createdDay: r.created_day,
+      eventId: r.event_id,
+      consumerName: r.consumer_name,
+      eventName: r.event_name,
+    }))
+  })
+}
+
+/**
+ * Creates the event and audit partitions that the next days and months need.
+ *
+ * 🔴 THIS IS NOT HOUSEKEEPING. `event_outbox` is partitioned by day with NO
+ * default partition, and `app.event_emit` writes its fan-out rows inside the
+ * EMITTING transaction. So the first insert past the last partition raises
+ * 23514 and rolls back whatever was emitting — which, once `app.stage_move`
+ * emits, is a seller's sale refusing to commit.
+ *
+ * Called at boot AND on the dispatch tick, because the constitution accepts
+ * three kinds of guarantee and "a job somebody scheduled once" is none of them:
+ * re-assertion at deploy and at boot is the one that applies here.
+ */
+export async function ensurePartitions(): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx.execute(dropPrivilege)
+    await tx.execute(sql`SELECT app.ensure_event_partitions()`)
+    await tx.execute(sql`SELECT app.ensure_audit_partitions()`)
+  })
+}
+
 export async function withSystemWork<T>(tenantId: string, fn: (tx: Tx) => Promise<T>): Promise<T> {
   return db.transaction(async (tx) => {
     await tx.execute(sql`SELECT app.begin_system_work(${tenantId}::uuid)`)

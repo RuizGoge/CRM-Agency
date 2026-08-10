@@ -4,8 +4,16 @@
  * Everything else in `app/db/**` is unreachable from application code by build
  * rule, not by convention — see the DATA-ACCESS GUARD in `eslint.config.js`.
  */
-export { claimDueJobs, ingestWebhook, withSystemWork, withTenant } from './client'
+export {
+  claimDueJobs,
+  claimOutbox,
+  ensurePartitions,
+  ingestWebhook,
+  withSystemWork,
+  withTenant,
+} from './client'
 export type {
+  ClaimedDelivery,
   ClaimedJob,
   IngestInput,
   IngestOutcome,

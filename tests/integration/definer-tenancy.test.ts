@@ -68,6 +68,14 @@ const EXEMPT: ReadonlyMap<string, string> = new Map([
     'app.inbound_webhook_dead_letter',
     'The trigger half of the same path, on the ingest table. It fires inside a transaction that has no session context by construction, because the request that opened it is a provider POST rather than a seller. It moves a row and sets no tenant of its own.',
   ],
+  [
+    'app.ensure_audit_partitions',
+    'Cluster storage, exactly like app.ensure_event_partitions: a monthly partition of audit_log is shared by every agency at once, so there is no tenant whose session could scope its CREATE TABLE. Its entire body is CREATE TABLE IF NOT EXISTS, the per-partition dedupe index, and a call to security.harden(). It reads no tenant data and writes none.',
+  ],
+  [
+    'app.ensure_event_partitions',
+    'It operates on the CLUSTER, not on tenant data. A partition of event_log is storage shared by every agency at once, so there is no tenant whose session could scope a CREATE TABLE — asking it to read one would be asking which agency owns next month. It became a definer in 0051 because crm_app has no CREATE on schema app and no USAGE on schema security, so the invoker version could neither create the partition nor harden it. It reads and writes no tenant data of any kind: its only statements are CREATE TABLE IF NOT EXISTS and a call to security.harden().',
+  ],
 ])
 
 interface Fn {
@@ -151,6 +159,13 @@ describe('a definer function cannot forget the tenant', () => {
       // POST carries no session, and the endpoint token is what produces the
       // tenant rather than something that can be read from one.
       'app.dead_letter_write',
+      // Added by 0051 and 0053. The only entries on this list exempt for the
+      // SECOND reason rather than the first: they do not run before a tenant
+      // exists, they run where no tenant is the right answer. A partition is
+      // cluster storage, and both bodies are CREATE TABLE IF NOT EXISTS plus
+      // security.harden() and nothing else.
+      'app.ensure_audit_partitions',
+      'app.ensure_event_partitions',
       'app.inbound_webhook_dead_letter',
       'app.outbox_claim',
       'app.resolve_identity',

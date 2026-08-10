@@ -1,4 +1,4 @@
-import { primaryKey, text } from 'drizzle-orm/pg-core'
+import { boolean, integer, primaryKey, smallint, text } from 'drizzle-orm/pg-core'
 
 import { EVENT_NAMES } from '../../lib/events/catalog.generated'
 
@@ -38,6 +38,19 @@ export const retentionClass = app.enum('retention_class', ['permanent', 'archiva
 export const outboxStatus = app.enum('outbox_status', ['pending', 'claimed', 'delivered', 'dead'])
 
 /**
+ * How a consumer is reached, and the reason a sale is credited once.
+ *
+ * `inline` ran INSIDE the emitting transaction and must never receive a fan-out
+ * row — `app.stage_move` already appends to the ledger itself, so an outbox row
+ * for `earnings` would ask the relay to credit the same sale a second time. The
+ * ledger is append-only with no recompute job, so that second credit would be
+ * permanent and the first symptom would be a public leaderboard reading double.
+ *
+ * Migration 0051 adds the column and `app.event_emit` filters the fan-out on it.
+ */
+export const deliveryTier = app.enum('delivery_tier', ['inline', 'outbox', 'pgboss'])
+
+/**
  * Which consumer is subscribed to which event.
  *
  * The outbox carries a foreign key to this table, so **a fan-out row for a
@@ -55,6 +68,43 @@ export const eventConsumer = app.table(
   {
     consumerName: text('consumer_name').notNull(),
     eventName: eventName('event_name').notNull(),
+
+    /**
+     * NO DEFAULT, on purpose — 0051 drops the one it used to backfill. A
+     * migration that seeds a consumer has to NAME the tier, because the value
+     * decides whether a delivery happens twice.
+     */
+    delivery: deliveryTier('delivery').notNull(),
+
+    /**
+     * The retry ladder is a PER-CONSUMER column and never a global constant
+     * (ADR-009): a projection update and a text message to a lead cannot share
+     * one, because retrying the second is a second message to a real person.
+     */
+    maxAttempts: smallint('max_attempts').notNull(),
+    backoffSeconds: integer('backoff_seconds').array().notNull(),
+
+    /**
+     * True when delivery touches the world outside this database. A CHECK ties
+     * it to `max_attempts = 1` until a provider idempotency key exists to make
+     * a retry safe.
+     */
+    externalEffect: boolean('external_effect').notNull(),
+
+    /**
+     * Whether a handler for this consumer exists in the tree.
+     *
+     * `05-architecture.md`:826 rules that a registry row with no exported
+     * handler fails the build. Nineteen consumers are declared and three
+     * modules exist, so applying that literally today reddens the build in
+     * seventeen places. 0052 keeps the rule and makes the timing honest: the
+     * gap is a COLUMN, the fan-out reads it, and `outbox-relay.test.ts` asserts
+     * in both directions that it agrees with the relay's handler registry.
+     *
+     * The event is still written to `event_log` in full — only the delivery is
+     * withheld — so a consumer built later can be backfilled from the store.
+     */
+    handlerBuilt: boolean('handler_built').notNull(),
   },
   (t) => [primaryKey({ columns: [t.consumerName, t.eventName] })],
 )
