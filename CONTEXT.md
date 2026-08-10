@@ -127,7 +127,11 @@
 
    ⚠️ **Y un matiz que hoy el gate no hace: `call_list` está en `unknown`, no en `absent`.** El fallback está escrito para *absent*. Bajo esa propuesta, `absent` + control compensatorio arrancaría y **`unknown` seguiría rechazando**, porque `unknown` significa que nadie preguntó. El gate hoy los trata igual (`status !== 'verified'`) — correcto para `two_legged_call`, impreciso para éste.
 
-   **Costo:** `ALTER TYPE app.capability_tier ADD VALUE` (ver la nota de la 0006) más construir `admin_alert`, que no existe. **Lo que lo haría innecesario:** que soporte de Aloware confirme el endpoint de listado — G2 lo dejó *no documentado y no descubrible*, que **no es lo mismo que probado ausente**.
+   **Costo:** `ALTER TYPE app.capability_tier ADD VALUE` (ver la nota de la 0006) más construir `admin_alert`, que no existe.
+
+   ✅ **LA AUSENCIA AHORA TIENE DOS FUENTES INDEPENDIENTES (2026-08-06).** Hasta hoy colgaba sólo del panel de la cuenta. Leída la **documentación pública de Aloware**, la superficie completa que documenta es: Users (*"Get the List of Users"* — **el único endpoint de listado que existe**), Lead, Contact Lookup, Number Lookup, SMS, Two-Legged Call, Power Dialer, Sequence, Inbox Availability, Form Connect, Webhooks y MCP. **No hay historial ni listado de comunicaciones en ninguna parte**, y la lista coincide exactamente con las 14 pestañas que G2 leyó en el panel. Verificado sin tocar la cuenta.
+
+   **Sigue sin ser "probado ausente"** —sólo soporte puede afirmarlo, y la página del two-legged invita justamente a eso— pero la hipótesis *"a lo mejor existe y no lo encontramos"* queda bastante más débil, y con ella la opción de esperar. La recomendación del tercer tier es la que queda en pie.
 3. **La cuenta se suspende el 15/08.** Todo lo que necesite la cuenta real —el vocabulario de disposiciones sin cerrar, si `Call-Disposed` siempre acompaña, si hay configuración de anuncio saliente— hay que sacarlo antes.
 4. ⚠️ **`react-router dev` ignora el puerto que le asigna el harness** y hace su propio fallback a **3001**, que es el puerto del build de producción para Lighthouse. Un dev server vivo choca con el perfil `lh-ci`.
 
