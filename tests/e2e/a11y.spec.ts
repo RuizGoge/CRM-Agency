@@ -51,6 +51,20 @@ test.describe('every surface passes axe with no serious or critical finding', ()
     await page.goto('/my-day')
     await expect(page.getByRole('heading', { name: 'My Day' })).toBeVisible()
 
+    // 🔴 THE HEADING IS NOT THE SCREEN. It comes from the loader, so it is on
+    // the page before either block that fetches its own data — the standing
+    // sentence and the first-run checklist. axe was assessing My Day
+    // half-rendered.
+    //
+    // It went red on a freshly seeded demo: the shell's scroll region does not
+    // overflow until those blocks arrive, so axe caught the one frame where the
+    // region had become scrollable and had not yet been given its tab stop.
+    // Waiting is not papering over that — a rule evaluated against content that
+    // has not arrived also MISSES whatever that content would have violated, so
+    // this widens the coverage rather than narrowing it.
+    await expect(page.getByText(/You’re #\d+/)).toBeVisible()
+    await expect(page.getByText('Get set up')).toBeVisible()
+
     expect(await seriousOrCritical(page)).toEqual([])
   })
 

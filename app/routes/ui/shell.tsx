@@ -52,13 +52,34 @@ export default function Shell({ loaderData }: Route.ComponentProps): React.JSX.E
   const location = useLocation()
 
   useEffect(() => {
-    const measure = (): void => {
-      const el = scroller.current
-      if (el) setScrollable(el.scrollHeight > el.clientHeight)
-    }
+    const el = scroller.current
+    if (!el) return
+
+    const measure = (): void => setScrollable(el.scrollHeight > el.clientHeight)
     measure()
+
+    // 🔴 IT WATCHES THE CONTENT, and the first version only measured on mount,
+    // resize and navigation. That is not when the answer changes.
+    //
+    // Found on a freshly seeded demo: My Day fits at mount and then GROWS —
+    // the first-run checklist and the standing block each fetch their own data
+    // and render into a screen that had already been measured as not
+    // scrollable. So a region that scrolls was left without a tab stop, and
+    // axe called it `scrollable-region-focusable`, serious, on the exact screen
+    // this whole conditional was written to protect.
+    //
+    // A ResizeObserver is the right instrument here for the reason it is the
+    // wrong one in the virtualizer: this is the shell, measured when layout
+    // settles, not a drag path where a layout read costs a frame.
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    if (el.firstElementChild) observer.observe(el.firstElementChild)
+
     window.addEventListener('resize', measure)
-    return () => window.removeEventListener('resize', measure)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', measure)
+    }
   }, [location.pathname, location.search])
 
   return (
