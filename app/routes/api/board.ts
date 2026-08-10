@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm'
 
 import { withTenant, type SessionIdentity } from '~/db'
 import { requireIdentity } from '~/lib/auth/identity'
+import { jsonConditional } from '~/lib/http/conditional'
 import { FRESH_WINDOW_SECONDS, mmss } from '~/lib/board/tick'
 
 /**
@@ -388,12 +389,38 @@ export async function readPipelineFor(identity: SessionIdentity): Promise<Pipeli
   })
 }
 
+/**
+ * The board's payload, with the running clock taken out.
+ *
+ * WITHOUT THIS THE BOARD COULD NEVER ANSWER A 304. `tickFromSeconds` and the
+ * `NEW mm:ss` strings move every second, so the serialized body differs on
+ * every poll whether or not a single card changed — and a conditional GET whose
+ * tag always differs is strictly more work than none.
+ *
+ * Dropping them from the TAG is only safe because the clock ticks in the
+ * browser: a client holding a 304 keeps counting from the value it already has,
+ * which is the number it should be showing anyway. Everything a client cannot
+ * re-derive for itself stays in — `signal.kind` included, so a card crossing
+ * the fresh window still changes the tag and still gets re-sent.
+ */
+function etagSourceOf(payload: PipelinePayload): unknown {
+  return {
+    columns: payload.columns.map((column) => ({
+      ...column,
+      cards: column.cards.map((card) =>
+        card.signal === null || card.signal.tickFromSeconds === null
+          ? card
+          : { ...card, signal: { ...card.signal, chip: '', full: '', tickFromSeconds: 0 } },
+      ),
+    })),
+  }
+}
+
 export async function loader({ request }: { request: Request }): Promise<Response> {
+  // Conditional GET, which this route did not have. The board is one of the
+  // three surfaces `04b` §4.9 puts on a poll — 15 s for board deltas — and it
+  // answered a full 200 with a database round trip and a full serialization
+  // every time, which is the opposite of what §1183's cost model assumes.
   const payload = await readPipeline(request)
-  return new Response(JSON.stringify(payload), {
-    headers: {
-      'content-type': 'application/json; charset=utf-8',
-      'cache-control': 'private, no-store',
-    },
-  })
+  return jsonConditional(request, payload, etagSourceOf(payload))
 }

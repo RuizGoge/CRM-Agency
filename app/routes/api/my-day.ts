@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm'
 
 import { withTenant } from '~/db'
 import { requireIdentity } from '~/lib/auth/identity'
+import { jsonConditional } from '~/lib/http/conditional'
 
 /**
  * My Day — the seller's own work, and only ever their own.
@@ -132,12 +133,7 @@ export async function readMyDay(request: Request): Promise<MyDayPayload> {
 }
 
 export async function loader({ request }: { request: Request }): Promise<Response> {
-  const payload = await readMyDay(request)
-  return new Response(JSON.stringify(payload), {
-    headers: {
-      'content-type': 'application/json; charset=utf-8',
-      // Per-seller by construction. Never a shared cache.
-      'cache-control': 'private, no-store',
-    },
-  })
+  // Conditional GET, which this route did not have either. `POLL_SLOW_MS` names
+  // this surface and the board as its two consumers.
+  return jsonConditional(request, await readMyDay(request))
 }
