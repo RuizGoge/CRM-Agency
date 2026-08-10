@@ -7,6 +7,60 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 🚌 EL BUS DE EVENTOS EXISTE, Y DOS PUERTAS QUE NO FUNCIONABAN EN UN WORKTREE (2026-08-09)
+`contracts/events/catalog.json` · `scripts/generate-events.ts` · `app/lib/events/catalog.generated.ts` · `app/lib/events/events.ts` · `scripts/events-contract.test.ts` · `tests/integration/setup/urls.ts` · `scripts/check-perf-budgets.ts`. **243 → 261 tests · 26 → 27 archivos.** Paso 1 del orden revisado, cerrado.
+
+**EL CONTRATO DE 49 EVENTOS DEJA DE SER PROSA.** `CLAUDE.md` describía `app/lib/events/**` como *"generated from contracts/events/"* y declaraba que *"an event outside the canonical 49 is a bug"*. **Ninguno de los dos directorios existía** y el catálogo vivía sólo como una tabla markdown en un documento de 57 KB — o sea que la regla era documentación, y por el propio test de la constitución eso hay que decirlo en vez de presentarlo como mecanismo. Ahora: una fuente JSON, un generador, tipos generados y una puerta que se pone roja en las dos direcciones.
+
+- 🎯 **PROBADO POR MUTACIÓN, las dos mitades.** (1) Escribí `'opportunity.closed_won'` en un archivo de `app/` → rojo nombrando **archivo, fantasma, reemplazo y consecuencia** (*"Six modules were waiting for this name…"*). (2) Edité a mano el archivo generado → rojo con el comando a correr. **Un test que pasa sin poder fallar no vale nada.**
+- 🔴 **LOS FANTASMAS SON LA MITAD QUE DE VERDAD ATRAPA COSAS, y por eso están en el contrato: 33 nombres descartados, cada uno con su remapeo y su consecuencia.** §2 los llama *el hallazgo real*: un módulo esperando `opportunity.closed_won` **nunca dispara con una venta y nada se pone rojo** — la venta simplemente no se celebra. Un registro positivo no puede atrapar eso: ve un nombre que no conoce, no un nombre que fue **descartado**. Se escanean literales entrecomillados en `app/**` y `scripts/**`; la prosa en un comentario sigue permitida a propósito, porque prohibirla se "arregla" borrando la explicación.
+- **Cuatro de los 49 ya son de motor** (`sequence.*`, `automation.executed`), que es la evidencia de que la reversión de abajo sale barata.
+- 🔴 **DOS DESVÍOS DEL DOCUMENTO, los dos deliberados y anotados en el `$about`.** (1) §4 nombra el dinero con sufijo `_usd` —`delta_usd`, `amount_usd`— y **ese sufijo es una invitación a poner dólares en un number**; acá todos son `money` y generan el tipo `Money` branded. **15 campos de dinero, en una lista FIJADA** — no adivinada por el nombre. (2) El envelope se declara **una sola vez**: §4 lo escribe entero adentro del payload de `lead.created` y copiarlo daría dos definiciones de `tenant_id`, y la que se desvía siempre es la copia.
+- ⚠️ **PROVENIENCIA MARCADA, porque las dos mitades no se especificaron igual.** Los 40 de §4 traen lista de campos ratificada; los **9 de la Enmienda 1 NO traen tabla de payload**, así que sus campos están **derivados de tres frases** y marcados `"payload": "derived"`. Un payload derivado es una propuesta que compila, no un contrato ratificado.
+- **Lo que NO es todavía: no hay transporte.** Esto es el contrato, los tipos y la puerta. El outbox y el despacho necesitan migración, y la numeración de migraciones es justo donde dos sesiones en paralelo chocan.
+
+🔴 **UN WORKTREE AÍSLA ARCHIVOS Y NO LA BASE — CUARTA VEZ QUE ESTE PROYECTO PAGA LA FIRMA DEL ESTADO COMPARTIDO, y la primera por worktrees en vez de por archivos.** `TEST_DB` era la constante `'crm_test'` para todo checkout de la máquina, y `globalSetup` la **dropea y reconstruye en cada corrida**. Dos worktrees corriendo vitest a la vez = cada uno le borra el esquema al otro a mitad de vuelo.
+
+- **El síntoma es lo que hace caro esto: `duplicate key value violates unique constraint "tenant_pkey"`, `write CONNECTION_CLOSED` y timeouts de hook, sobre un conjunto de archivos DISTINTO en cada corrida, mientras cada suite pasa sola.** Un rojo que nombra una víctima distinta cada vez cuesta una hora antes de que alguien sospeche del arnés en vez del cambio.
+- ⚠️ **Y me llevó a una conclusión equivocada antes de medirlo bien:** lo atribuí a "contención de máquina" después de ver `search-perf` pasar aislada, y **la bisección lo desmintió** — HEAD limpio pasaba a la primera. Lo decisivo no fue razonar sino mirar los procesos: `vitest run` corriendo desde `worktrees/virtualizacion-tablero-304005` al mismo tiempo. **El método falló antes que el código.**
+- **Arreglo: `TEST_DB` se deriva del worktree** (`crm_test_<slug>`). Radio de explosión chico a propósito — un checkout plano y el CI caen a `crm_test` y se comportan igual que antes. **El rebuild por corrida se queda**: es correcto, y sólo era inseguro cuando dos corridas comparten el destino.
+
+🔴 **Y LA PUERTA DE PERFORMANCE NUNCA HABÍA CORRIDO DENTRO DE UN WORKTREE.** `npm run perf` levantaba **PERF003** en HEAD limpio también — verificado por bisección, no supuesto. La causa: `node_modules` está hoisteado al padre del repositorio, así que un build desde `.claude/worktrees/<name>/` —tres niveles abajo— emite la clave del manifest como `../../../node_modules/@react-router/dev/…` mientras un checkout plano la emite sin prefijo.
+
+- **La ironía que lo hace urgente: la sesión de virtualización trabaja en un worktree sobre P6, y no podía correr el gate que la mide.**
+- ✅ **`resolveClientEntry()` RESUELVE la clave, no afloja el check.** Una entrada de verdad ausente sigue siendo PERF003, y **dos candidatas fallan con `PERF008` en vez de elegir una** — medir la entrada equivocada es exactamente lo que este checker existe para prevenir, y adivinar en silencio sería peor que no medir. `CLAUDE.md`: *"do not weaken a budget… to make a build pass"*.
+- **Primera medición de P12 desde un worktree: 111.068 / 128.000 bytes (87%).** El bus de eventos suma **cero al bundle del cliente** — nada lo importa todavía y su único import es `import type`.
+
+### ↩️ REVERSIÓN FIRMADA: LOS MOTORES ENTRAN AL ALCANCE (2026-08-09)
+**Decisión de Jorge, sin código escrito.** Sesión de estrategia, no de build. **Revierte el corte de Fase 3 sobre dos ítems de V1.1** y deja el resto de las 71 diferidas donde estaba.
+
+**LO QUE JORGE DECIDIÓ, en sus dos respuestas:**
+1. **De V1.1 sólo se promueven las baratas:** **Cmd+K ejecutable** (el overlay ya vive en el shell desde la búsqueda global, así que lo diferido era el *ejecuta*, no el *busca*) y **filtros de tipo en el timeline** (triviales una vez que el timeline exista). El resto del pulido —vista lista, filtros de tablero, acciones masivas, tags, reportes, sync de Google Calendar, email— **sigue diferido**.
+2. **El motor de secuencias/cadencias y el motor de automatizaciones ENTRAN al alcance.** Eran las dos filas más caras de V1.1 y la razón escrita para diferirlas era *"the single biggest complexity and compliance surface in the product"*. Jorge la leyó y decidió igual. **Es su puerta de fase, y queda anotada como reversión y no como deriva.**
+
+🟢 **Y LA REVERSIÓN ES MÁS BARATA DE LO QUE EL CORTE SUGERÍA, verificado en `02b` y no supuesto: el corpus ya había diseñado para los motores.**
+- **Cuatro de los 49 eventos canónicos ya son de motor** —`sequence.enrolled`, `sequence.paused`, `sequence.completed`, `automation.executed`— y están en el catálogo **original de 40**, no en la enmienda de Fase 4.
+- **`message.received` lleva el enum `channel` por esta razón exacta**, escrita en la tabla de fantasmas: *"Sequences never auto-pause on reply → robots text people who already answered."*
+- 🎯 **El hallazgo que más vale: `automation.action_requested` fue BORRADO a propósito.** Cuatro módulos lo esperaban. La razón: *"automations call the owning module's command path"*, porque un evento de acción propio sería *"a parallel write path bypassing every gate."* **Ésa es la regla que hace sobrevivible un motor sobre una superficie TCPA** —una automatización nunca escribe por su cuenta, llama al mismo camino que un humano y pasa por la misma puerta— y ya estaba decidida. No hay que inventarla.
+
+⚠️ **LO QUE ESTA DECISIÓN NO REVIERTE, y hace falta decirlo:** `CLAUDE.md` prohíbe el *builder* de lienzo en blanco — *"Automations are a closed, curated catalog."* Traer el **motor** al alcance no toca esa línea. Catálogo curado salvo reversión explícita **aparte**.
+
+🔴 **LO QUE SÍ AGREGA AL CAMINO CRÍTICO: EL BUS DE EVENTOS NO EXISTE.** `contracts/events/` y `app/lib/events/` **no están en el árbol** — `contracts/` sólo tiene `protected-list.json` y `ui-loader-whitelist.json`. `CLAUDE.md` los describe como si existieran (*"the 49-event contract, generated from contracts/events/"*) y hoy el contrato vive **sólo en prosa** en `docs/02b`. Era deuda tolerable mientras nada fuera event-driven; con los motores adentro es **prerequisito**.
+
+**ORDEN REVISADO, y es dependencia y no preferencia** —una secuencia inscribe un contacto, manda SMS por la puerta, se pausa con `message.received` y escribe en el timeline; las cuatro cosas no existen:
+1. **Bus de eventos** (`contracts/events/` → `app/lib/events/`) — nuevo en el camino crítico
+2. **Núcleo de compliance** (ítems 8–13) — consent ledger, supresión, ventana lead-local, **la puerta única**, break-glass
+3. **Bucle diario** (20–27, 58–59) + los dos promovidos
+4. **Aloware** (40–50) — 🔴 sigue bloqueado en Jorge, y con esto lo bloqueado creció
+5. **Calendario** (51–57)
+6. **Los motores** — últimos, porque orquestan todo lo anterior
+
+📌 **El paso 2 cambia de peso, y ése es el costo real de la reversión.** El núcleo de compliance era una sección más del MVP; ahora es lo que sostiene la mayor superficie de exposición legal del producto. **Una secuencia que manda sin pasar por la puerta es la diferencia entre un CRM y una demanda TCPA.**
+
+⚠️ **PENDIENTE DE JORGE, no hecho acá:** la enmienda formal a `03-mvp-definition.md` §6 —las dos filas promovidas siguen listadas como V1.1 con su razón vieja— y su fila en el registro de erratas. **No se editó un documento firmado de Fase 3 en silencio**, que es exactamente el fallo que la cadena de precedencia existe para prevenir.
+
+📋 **Contexto de estado que motivó la conversación:** van ~20 de los 68 ítems del MVP, **2 de los 13 módulos** tienen carpeta con un archivo adentro, y el **bucle diario está en cero** —sin timeline, sin notas, sin registro de actividad; `app/routes/ui/contact.tsx` son 252 líneas sin historial, y `activity_type` no tiene miembro `note`. La pregunta de Jorge fue si convenía terminar esto o empezar un "CRM normal" primero. **La respuesta fue terminar éste**, por asimetría: lo construido (silo por RLS, dinero en `bigint`, ledger append-only) es lo que **no se puede agregar después**, y lo que falta es aditivo.
+
 ### 🚪 PUERTA 11 CERRADA: P20 MEDIDO EN 2251 ms (2026-08-03)
 `tests/e2e/tti.spec.ts` · `fixtures/lighthouse.ts` · migración **0028** · perfil **`lh-ci`**. **241 → 243 tests · 82 → 83 e2e.** La Puerta 11 pasa de **mitad cerrada** a **cerrada**.
 
