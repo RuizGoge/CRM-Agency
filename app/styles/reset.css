@@ -37,11 +37,18 @@ body {
      Found by looking at the rendered screen, which is the only place it
      exists — the desktop profile is one line and never shows it.
 
-     Below this breakpoint the line break IS the separator, so the last one is
-     removed rather than orphaned. Deliberately inside the existing block: this
-     project already carries one hard-coded breakpoint number and a second copy
-     of it is how two "mobile" boundaries end up 1px apart. */
-  .standing-separator-last {
+     🔴 EVERY separator goes, not the last one — and the first version removed
+     only the last, because that was the only dot left dangling in the
+     screenshot of the day. The sentence has since gained a line, so the wrap
+     moved and the LEADING dot became the orphan instead: the same blemish, one
+     clause to the left, with the e2e still green because it was asserting the
+     dot that happened to be orphaned that week rather than the rule.
+
+     Below this breakpoint the line break IS the separator, so none of them
+     survive. Deliberately inside the existing block: this project already
+     carries one hard-coded breakpoint number and a second copy of it is how two
+     "mobile" boundaries end up 1px apart. */
+  .standing-separator {
     display: none;
   }
 

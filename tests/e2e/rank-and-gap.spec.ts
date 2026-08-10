@@ -29,16 +29,24 @@ const GAP = String.raw`(\$[\d,]+(\.\d{2})? to pass .+|Leading by \$[\d,]+(\.\d{2
 /**
  * `You're #2 · $9,029.88 · $2,550.12 to pass Priya N.`
  *
- * Below the density breakpoint the sentence wraps and the LAST separator is
- * removed, because the line break is doing that separator's job and a `·` left
- * hanging at the end of a wrapped line was the one blemish on the screen that
- * opens the demo. Both forms are asserted rather than one loose pattern that
- * would accept either: a dot that silently disappeared on desktop would be a
- * regression, and a pattern permitting both could not see it.
+ * Below the density breakpoint the sentence stacks and EVERY separator is
+ * removed, because the line break is doing their job and a `·` left hanging at
+ * the end of a wrapped line was the one blemish on the screen that opens the
+ * demo. Both forms are asserted rather than one loose pattern that would accept
+ * either: a dot that silently disappeared on desktop would be a regression, and
+ * a pattern permitting both could not see it.
+ *
+ * 🔴 THIS EXPECTATION USED TO SAY "the LAST separator", AND IT WAS ONLY EVER
+ * TRUE BY ACCIDENT. It was written when the block was one clause shorter, so the
+ * trailing dot was the only orphan; the sentence gained a line, the wrap moved,
+ * and the LEADING dot was left dangling instead — with this spec green, because
+ * it was asserting the dot that happened to be orphaned that week rather than
+ * the rule. Found by looking at the phone.
  */
 function expected(page: Page): RegExp {
   const stacked = (page.viewportSize()?.width ?? 0) < BREAKPOINTS.md
-  return new RegExp(String.raw`^You.re #\d+ · \$[\d,]+(\.\d{2})? ${stacked ? '' : '· '}${GAP}$`)
+  const dot = stacked ? '' : '· '
+  return new RegExp(String.raw`^You.re #\d+ ${dot}\$[\d,]+(\.\d{2})? ${dot}${GAP}$`)
 }
 
 /**
