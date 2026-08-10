@@ -7,6 +7,26 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 🔁 LOS DOS POLLERS QUE FALTABAN, Y DOS TESTS MÍOS QUE CORRÍAN CARRERAS (2026-08-09)
+`app/lib/http/use-conditional-poll.ts` · `routes/ui/board.tsx` · `routes/ui/my-day.tsx` · `tests/e2e/polling.spec.ts`. **102 → 107 e2e.** Sin migración.
+
+**`POLL_SLOW_MS` deja de ser un token que nadie lee.** Nombraba My Day y el tablero como sus dos consumidores y tenía **cero**. Ahora los dos poll-ean su ruta de recurso cada 15 s con `If-None-Match`. **Medido en un navegador:** primer tick `200`, los dos siguientes `304`, y **cero requests en 35 s con la pestaña oculta**.
+
+- **Un hook, `useConditionalPoll`.** Un 304 **no toca estado**, así que no hay re-render — que es lo que mantiene al poll fuera del presupuesto del drag. **P6 con el poller encima sigue en 16,8 ms y cero long tasks.**
+- **El primer tick es un 200 a propósito:** el loader renderiza por el framework y no por `jsonConditional`, así que no hay tag que heredar. Cuesta un request por carga de página y cerrarlo sería enseñarle al camino SSR a emitir tags.
+- ⚠️ **Un tick que falla se saltea, y eso deja un hueco real:** un poll que falla **persistentemente** —sesión caída, API caída— deja a la vendedora mirando datos que dejaron de moverse **sin nada en pantalla que lo diga**. El canal SSE de banners de tenant es donde va ese aviso y no está construido. Es un hueco, no una decisión.
+
+🔬 **UNA MUTACIÓN QUE QUEDÓ VERDE, y la anoto en vez de reclamar cobertura.** El hook descarta lo polleado cuando el loader vuelve a correr, para que una venta recién movida no la deshaga el siguiente tick. **Borrar esas tres líneas deja `polling.spec.ts` en verde:** todos los caminos que revalidan estas dos pantallas hoy **también navegan**, así que el componente remonta y la caché arranca vacía igual. Se quedan porque la primera revalidación que **no** navegue las vuelve necesarias —y ya hay una en el árbol (`useRevalidator` en el leaderboard) más una planeada—, pero **el test prueba la propiedad, no el mecanismo**, y eso quedó escrito en los dos lados.
+
+🔴 **DOS TESTS MÍOS QUE PASABAN POR SUERTE, los dos destapados porque la suite se puso más lenta.**
+
+1. **`board-virtualization` no esperaba la hidratación.** Todo lo que lee —`data-virtualized`, `data-card-total`, las primeras diez tarjetas— **lo renderiza el servidor**, así que era cierto antes de que corriera un solo byte de JavaScript. El handler de scroll no: sin él la columna scrollea nativo, la ventana nunca se mueve, y *"reaches the LAST card"* buscaba la tarjeta 499 en una página que seguía mostrando las diez del servidor. **Pasaba aislado y fallaba en la suite completa.** Y el primer arreglo también estuvo mal: esperar `data-drag="on"` pasa en escritorio y **cuelga en móvil**, donde el drag correctamente está en `off` — lo que prueba hidratación es **la presencia del atributo**, que es exactamente lo que dice el comentario del componente.
+2. **`new-clock` fijaba el valor inicial exacto por segunda vez.** Arreglé ese patrón en dos tests del archivo y dejé el tercero con `07:30` clavado; aguantó hasta que el sign-in pasó de un segundo a segundo y medio. Ahora **deriva la frase accesible del chip visible**, que es lo que la regla realmente dice —las dos representaciones llevan el mismo reloj— y que ninguna carga de máquina puede mover.
+
+⚠️ **Falta la tercera superficie:** el leaderboard sigue poll-eando con `revalidator.revalidate()` cada 5 s, que es un `200` completo. Es el ítem más caro del piso y lo único que queda entre acá y poder medir la pata del piso de la Puerta 6.
+
+⚠️ **El Postgres de Docker es COMPARTIDO entre sesiones paralelas.** Explica la intermitencia de conexión anotada más abajo, y significa que `db:reset` o una suite corriendo en otra sesión pueden poner esta roja sin que haya cambiado nada del código.
+
 ### 📉 LA PUERTA 6 NO SE PUEDE CORRER, Y MEDIRLO DESTAPÓ QUE EL PISO DE POLLING CASI NO EXISTE (2026-08-09)
 `app/lib/http/conditional.ts` · `api/board.ts` · `api/my-day.ts` · `api/leaderboard.ts` · `tests/e2e/conditional-get.spec.ts`. **91 → 102 e2e.** Sin migración.
 
