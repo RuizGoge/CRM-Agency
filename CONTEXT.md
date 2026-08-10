@@ -7,6 +7,24 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 🫱 EL MOTOR DE TOUCH, Y UNA COLUMNA MUERTA QUE HACÍA IMPOSIBLE AL ÍTEM 13 (2026-08-10)
+`app/db/schema/pipeline.ts` · `calendar.ts` · migración **0041** · `tests/integration/touch-engine.test.ts`. **428 → 437 tests · 40 → 41 archivos.** Ítem 25 — **primer trabajo del bucle diario**.
+
+🔴 **EL HALLAZGO, y salió de mirar de dónde iba a leer el motor: `contact.last_touch_at` está declarada desde la migración 0010 y NADIE la escribe.** La leen `app.recent_contact_signal` (0039) y la ruta de contacto — y ningún camino del árbol la seteaba jamás. **O sea que el ítem 13 que cerré hace dos horas no podía disparar nunca en producción, mientras pasaba sus diez tests**, porque los fixtures la escribían a mano. *Una columna que nadie escribe es una columna que no existe* — el registro ya anotó exactamente esto con `tenant.is_demo`. **Por eso el motor de touch va primero y no espera al módulo de comunicaciones.**
+
+**EL FALLO DE `05b`, APLICADO: cinco eventos reclamaban el derecho a resetear `last_activity_at`, y la respuesta es un `max()` determinista.** UNA función de trigger, registrada por tabla con la columna que esa tabla llama *"cuándo ocurrió"*, escribiendo `GREATEST(viejo, nuevo)` — **monótono, nunca decrementado**.
+
+- **Monótono no es código defensivo:** `last_activity_at` es la entrada de la clave de episodio frío, y un valor que puede ir para atrás hace que `opportunity.went_cold` dispare **dos veces por un episodio**. Es la diferencia entre una insignia y una manguera de notificaciones. 🎯 Mutación: sacar el `GREATEST` → rojo sobre un webhook tardío que llega con una fecha vieja.
+- **DOS columnas, y la segunda tiene una razón que no es simetría.** `last_activity_at` se mueve con cualquier touch; **`last_human_touch_at` sólo con `created_by = 'human'`**. Si el frío se colgara del primero, una secuencia texteando un lead muerto cada cuatro días lo mantendría tibio para siempre: **la automatización enmascararía el abandono**, que es exactamente lo contrario de lo que la señal de enfriamiento existe para mostrar. 🎯 Mutación: hacer humano todo → rojo.
+- **Una actividad toca cuando se COMPLETA, no cuando se crea.** Trabajo agendado para el jueves no es trabajo hecho, y contarlo resetearía el reloj frío de un lead con el que nadie habló. Una reunión toca en `outcome_at` y cuenta como humana, porque nada automatizado asiste a una.
+- **`contact.last_touch_at` se mueve con CUALQUIER touch**, automatizado incluido: *"esta oficina contactó a este hogar"* es cierto lo haya hecho una persona o una secuencia.
+- ✅ **Un test de punta a punta cierra el bucle con el ítem 13:** una actividad completada de verdad mueve la columna, y la señal —preguntada por el OTRO vendedor, así que ejercita la mitad entre silos— la ve.
+- **El conjunto de fuentes de touch está FIJADO.** `05b` nombra cuatro (`activity`, `call`, `message`, `meeting`); existen dos. Agregar las otras dos es registrarlas contra la misma función, y fijar el set es lo que hace que **olvidarlas** sea un build rojo en vez de un lead que calladamente nunca se enfría.
+
+➕ **`note` entra al enum `activity_type`**, que es el prerequisito del ítem 23 y algo que el registro venía marcando desde el alta rápida — la hoja tuvo que descartar el campo de nota porque no había dónde ponerlo. Un objeto de actividad único descarta una tabla de notas aparte.
+
+⚠️ **Dos restricciones que ya existían y que no conocía, las dos buenas:** `activity_machine_work_is_explainable` (trabajo creado por máquina exige `source_event_name` — la forma-constraint de que *"¿por qué esto está en mi lista?"* siempre tenga respuesta) y **`TZ002`**, que rechaza una reunión sin `contact_timezone`, porque sin eso el recordatorio no se puede disparar en la hora local del lead.
+
 ### 🤫 LA SEÑAL QUE CRUZA EL SILO SIN DECIR QUIÉN, Y N13 ES EL TERCER PRESUPUESTO DEPENDIENTE DE MÁQUINA (2026-08-10)
 `app/db/schema/lookup-meter.ts` · migración **0039** · `tests/integration/recent-contact-signal.test.ts`. **414 → 424 tests · 38 → 39 archivos.** Ítem 13. **El núcleo de compliance (8–13) queda cerrado.**
 
