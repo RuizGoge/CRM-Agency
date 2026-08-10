@@ -156,3 +156,61 @@ export async function withSystemWork<T>(tenantId: string, fn: (tx: Tx) => Promis
     return fn(tx)
   })
 }
+
+/** What `app.webhook_ingest()` answers. §4.2's vocabulary, plus the only 401. */
+export type IngestOutcome = 'accepted' | 'duplicate' | 'quarantined' | 'unknown_token'
+
+/** What the edge extracted, and all of it may be null. */
+export interface IngestInput {
+  readonly endpointToken: string
+  readonly body: Buffer
+  readonly providerEvent: string | null
+  readonly canonical: string | null
+  readonly alowareCallId: string | null
+  readonly parseStatus: 'parsed' | 'unparsed'
+  readonly signatureValid: boolean | null
+}
+
+/**
+ * Stores one provider delivery. A FUNCTION, for the same reason as
+ * `claimDueJobs` — one statement, one value back, nothing to pass it that would
+ * make it a general-purpose door.
+ *
+ * 🔴 IT ESTABLISHES NO SESSION CONTEXT, AND IT IS THE ONLY UNIT OF WORK IN THIS
+ * FILE THAT DOES NOT. That looks like the invariant this module exists to
+ * enforce being broken, so here is why it is the opposite.
+ *
+ * A webhook arrives with no session, no cookie and no user. There is no
+ * identity to establish and nothing to derive a tenant from — the tenant is
+ * produced by the endpoint token, INSIDE the definer, which is why
+ * `app.webhook_ingest()` takes a credential and has no `tenant_id` parameter.
+ * Passing one from here would let this file name the tenant it writes into;
+ * as written it cannot, and neither can any caller of it.
+ *
+ * `SET LOCAL ROLE crm_app` still applies. Every table the definer touches is
+ * unreachable to that role — `raw_payload_vault` and `inbound_webhook_event`
+ * have SELECT and no INSERT, and `webhook_endpoint` is `definer_only` and reads
+ * zero rows — so a bug that dropped the definer and issued the writes directly
+ * fails closed rather than silently succeeding.
+ */
+export async function ingestWebhook(input: IngestInput): Promise<IngestOutcome> {
+  return db.transaction(async (tx) => {
+    await tx.execute(dropPrivilege)
+    const rows = await tx.execute<{ outcome: IngestOutcome }>(sql`
+      SELECT app.webhook_ingest(
+        ${input.endpointToken},
+        ${input.body},
+        ${input.providerEvent},
+        ${input.canonical},
+        ${input.alowareCallId},
+        ${input.parseStatus},
+        ${input.signatureValid}
+      ) AS outcome`)
+
+    const outcome = rows[0]?.outcome
+    if (outcome === undefined) {
+      throw new Error('app.webhook_ingest returned no row')
+    }
+    return outcome
+  })
+}

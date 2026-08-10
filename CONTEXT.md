@@ -7,6 +7,110 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 📡 EL BLOQUE 9 COMPLETO: DEL BORDE A LA TABLA `call`, EL DLQ Y LOS SMS (2026-08-07)
+`app/routes/api/webhooks-aloware.ts` · `app/routes/ui/integration-health.tsx` · `app/modules/communications/{aloware-call-fields,call-merge,message-merge}.ts` · migraciones **0036 · 0037 · 0038**. **353 → 390 tests · 33 → 37 archivos.** `npm run verify` verde de punta a punta, y **P12 no se movió** (112.958 bytes): la pantalla de admin es su propia ruta y no entra en el JS inicial del pipeline.
+
+El camino entero existe: **una entrega de Aloware entra por la ruta del borde, se guarda, se encola, se mergea en la tabla `call`, y lo que no se puede atribuir aparece en una pantalla de admin.**
+
+**LA RUTA DEL BORDE** — `POST /webhooks/aloware/v1/{endpoint_token}`, la forma que fija **P8.2** y no el `/hooks/` ni el `{path_secret}` que §4.2, §7 y dos diagramas siguen dibujando. Cuatro cosas y se niega a hacer una quinta: leer los bytes, extraer claves sin tirar nunca, **una** llamada a la base, contestar. Nunca no-2xx por un payload que ya tenemos; el único 401 es el token desconocido, el único caso donde no se guardó nada.
+
+- 🎯 **La aserción que protege el decode:** el handler decodifica a UTF-8 **sólo para el extractor**, y eso sustituye U+FFFD en bytes inválidos. El vault recibe el `Buffer` crudo y el digest se computa **adentro de la base**, así que un cuerpo que no decodifica se guarda byte a byte y con la clave correcta. **Probado por mutación:** guardar el string decodificado en vez de los bytes → rojo.
+- **El cap de 256 KiB se chequea dos veces** — la cabecera es una afirmación, el conteo de bytes es un hecho, y un cuerpo chunked no trae `content-length`. **Se rechaza, nunca se trunca:** truncar cambia los bytes, los bytes son el digest, y el digest es la única defensa contra replay.
+
+**LA TABLA `call` Y EL MERGE.** `UNIQUE (tenant_id, aloware_call_id)`, ordinal de estado monótono por trigger, y la tabla de campos declarados de §4.5 con las dos clases.
+
+- 🔴 **UNA CLASE DE POLÍTICA NUEVA, `owner_scoped_read`, porque las tres obvias estaban mal.** `owner_scoped` + `app_can_insert=false` otorga **UPDATE** (el error de la 0033 y la 0034), y un vendedor con UPDATE sobre su propia llamada **puede fabricar actividad**: la franja del día cuenta llamadas, y `last_activity_at`, la regla de 7 días y el riel leen de ahí. `append_only_owner`/`immutable` instalan una negativa que ata también al definer, y el merge **es** un UPDATE. `tenant_scoped_read` tiene los grants correctos y el alcance equivocado — una llamada es dato del lead, no infraestructura. Agregar la clase costó **una línea en el CASE de `harden()`**, que es exactamente por qué la 0006 sacó `policy_class` del enum.
+- **NO hay `disposition_canonical`, y es US-604 aplicado por ausencia.** La disposición del proveedor es enriquecimiento; la llamada capturada trae `call_disposition_id = 31227` = **"No Answer"** sobre una llamada con **63 segundos de conversación**, y nadie la puso a mano. Una columna con ese nombre invitaría a una línea de código que mete esa mentira en el libro del vendedor.
+- **`owner_user_id` es NULLABLE y NULL significa cuarentena.** `NULL = app.current_user_id()` es NULL, nunca cierto, así que la fila es invisible para todos en vez de estar mal archivada. Nunca se descarta, nunca se adivina.
+
+🔬 **LA PRUEBA DE PERMUTACIÓN ENCONTRÓ DOS DEFECTOS REALES, y la segunda lección vale más que la primera.**
+
+1. **`provider_created_at` se mergeaba con `COALESCE(viejo, nuevo)`** — "gana el primero que llega" — así que el valor guardado dependía del orden de entrega. `LEAST` es conmutativo. Lo encontró escribir el test, no revisarlo.
+2. 🔴 **El guard corrective perdía la disposición.** `Recording-Saved` llega **4 s después** de la disposición y **no trae `call_disposition`** — el proveedor omite campos, no los anula. Mergeados al revés, el timestamp más nuevo del recording hacía "vieja" a la disposición real, se rechazaba, y la llamada quedaba con disposición NULL para siempre. Sin error. Ahora el guard tiene tres brazos: un valor ausente nunca pisa uno presente, uno presente siempre llena uno vacío, y el reloj **sólo arbitra entre dos valores que existen**.
+
+🎯 **Y LA LECCIÓN DE MÉTODO: CONSISTENCIA NO ES CORRECCIÓN.** Con ese defecto puesto, **las 24 permutaciones seguían coincidiendo** —todas perdían la disposición igual— así que la propiedad de ARR-INT-06 se cumplía y el test pasaba con el dato borrado. **Una propiedad de permutación es necesaria y no suficiente:** necesita una aserción sobre el valor al que convergió. Ahora la tiene, campo por campo, y con eso la mutación se pone roja.
+
+📊 **CINCO HALLAZGOS NUEVOS de leer los NOMBRES DE CLAVE de las 22 entregas** (sólo el esquema, ningún valor — el archivo lleva el teléfono de un lead real y está gitignored):
+
+- 🔴 **`user_id` llega NULL en el evento de establecimiento.** `OutboundPhoneCall` e `InboundPhoneCall` no lo traen; sólo aparece en la disposición. Y es NULL también en `InboundPhoneCall-DispositionMissed` — nadie atendió, no hay asiento. **CONTEXT.md decía que "el dial carga un `user_id` explícito, así que la atribución nunca tiene que venir del número": eso es cierto del REQUEST saliente y falso del webhook que lo sigue.** La ruta por número es portante para la primera entrega de toda llamada, que es justo donde el pool de Local Presence duele.
+- **`lead_number` es el lead y `destination_number` NO**, al revés de lo que sugieren los nombres. `lead_number` está en todos los eventos de llamada y siempre difiere de `incoming_number`; `destination_number` es **null en todo inbound**. Un mapper que lo usara ataría las salientes al contacto equivocado y las entrantes a ninguno.
+- 🔴 **Los timestamps del proveedor NO TRAEN ZONA** (`YYYY-MM-DD HH:MM:SS`, sin offset ni `Z`). Se leen como UTC de forma consistente, y eso es seguro por una razón angosta: lo que el merge usa es el **orden**, y un offset constante lo preserva exacto. Lo que **no** habilita es renderizarle una hora a un vendedor.
+- **`transcription` es un objeto de ids, no una URL.** §4.3 lista una parte de transcripción; el proveedor no manda nada que se pueda guardar. `transcript_url` queda **null y dicho**, no inventado.
+- **`current_status2`:** 1 saliente iniciada · 2 entrante sonando · 9 cerrada · 19 SMS inválido.
+
+**EL DLQ Y LAS ALERTAS (0037).** Una tabla `dead_letter` con tres orígenes y `UNIQUE (tenant, origin, subject_type, subject_id)`, y `admin_alert` con `occurrence_count`.
+
+- **La entrega con firma inválida dead-letterea POR TRIGGER, no por una línea adentro de `webhook_ingest`.** Como llamada la garantía es "la función se acuerda"; como trigger es "una fila con `signature_valid = false` **no puede existir** sin su dead letter". Inalcanzable hoy y correcto: Aloware no firma, así que el borde escribe NULL siempre.
+- 🔴 **Y ahí apareció la consecuencia de la decisión del token: `DL001, no tenant context`.** `webhook_ingest` resuelve el tenant **adentro**, así que `current_tenant()` es NULL y un trigger que dispara ahí no puede preguntarle a la sesión quién es. Resuelto con dos entradas: una escritura que toma el tenant explícito y **no se le otorga a nadie**, y el trigger le pasa `NEW.tenant_id` — el tenant de la fila que se está escribiendo, que el motor ya estableció. La propiedad sobrevive intacta: **nada alcanzable desde la aplicación nombra un tenant.**
+- 🎯 **`reconciliation_unavailable` NO SE PUEDE RECONOCER, y es un CHECK.** El fallback de `call_list` sólo se sostiene si el control compensatorio es **permanente**; un admin que pudiera tildarlo restauraría justo el agujero silencioso que existe para anunciar.
+- **Un admin puede escribir EXACTAMENTE UNA COLUMNA de cada tabla** (`acknowledged_at`, `resolved_at`), por lista de columnas protegidas y no por `GRANT` de tabla — Postgres no descompone un grant de tabla, así que `GRANT UPDATE ON t` + `REVOKE UPDATE (c)` deja `c` escribible.
+- ⚠️ **R13 hecho concreto, no cerrado:** el FK al vault es `ON DELETE SET NULL`, así que un borrado por fila blanquea el puntero en vez de bloquear una purga de cumplimiento. **El DROP de partición lo sigue rechazando un FK entrante**, así que R13 queda abierto y declarado.
+
+**LA PANTALLA `/admin/integration-health`.** §4.6 pide una superficie de producto y no un log.
+
+- 🔴 **NO TIENE LOADER, y lo forzó el ratchet.** §1.2 sanciona **un** loader SSR y hay tres, así que `ui.loader_whitelist` es `shrink_only` y un cuarto se rechaza con `AP005` — la misma negativa que dio forma a la pantalla de contacto. Busca su propio dato, así que una lectura fallida rinde un error en línea en vez de llevarse el shell por el boundary del framework.
+- **La línea permanente es el punto de la pantalla, no los contadores.** *"El hecho de que no podamos verificar es una línea visible permanente"* — y su atajo asesino es borrarla por ser siempre igual.
+- **Cuatro estados:** esqueleto (nunca spinner), error en línea que dice que **nada se está perdiendo mientras la pantalla está caída**, sin-permiso que dice qué hacer, y vacío que dice qué significa vacío en vez de reportar ausencia dos veces.
+
+**LOS SMS (0038).** `app.message` con `UNIQUE (tenant, provider_message_id)`, cola `message-merge` propia, y el ruteo de §4.3 ahora **exhaustivo** dentro de `webhook_ingest` en vez de sólo llamadas.
+
+- 🔴 **`provider_message_id` vive en EL MISMO ESPACIO DE IDS que `aloware_call_id`.** §4.4 los lista como claves separadas y asumió espacios separados; G2 estableció que `body.id` es un id de **comunicación**. Dos tablas y dos índices únicos siguen funcionando; lo que se rompe es quien asuma que un id sólo puede ser una de las dos cosas.
+- **`sent` y `delivered` NO EXISTEN como estados, a propósito.** Ningún webhook de la captura reporta un envío exitoso, y un estado que nada puede escribir es cómo una pantalla termina diciendo *"Enviando…"* para siempre. Hay dos estados y los dos son alcanzables.
+- **`failed` es terminal:** un `received` posterior no lo deshace. Una falla de entrega reportada después es el hecho que importa para cumplimiento.
+- ⚠️ **`body_text` es la superficie de cumplimiento, no sólo contenido.** El riesgo residual **R5** —un STOP en base64 o fuera de los primeros 320 bytes— va a tener que leer de esta columna. **Acá no se implementa nada de eso:** STOP es del módulo de consentimiento, y un opt-out a medias es peor que uno ausente porque parece atendido.
+
+🖥️ **PROBADO EN PANTALLA, CONTRA EL DEV SERVER CORRIENDO, no sólo en tests.** Un `POST` real al borde con un cuerpo de la forma capturada: **401** con token desconocido y cero filas · **204 en 243 ms** con el token bueno · **204** en el replay de los mismos bytes y **una sola** fila de vault, una de evento, un job. El worker lo consumió (`state = completed`) y produjo la fila de `call` mergeada: `completed`/90, `outbound`, vendedor resuelto, `disposition_raw = 'No Answer'`, talk 63, wait 2. **La cadena entera —HTTP → vault → dedupe → job → worker → dominio— corrió en vivo.** Artefactos borrados de `crm_dev` después; el server, bajado, y el 3001 libre.
+
+- ⚠️ **LO QUE NO PUDE VER EN PANTALLA, dicho en vez de insinuado:** los cuatro estados de `/admin/integration-health` renderizados. La pantalla vive dentro del shell y necesita una sesión de **admin**; lo verificado es que la ruta está cableada, redirige a sign-in estando deslogueado y **no tira nada a consola**. Sus estados están cubiertos por el tipo y su lectura por tests de integración, que no es lo mismo que haberlos mirado.
+- ⚠️ **`react-router dev` ignoró el puerto asignado y volvió a caer en 3001**, tal cual está anotado. La nota sigue siendo cierta y sigue costando un minuto cada vez.
+
+### 🚪 `app.webhook_ingest()` — LA ÚNICA PUERTA, Y CUATRO COSAS QUE EL MOTOR CONTRADIJO (2026-08-07)
+`app/db/migrations/0035_webhook_ingest.sql` · `app/db/schema/communications.ts` · `app/jobs/queues.ts` · `scripts/jobs-schema.ts` · `tests/integration/webhook-ingest.test.ts` · `silo.test.ts`. **331 → 353 tests · 32 → 33 archivos.** `npm run verify` verde de punta a punta.
+
+📐 **P12 NO SE MOVIÓ, y lo medí en vez de suponerlo.** El presupuesto reporta **112.958 bytes** — y el árbol limpio en `5aa3fe0`, con `git stash -u`, reporta **exactamente el mismo número**. Este cambio agrega **cero** bytes al bundle del cliente, que es lo esperado: nada de lo tocado es alcanzable desde una ruta. (La entrada anterior anotó 112.924; la diferencia es de esa medición, no de este trabajo.)
+
+Las dos tablas de la 0034 dejan de ser inertes. §4.2 regla 1 cumplida: la escritura al vault, el insert de dedupe y el encolado son **una llamada en una transacción**, y `crm_app` sigue sin INSERT en ninguna de las dos.
+
+🔴 **LA FUNCIÓN RECIBE UNA CREDENCIAL, NUNCA UN `tenant_id`, y es la decisión que carga todo lo demás.** La firma obvia —`webhook_ingest(p_tenant_id uuid, …)`— está mal dos veces: haría una **quinta** ruta cross-tenant de un corpus que dice "las CUATRO enumeradas" en tres migraciones y en §0.3, y dejaría que el que llama **nombre** el tenant en el que escribe. Es P3.1 aplicado al borde: le pasás quién sos, el motor decide qué significa. `app.webhook_endpoint` es `definer_only` — `crm_app` puede tirar el SELECT y lee **cero filas**.
+
+- **El índice del token es GLOBAL y no compuesto**, el único lugar de este esquema donde eso es correcto: el token es lo que **produce** el tenant, así que acotar su unicidad por tenant permitiría que dos tenants tengan el mismo secreto y la resolución fuera ambigua. La PK sigue empezando por `tenant_id`.
+- ⚠️ **`app.current_tenant()` es NULL durante toda la función, a propósito.** La 0009 afirma en un comentario que una consulta de CI sobre `pg_proc.prosrc` exige que todo definer la contenga. **Medido: esa consulta no existe**, y **4 de los 13** definers ya la fallarían (`begin_request`, `begin_system_work`, `resolve_identity`, `scheduled_job_claim`), todos legítimamente. Construir ese gate es una decisión con una lista de excepciones de cinco filas atrás; no la tomé.
+
+📐 **CUATRO HECHOS DE pg-boss 12 MEDIDOS CONTRA EL MOTOR, y tres contradicen el diseño escrito.**
+
+1. **`pgboss.send()` NO EXISTE COMO FUNCIÓN SQL.** El esquema instala exactamente `create_queue`, `job_table_format`, `job_table_run`, `job_table_run_async`. El `pgboss.send('call-merge', …)` del diagrama de §4.2 es la API de **JavaScript** — y la regla que ese diagrama ilustra es justo la que prohíbe una segunda llamada desde Node. El encolado es un INSERT crudo a `pgboss.job`.
+2. **`pgboss.job` está particionada por `LIST(name)` con `q_fkey … DEFERRABLE INITIALLY DEFERRED`.** Diferida significa que una cola faltante **no rompe el INSERT: rompe el COMMIT**, y se lleva puestas la escritura al vault y la fila de dedupe *después* de que el borde tuvo toda la razón para creer que guardó. Aloware no reintenta. Por eso la función **lee la cola y levanta `WI004`** en vez de confiar.
+3. 🔴 **`policy` es columna de la FILA del job, no de la cola.** Los índices únicos parciales la leen de ahí. Un job insertado sin `policy` no satisface **ningún** índice: todo sigue corriendo y el dedupe simplemente no está. Es la falla silenciosa más plausible de este paso, y por eso hay `WI005`.
+4. 🔴 **`key_strict_fifo`, y `exclusive` habría perdido webhooks.** §4.5 pide **serializar** por `aloware_call_id`, no deduplicar. `exclusive` es `UNIQUE (name,key) WHERE state <= active` → **rechaza** el segundo job mientras el primero está activo. G2 midió `Call-Disposed` restableciendo la disposición **6,6 s después**, y `Recording-Saved` y `transcription.*` llegan más tarde todavía. `key_strict_fifo` sólo cubre active/retry/failed, así que el segundo hace cola. **Su CHECK exige `singleton_key` NOT NULL**, que fuerza la decisión correcta: una entrega sin `aloware_call_id` no tiene llamada que mergear y se guarda sin job.
+
+🔴 **`crm_test` NUNCA TUVO pg-boss INSTALADO, y nada podía notarlo.** El deploy es `db:migrate && db:jobs`; el esquema de jobs **no llega en una migración**. El arnés construía la base sólo desde los archivos de migración, así que la base de test no tenía ni `pgboss.queue` ni `pgboss.job`. Invisible mientras la única cola era un tick de cron que nadie asserteaba — y **fatal para esto**, porque el encolado va en la misma transacción. El instalador se movió a `scripts/jobs-schema.ts` y el arnés **importa el del deploy** en vez de reimplementarlo: dos copias serían un arnés asserteando contra un esquema que producción no tiene.
+
+🔴 **Y ARREGLARLO PUSO ROJO UN GUARDIÁN DE `silo.test.ts` QUE LLEVABA TODO EL PROYECTO VERDE POR LA RAZÓN EQUIVOCADA.** Asserteaba que `crm_app` tiene DELETE sobre **exactamente dos** relaciones (`auth.session`, `auth.verification`). **Eso nunca fue cierto en producción:** `install-jobs.ts` le otorga DML sobre todo `pgboss` —DELETE incluido— desde la época de la 0020. El test pasaba porque la base de test **no tenía la cosa que producción sí instala**. Un guardián verde por ausencia es exactamente el fallo que este proyecto existe para no tener.
+
+- **No lo arreglé alargando la lista** —eso es aflojar un gate para que pase el build, con otra ropa— **y una lista de pg-boss se pudriría igual**, porque sus particiones `queue_stats_*` se llaman por fecha. Ahora son **tres aserciones derivadas de la postura declarada**: cero DELETE en todo esquema `managed` (absoluto, sin excepciones), los únicos esquemas con DELETE son exactamente `auth` y `pgboss` (los dos `exempt` con razón escrita), y dentro de `auth` siguen enumeradas las dos tablas — porque el esquema es exempt y un DELETE sobre `auth.user` haría desaparecer un login por debajo del historial del ledger de un vendedor.
+- **Una cola cuyo worker no puede borrar un job terminado no es una cola.** La razón de exención de la 0020 ya decía que `crm_app` tiene DML ahí y ningún CREATE; lo que faltaba era que el arnés pudiera verlo.
+
+🔬 **UNA MUTACIÓN QUEDÓ VERDE Y ESO ERA EL HALLAZGO.** Saqué el borrado del vault huérfano —lo que deja una fila de PII y un bearer token al audio por cada entrega repetida— y **los 20 tests siguieron pasando**. La causa no era el código: mi test de concurrencia largaba la segunda entrega y commiteaba la primera **sin esperar**, así que el COMMIT solía ganar y la segunda salía por el atajo barato sin llegar nunca al índice. Ahora **espera a que un backend esté realmente bloqueado en un lock** (`pg_stat_activity`), y falla nombrándolo si eso no pasa. Con el poll puesto, la mutación da `expected 2 to be 1`.
+
+- 🎯 **Las otras dos mutaciones, rojas y en el test correcto:** `exclusive` en vez de `key_strict_fifo` → rompe **sólo** el test del `Call-Disposed`; `policy` nulo en el job → rompe **dos**, incluido el que ata el valor al predicado del índice que lo hace significar algo.
+
+**LA RETENCIÓN DEL VAULT DEJA DE SER UN NÚMERO SUELTO.** `purge_after` es `NOT NULL` desde la 0034 y nada decía cuánto vive un payload. Ahora es `ref.system_constant['webhook_vault_retention_days']` con un CHECK acotado a **30–90** (la ventana de §4.6).
+
+- ⚠️ **NO puede vivir en `ref.timing_constant`:** su `value_ms` es `integer` y topea en ~24,8 días. Treinta no entra. La tabla de la ventana de undo es estructuralmente la tabla equivocada para un reloj de retención — una razón mecánica, no de gusto.
+- **El límite que importa es el de ARRIBA, y nada más lo atrapa.** Un valor corto ya lo rechaza `raw_payload_vault_purge_after_receipt`; uno largo es silencioso. Este reloj hace dos trabajos: minimización CCPA, **y** el límite de cuánto tiempo un backup sigue siendo un juego de bearer tokens al audio de las llamadas. `3650` se lee como un typo y se comporta como una política.
+
+⚠️ **LO QUE NO ESTÁ, dicho y no maquillado:**
+
+- **La fila de `dead_letter` de §4.6 no se escribe** — esa tabla no existe. Lo que sí se cumple es el comportamiento: los bytes se guardan y **no corre ningún job**, y se devuelve `quarantined`. La rama es inalcanzable hoy igual, porque Aloware no firma.
+- **`message.received` y `message.delivery_failed` se guardan y NO se encolan.** §4.3 los rutea a un consumidor `message-merge` que no existe, y tampoco existe la tabla `message`. Meterlos en `call-merge` le daría al merger de llamadas una fila que no puede acotar. Los bytes quedan, así que un replay los levanta cuando eso aterrice.
+- **La asimetría de qué levanta excepción es deliberada:** `WI001/WI002/WI006` sólo se disparan con valores que produce **nuestro** borde. Nada derivado de datos del proveedor levanta jamás — Aloware no reintenta, así que una entrega que la función rechaza se pierde para siempre, y el vault existe justamente para que un bug de mapeo sea una fila que se puede reproducir.
+- **La ruta del borde todavía no existe**, y cuando se escriba **la URL es `/webhooks/aloware/v1/{endpoint_token}`**: el ruling **P8.2** tacha el `/hooks/` y el `{path_secret}` que §4.2, §7 y los diagramas siguen usando. *(El `/hooks/aloware` de la 0031 está bien: es evidencia de lo que sirvió el receptor del spike, no una especificación.)*
+- **Ningún seed crea un `webhook_endpoint`.** Los tests crean el suyo; el demo no tiene uno, y no lo necesita hasta que la ruta exista.
+
+🔴 **Y ALGO QUE NO ERA CÓDIGO: LA RAMA DE LA PUERTA 2 NO ESTABA FUSIONADA DONDE EL REGISTRO DECÍA.** Este worktree estaba en `f37ef40` sin nada del módulo 9; el trabajo vivía en **otro worktree** (`modulo-9-llamadas-9f5623`, rama homónima, `5aa3fe0`). El merge-base era HEAD exacto, así que fue fast-forward sin conflictos. **Vale como método: "fusionada" es una afirmación sobre un worktree, no sobre el repositorio** — `git worktree list` lo contesta en un segundo y el síntoma (un directorio de módulo que no existe) no se parece a la causa.
+
+- ⚠️ **Y `node_modules` NO estaba vacío acá**, al contrario de lo anotado como regla general: 338 paquetes, `npm run typecheck` verde sin tocar nada. La regla del `.env` sigue siendo cierta y se aplicó; la del `npm ci` es *"verificá antes de gastar minutos"*.
+
 ### 📞 MÓDULO 9 ARRANCA: EL CANDADO DE TIPO, LA EVIDENCIA ENTRANTE Y LA SUPERFICIE DE LLAMADA (2026-08-06)
 `app/modules/communications/**` · `app/db/capability-registry.ts` · `app/routes/api/calls.ts` · `app/components/contacts/contact-drawer.tsx` · `app/components/communications/aloware-capture-panel.tsx` · migración **0031**. **259 → 272 tests · 28 → 29 archivos.** P12 sube de 111.068 a **112.924 bytes** (el drawer, +1.856 B; 88% del presupuesto). La rama de la Puerta 2 quedó **fusionada** acá (fast-forward a `ffa5c9f`).
 
@@ -1339,7 +1443,7 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 | 6 | Calendario + recordatorios | ✅ dominio **y** despachador: pg-boss cableado, claim con lease, 15-min drop y SMS-dark |
 | 7 | Leaderboard público | ✅ tablero, undo honrado **y celebración** |
 | 8 | My Day | ✅ |
-| 9 | Aloware | 🔴 **bloqueado por la Puerta 2** — necesita la cuenta real. (Decía "Puerta 11", que es la del bundle y el primer paint; se cerró el 2026-08-03 y Aloware sigue bloqueado, que es como se notó el error) |
+| 9 | Aloware | 🟡 **EN CURSO — la Puerta 2 dejó de bloquearlo el 2026-08-05.** Hecho: el candado de tipo `alowareCapability()`, la evidencia de capacidad entrante (0031), la aserción de boot (0032), el mapeo de números (0033), las dos tablas de ingest (0034), el extractor del borde, `POST /api/calls` hasta `no_credentials`, y desde el 2026-08-07 **`app.webhook_ingest()` (0035)**. Falta: la ruta del borde (`/webhooks/aloware/v1/{endpoint_token}`, P8.2), la tabla `call`, el job de merge, y `message-merge`. **Sigue bloqueando producción `call_list`** — decisión abierta de Jorge, ver la lista de pendientes arriba |
 | 10 | Datos demo | 🟡 siembra por el camino real, se niega a duplicarse, `lost_reason` sembrados, **y desde el 2026-08-03 ABARCA LOS CUATRO PERÍODOS con una reversa** — las dos exigencias de §1529 que el registro nunca había anotado como faltantes. `DEMO-01..10` sigue siendo un registro verificado por máquina: **3 cubiertos, 4 bloqueados por Aloware/búsqueda, 3 parciales**, y los tres parciales encogieron |
 
 **Extra, no planificado:** shell de navegación, CI en GitHub Actions, aserción de arranque G4(a), **undo de 5 s**, **el test de deriva de la Puerta 10**, **el gate de axe-core con su job de CI**, **el drag de escritorio**, **el despachador de jobs** y **la celebración**.
@@ -1350,11 +1454,11 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 |---|---|---|
 | 0 | Región EE.UU. en el plan a contratar | ✅ **APROBADO** — Ohio y Virginia en los tres tipos de recurso, workspace Hobby |
 | 1 | Sonda de plataforma | 🟡 **G1e cerrado** (`btree_gin`/uuid existe, probado con planner). Faltan `max_connections` real, PgBouncer en modo transacción, y si concede `CREATE EVENT TRIGGER` — **todo requiere la instancia de Render** |
-| 2 | Aloware contra la cuenta real | 🔴 bloqueado, es de Jorge |
+| 2 | Aloware contra la cuenta real | ✅ **CONTESTADA (2026-08-05)** — evidencia en [`docs/sprint-0/g2-aloware.md`](docs/sprint-0/g2-aloware.md), 22 entregas capturadas y 8 probes en `ref.capability_probe`. Lo medido contradice Fase 2 en cuatro puntos: **no firma · no manda id de entrega ni de evento · NO REINTENTA NUNCA · tolera ≥110 s sin respuesta.** ⚠️ Queda sin cerrar el vocabulario de disposiciones, si `Call-Disposed` siempre acompaña, y si hay anuncio saliente configurable (D9) — **todo eso necesita la cuenta, que se suspende el 15/08/2026** |
 | 3 | Camino del dinero | ✅ mayormente — append-only por trigger de sentencia (incluye TRUNCATE), exactly-once, transacción del gate atómica. **Falta:** proceso muerto a mitad del gate sin dejar lock |
 | 4 | Silo de punta a punta | 🟡 **(a) cerrado** (se niega a arrancar si el usuario puede saltear RLS). El resto lo cubre la suite de silo salvo el contexto heredado entre job y request en la misma conexión pooleada |
 | 5 | Equivalencia plegado/separado | 🟡 **el pliegue EXISTE y corrió.** El worker arranca dentro del proceso web (`app/jobs/boot.ts`) y produjo **las mismas dos filas terminales** que el proceso separado — `skipped: sms_disabled` y `dropped: 40m late`. Falta lo que da nombre a la puerta: equivalencia **bajo carga y en los bordes**, no en un caso feliz |
-| 6 | Tormenta de 20.000 webhooks | ⬜ no empezado |
+| 6 | Tormenta de 20.000 webhooks | ⬜ no empezado — pero **desde el 2026-08-07 es corrible**: `app.webhook_ingest()` existe y el atajo del duplicado (una sonda de índice, sin escritura ni borrado) está construido justo para esta puerta. Lo que falta para medirla es la ruta del borde |
 | 7 | SSE detrás del proxy | ⬜ no empezado |
 | 8 | pg-boss bajo estrés de versión | ⬜ no empezado |
 | 9 | Simulacro de restauración | ⬜ no empezado |
@@ -1383,7 +1487,7 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 
 
 ### 🧾 DEUDA TÉCNICA DECLARADA (no perder de vista)
-- **E9 está firmada pero NO implementada:** no existe `ref.capability_probe`. Llega con el módulo Aloware.
+- ~~**E9 está firmada pero NO implementada:** no existe `ref.capability_probe`~~ — **DESACTUALIZADO, corregido el 2026-08-07.** La migración **0029** la construyó y la **0031** le agregó su par entrante `ref.capability_delivery`; las dos tienen filas con procedencia real de la Puerta 2. Verificado contra el motor, no contra el archivo.
 - 🟢 **Snapshots de Drizzle desenganchados desde 0018** — 0019–0023 son SQL a mano y dos alteraron tablas. **Ya no es una trampa: `npm run db:generate` se NIEGA (`DBGEN003`)** nombrando el desfase. Reconciliar la cadena sigue pendiente, pero ahora es una decisión y no un accidente.
 - **R13 abierto:** `raw_payload_vault` purga por drop de partición mientras `dead_letter` tiene FK hacia ella.
 - **Loaders SSR fuera de presupuesto:** §1.2 sanciona **uno** (el pipeline) y hay **tres**. Enumerados en `contracts/ui-loader-whitelist.json` y acotados por el ratchet `ui.loader_whitelist`. **Falta la decisión de cuál sacar** — My Day es el que el registro pide por su propio texto; el del leaderboard ya no compra el primer pintado del demo (ese pasó a My Day el 2026-08-03), sino el de la segunda pantalla.

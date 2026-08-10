@@ -2,6 +2,8 @@ import { drizzle } from 'drizzle-orm/postgres-js'
 import { migrate } from 'drizzle-orm/postgres-js/migrator'
 import postgres from 'postgres'
 
+import { installJobSchema } from '../../../scripts/jobs-schema'
+
 import { ADMIN_URL, APP_ROLE_PASSWORD, OWNER_URL, TEST_DB } from './urls'
 
 /**
@@ -70,6 +72,22 @@ export async function setup(): Promise<void> {
       VALUES ('environment', 'test',
               'Set by tests/integration/setup/global-setup.ts. crm_test is built from migrations with no seed, so it holds no demo tenant and 0032 would otherwise classify it production.')
       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, reason = EXCLUDED.reason`
+
+    // 🔴 pg-boss, AND ITS ABSENCE WAS A HOLE NOBODY COULD SEE.
+    //
+    // The deploy is `npm run db:migrate && npm run db:jobs` — the job schema
+    // does NOT arrive in a migration, so a database built from migration files
+    // alone has no `pgboss.queue` and no `pgboss.job`. This harness has been
+    // building exactly that. It never showed, because the only queue was a cron
+    // tick and nothing asserted on it.
+    //
+    // `app.webhook_ingest()` is what makes it matter: §4.2 ruling 1 puts the
+    // enqueue in the SAME TRANSACTION as the vault write, so without the queue
+    // the function's main path cannot run here at all. The install is imported
+    // from the deploy script rather than reimplemented, so the two cannot
+    // drift — a second copy would be a test harness asserting against a schema
+    // production does not have.
+    await installJobSchema(sql)
   } finally {
     await sql.end()
   }

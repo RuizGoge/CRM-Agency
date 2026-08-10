@@ -1,8 +1,10 @@
 import { PgBoss } from 'pg-boss'
 
 import { dispatchDueJobs } from '~/modules/calendar/dispatch'
+import { mergeCallFromEvent, type CallMergeJob } from '~/modules/communications/call-merge'
+import { mergeMessageFromEvent, type MessageMergeJob } from '~/modules/communications/message-merge'
 
-import { DISPATCH_CRON, DISPATCH_QUEUE } from './queues'
+import { CALL_MERGE_QUEUE, DISPATCH_CRON, DISPATCH_QUEUE, MESSAGE_MERGE_QUEUE } from './queues'
 
 /**
  * The worker role.
@@ -66,6 +68,40 @@ export async function startWorker(): Promise<PgBoss | null> {
       console.log(
         `[worker] dispatched ${outcome.claimed}: ${outcome.fired} fired, ` +
           `${outcome.skipped} skipped, ${outcome.droppedLate} dropped late, ${outcome.failed} failed`,
+      )
+    }
+  })
+
+  // 🔴 ONE AT A TIME, AND THE `1` IS THE WHOLE POINT OF THE QUEUE'S POLICY.
+  // `key_strict_fifo` guarantees at most one ACTIVE job per `aloware_call_id`,
+  // which is what serializes two webhooks about one call 50 ms apart — §4.5's
+  // "not by a SELECT-then-UPDATE that loses one of them". Raising batchSize
+  // here would not break that guarantee, but it would let two jobs for
+  // DIFFERENT calls interleave in one handler invocation, and the handler is
+  // written per job.
+  await instance.work<CallMergeJob>(CALL_MERGE_QUEUE, { batchSize: 1 }, async ([job]) => {
+    if (job === undefined) return
+    const result = await mergeCallFromEvent(job.data)
+
+    // An unmapped call is a PRODUCT SURFACE, not a log line: §5 renders it to
+    // the admin as "1 call from a number we do not recognize. Nothing was
+    // written to a seller's book." Printing it here is the interim until
+    // `admin_alert` exists — said in the console rather than swallowed.
+    if (result.status !== 'resolved') {
+      console.log(
+        `[worker] call-merge ${job.data.alowareCallId}: ${result.status}` +
+          ('reason' in result ? ` (${result.reason})` : ''),
+      )
+    }
+  })
+
+  await instance.work<MessageMergeJob>(MESSAGE_MERGE_QUEUE, { batchSize: 1 }, async ([job]) => {
+    if (job === undefined) return
+    const result = await mergeMessageFromEvent(job.data)
+    if (result.status !== 'resolved') {
+      console.log(
+        `[worker] message-merge ${job.data.alowareCallId}: ${result.status}` +
+          ('reason' in result ? ` (${result.reason})` : ''),
       )
     }
   })

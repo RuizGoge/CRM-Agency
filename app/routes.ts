@@ -23,6 +23,10 @@ export default [
     // No loader, deliberately: the sanctioned UI-loader count is one and three
     // exist, so `ui.loader_whitelist` (shrink_only) would refuse a fourth.
     route('contacts/:contactId', 'routes/ui/contact.tsx'),
+    // Admin-only by policy, not by this line: dead_letter and admin_alert are
+    // tenant_admin_only, so a seller reaching this URL reads zero rows and the
+    // screen renders its no-permission state rather than a table of zeros.
+    route('admin/integration-health', 'routes/ui/integration-health.tsx'),
   ]),
 
   route('sign-out', 'routes/api/sign-out.ts'),
@@ -34,7 +38,13 @@ export default [
   route('api/contacts/:contactId', 'routes/api/contact.ts'),
   route('api/quick-add', 'routes/api/quick-add.ts'),
   route('api/calls', 'routes/api/calls.ts'),
+  // The ingest edge. NOT under `api/`, and versioned, because ruling P8.2 fixes
+  // both: this URL is configured inside Aloware's panel and we cannot redeploy
+  // them. `/hooks/…` and `{path_secret}` appear in §4.2, §7 and two diagrams and
+  // are struck by name.
+  route('webhooks/aloware/v1/:endpointToken', 'routes/api/webhooks-aloware.ts'),
   route('api/celebrate', 'routes/api/celebrate.ts'),
+  route('api/integration-health', 'routes/api/integration-health.ts'),
   // better-auth mounts its whole surface under one splat. See the note in the
   // module for why this is the one resource route outside the endpoint factory.
   route('api/auth/*', 'routes/api/auth.ts'),

@@ -112,17 +112,62 @@ describe('the generated hardening', () => {
     expect(violations).toEqual([])
   })
 
-  it('grants crm_app DELETE on exactly two tables, both outside the domain', async () => {
-    // Soft delete is the only delete the domain has, so `app` and `ref` must
-    // carry none at all. The two exceptions are enumerated rather than
-    // described: better-auth removes a session row on sign-out and deletes a
-    // consumed verification token. Widening this — DELETE on auth.user, say,
-    // which would let a login vanish out from under a seller's ledger history
-    // — turns this red.
+  // ---------------------------------------------------------------------------
+  // 🔴 THIS ASSERTION USED TO BE ONE LITERAL LIST, AND IT WAS GREEN FOR THE
+  // WRONG REASON — it read `['auth.session', 'auth.verification']` and passed
+  // because the TEST DATABASE was missing something production has.
+  //
+  // `npm run db:jobs` grants `crm_app` DML on every pg-boss table, DELETE
+  // included, and has since migration 0020. But the job schema does not arrive
+  // in a migration, and this harness builds `crm_test` from migration files
+  // alone — so the queue was never there to be seen. The harness now installs
+  // it (global-setup.ts), which made the gap visible immediately.
+  //
+  // The fix is not a longer list. A hardcoded pg-boss list would also ROT: its
+  // `queue_stats_*` partitions are named by date. What follows asserts the
+  // property the original comment was reaching for, derived from the declared
+  // posture rather than from a list somebody has to maintain.
+  // ---------------------------------------------------------------------------
+  it('grants crm_app DELETE nowhere in any MANAGED schema', async () => {
+    // Soft delete is the only delete the domain has. This is the absolute half
+    // and it takes no exceptions: `app`, `ref` and `public` carry none at all.
+    const grants = await sql<{ relation: string }[]>`
+      SELECT p.table_schema || '.' || p.table_name AS relation
+      FROM information_schema.table_privileges p
+      JOIN security.schema_policy s ON s.schema_name = p.table_schema
+      WHERE p.grantee = 'crm_app' AND p.privilege_type = 'DELETE'
+        AND s.posture = 'managed'
+      ORDER BY 1`
+
+    expect(grants.map((g) => g.relation)).toEqual([])
+  })
+
+  it('confines every DELETE it does grant to exactly two exempt schemas', async () => {
+    // A DELETE appearing in a schema nobody exempted — or in one nobody
+    // classified at all — is the thing this catches. Both of these are declared
+    // in `security.schema_policy` with a written reason.
+    const schemas = await sql<{ table_schema: string }[]>`
+      SELECT DISTINCT table_schema FROM information_schema.table_privileges
+      WHERE grantee = 'crm_app' AND privilege_type = 'DELETE'
+      ORDER BY 1`
+
+    // `pgboss` as a whole: a queue whose worker cannot delete a completed job
+    // is not a queue. Migration 0020's exemption reason already says crm_app
+    // holds DML there and no CREATE — the rows carry no tenant dimension, and a
+    // queue entry is a pointer to a domain row where the scoping actually lives.
+    expect(schemas.map((s) => s.table_schema)).toEqual(['auth', 'pgboss'])
+  })
+
+  it('grants crm_app DELETE on exactly two auth tables, and never on the user', async () => {
+    // `auth` is exempt as a schema, so the schema-level rule above would let
+    // anything through here. These stay enumerated: better-auth removes a
+    // session row on sign-out and a consumed verification token. DELETE on
+    // `auth.user` would let a login vanish out from under a seller's ledger
+    // history, and that is what this line exists to turn red.
     const grants = await sql<{ relation: string }[]>`
       SELECT table_schema || '.' || table_name AS relation
       FROM information_schema.table_privileges
-      WHERE grantee = 'crm_app' AND privilege_type = 'DELETE'
+      WHERE grantee = 'crm_app' AND privilege_type = 'DELETE' AND table_schema = 'auth'
       ORDER BY 1`
 
     expect(grants.map((g) => g.relation)).toEqual(['auth.session', 'auth.verification'])

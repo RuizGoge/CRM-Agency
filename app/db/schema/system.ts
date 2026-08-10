@@ -52,5 +52,27 @@ export const systemConstant = ref.table(
       'system_constant_environment_known',
       sql`${t.key} <> 'environment' OR ${t.value} IN ('production', 'development', 'test')`,
     ),
+    /**
+     * The vault's retention clock, bounded at both ends.
+     *
+     * 🔴 THE UPPER BOUND IS THE ONE THAT MATTERS, and nothing else in the
+     * database catches it. A too-SHORT value is already refused downstream:
+     * `raw_payload_vault_purge_after_receipt` rejects zero, and a non-numeric
+     * value fails its cast. A too-LONG one is silent — and errata **E9** turns
+     * that silence into the defect, because this clock is doing two jobs at
+     * once. It is CCPA minimisation of consumer PII, and since `Recording-Saved`
+     * carries a `direct_recording_url` that 302s to a pre-signed link, it is
+     * also the bound on how long a database backup remains a set of bearer
+     * tokens to call audio. `3650` would read as a typo and behave as a policy.
+     *
+     * 30–90 days is §4.6's window. E9 is why probe evidence does NOT live under
+     * this clock: operational evidence must outlive the thing it certifies,
+     * consumer payloads must not.
+     */
+    check(
+      'system_constant_vault_retention_bounded',
+      sql`${t.key} <> 'webhook_vault_retention_days'
+          OR (${t.value} ~ '^[0-9]{1,3}$' AND ${t.value}::integer BETWEEN 30 AND 90)`,
+    ),
   ],
 )

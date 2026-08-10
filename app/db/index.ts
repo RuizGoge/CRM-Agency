@@ -4,8 +4,15 @@
  * Everything else in `app/db/**` is unreachable from application code by build
  * rule, not by convention — see the DATA-ACCESS GUARD in `eslint.config.js`.
  */
-export { claimDueJobs, withSystemWork, withTenant } from './client'
-export type { ClaimedJob, ScopeMode, SessionIdentity, Tx } from './client'
+export { claimDueJobs, ingestWebhook, withSystemWork, withTenant } from './client'
+export type {
+  ClaimedJob,
+  IngestInput,
+  IngestOutcome,
+  ScopeMode,
+  SessionIdentity,
+  Tx,
+} from './client'
 
 /**
  * The provider capability registry (§3), read once per process.
