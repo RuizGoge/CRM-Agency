@@ -7,6 +7,26 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 🤫 LA SEÑAL QUE CRUZA EL SILO SIN DECIR QUIÉN, Y N13 ES EL TERCER PRESUPUESTO DEPENDIENTE DE MÁQUINA (2026-08-10)
+`app/db/schema/lookup-meter.ts` · migración **0039** · `tests/integration/recent-contact-signal.test.ts`. **414 → 424 tests · 38 → 39 archivos.** Ítem 13. **El núcleo de compliance (8–13) queda cerrado.**
+
+**EL DATO CRUZA EL SILO Y LA RESPUESTA NO, y ésa es la forma entera de la feature.** Ping-post revende al mismo consumidor a dos vendedores de la misma agencia, seguido dentro de la hora. Ben necesita saber que la oficina ya alcanzó ese hogar — y no debe enterarse de que el otro lead es de Ana, ni de que existe como registro, ni de nada que le sirva para encontrarlo.
+
+- **Devuelve exactamente dos columnas: `status` y `minutes_ago`.** Sin nombre, sin id, sin dueño, y **deliberadamente sin un conteo**: que dos colegas tengan ese hogar es un hecho sobre el libro de la agencia, y nadie lo necesita para decidir no discar. **Un test lee `pg_proc` y assertea esas dos columnas**, así que volverla atributiva rompe el build en vez de ser una regla sobre lo que la UI dibuja.
+- **No dispara sobre la actividad propia** (`c.owner_user_id <> v_user`). Un vendedor ya ve sus llamadas en el timeline; una señal que sonara sobre su propia llamada sería ruido en cada tarjeta que trabaja, y el ruido es lo que enseña a dejar de leer un chip. 🎯 Mutación: quitar esa exclusión → rojo.
+- **Un contacto ajeno devuelve `none`, idéntico a "nadie tocó este hogar".** Una respuesta distinta para *"no es tuyo"* confirmaría que el registro existe.
+
+✅ **`tenant_lookup_meter`: 60/min por usuario por tipo, incrementado DENTRO de la misma función definer.** Esto es un **oráculo de privacidad** — preguntá una vez y sabés un hecho; preguntá sesenta mil veces y enumeraste el libro entero de la agencia, número por número, sin leer jamás una fila a la que no tuvieras derecho. **Quick-add hace barato el ataque** (un vendedor puede inventar un contacto con cualquier número y preguntar), así que *"sólo tus contactos"* es un lomo de burro y no el límite. El límite es el medidor, y `crm_app` **no tiene ningún privilegio** sobre esa tabla: no hay otra puerta que olvidarse de medir. 🎯 Mutación: sacar el tope → rojo. **El medidor corre ANTES de la lectura**, así que una consulta rechazada también gasta un tick.
+
+- ⚠️ **`05b` pide particionado diario con drop a 30 días; no está.** A cincuenta vendedores son ~72k filas/día en el peor caso que no ocurre, y un esquema de particiones es maquinaria operativa que debería llegar con una medición y no antes.
+
+🔴 **N13 SE PUSO ROJO Y NO ERA EL CÓDIGO: EL HOST ESTABA AL 77% DE CPU CON UN JUEGO ABIERTO.** Vale escribirlo porque el diagnóstico me llevó cuatro pasos y el primero fue equivocado.
+
+- **Mi primera lectura —"contención de máquina"— la desmintió la bisección**, y la segunda bisección fue **incompleta**: comparé sólo contra el ítem 11, que ya tenía mis cinco migraciones. Al medir contra `aae54fd`, **anterior a todo el trabajo de compliance**, dio **144,8 ms** — peor que con mis cambios (128–133 ms). **Inverso a lo que agregué: la firma del ruido, no de una regresión.**
+- **Lo decisivo fue separar CPU de I/O dentro de Postgres:** `count(*)` sobre 5 millones de filas tardó **1,5 s** (en máquina sana ~0,5) mientras un scan de 35 MB tardó **9,4 ms**. CPU a un tercio, disco perfecto. De ahí a mirar los procesos del host, donde estaban los tres de League of Legends.
+- **Cerrado el juego: `verify` verde a la primera, 424 tests, todos los presupuestos.**
+- 📐 **N13 se suma a P6 y P20 como presupuesto DEPENDIENTE DE MÁQUINA**, y es el tercero. La respuesta que el proyecto ya usa para P6 es **la mediana de tres corridas**; N13 toma **una sola medición**. Darle la misma metodología **no afloja el número** —los 120 ms no se mueven y una regresión real aparece en las tres— pero hoy no habría salvado nada: con la máquina así, la mediana también era ~130. **Queda propuesto, no hecho:** cambiar cómo mide un gate es una decisión de Jorge.
+
 ### 🚦 LA PUERTA ÚNICA, Y UNA FUGA DE SILO QUE ME ENCONTRÓ UN TEST (2026-08-09)
 `app/db/schema/compliance.ts` · migración **0038** · `tests/integration/compliance-gate.test.ts`. **393 → 414 tests · 37 → 38 archivos.** Ítems **11 y 12** del MVP, construidos juntos porque la puerta no puede ser correcta sin saber si hay un override activo. **El núcleo de compliance queda cerrado salvo una pregunta abierta, abajo.**
 
