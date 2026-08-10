@@ -54,8 +54,13 @@ export default function Shell({ loaderData }: Route.ComponentProps): React.JSX.E
       >
         <div
           style={{
-            maxWidth: '64rem',
-            margin: '0 auto',
+            // FULL WIDTH, and the previous 64rem cap is what made the board look
+            // unfinished. Every other screen is a centred reading column, so the
+            // capped bar lined up with them and the wordmark sat 200px in from
+            // the edge — while the Pipeline's title and its first column started
+            // at the page margin. Two left edges on one screen. A top bar that
+            // spans the window is also just what an application shell is; a
+            // centred one reads as a marketing page.
             padding: 'var(--space-3) var(--space-6)',
             display: 'flex',
             alignItems: 'center',

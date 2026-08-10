@@ -3,10 +3,17 @@ import { readFileSync } from 'node:fs'
 import postgres from 'postgres'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
+import {
+  CARD_GAP_PX,
+  CARD_H_DESKTOP_PX,
+  CARD_H_MOBILE_PX,
+  cardPitchPx,
+} from '~/styles/tokens/geometry'
+
 import { TEST_URL } from './setup/urls'
 
 /**
- * The fixed card height, in the two places it exists, compared as NUMBERS.
+ * The fixed card height, in the three places it exists, compared as NUMBERS.
  *
  * `04b` carried three different card heights before ruling N17 struck two of
  * them — 108/92 in §3.6, 112 in §2's mock, 120/156 in §1 — which is why this
@@ -18,6 +25,13 @@ import { TEST_URL } from './setup/urls'
  * Compared as VALUES and never as names. Errata E7/NEW-1 records what a drift
  * test that compares names does: it stays green through exactly the failure it
  * was written to catch.
+ *
+ * The THIRD place arrived with the column virtualizer: it multiplies by the row
+ * pitch in JavaScript and `04b` §2.1 forbids it from reading layout to find out
+ * what the pitch is. So the numbers exist in TypeScript too, and the drift this
+ * file catches is now the one that matters most — a virtualizer dividing by 120
+ * while a phone renders 156 puts every card in the column at the wrong offset
+ * and opens gaps a seller reads as missing leads.
  */
 
 let sql: postgres.Sql
@@ -63,6 +77,36 @@ describe('the card height is pinned at the engine, not in a stylesheet', () => {
   it('keeps the stylesheet and the engine on the same two numbers', async () => {
     expect(declared('size-card-h')).toBe(await pinned('ui.card_h_desktop'))
     expect(declared('size-card-h-mobile')).toBe(await pinned('ui.card_h_mobile'))
+  })
+
+  it('keeps the virtualizer on the same two numbers as the stylesheet', async () => {
+    // The third representation. Nothing in the running product compares these
+    // to the CSS: the browser reads the token, the virtualizer reads the
+    // constant, and the two disagreeing produces a board that renders — with
+    // cards at offsets that drift further apart the further a seller scrolls.
+    expect(CARD_H_DESKTOP_PX).toBe(declared('size-card-h'))
+    expect(CARD_H_MOBILE_PX).toBe(declared('size-card-h-mobile'))
+    expect(CARD_H_DESKTOP_PX).toBe(await pinned('ui.card_h_desktop'))
+    expect(CARD_H_MOBILE_PX).toBe(await pinned('ui.card_h_mobile'))
+  })
+
+  it('keeps the gap the virtualizer adds equal to the gap the column renders', () => {
+    // `--space-2` is the gap on the card list and 0.5rem at the 16px root that
+    // reset.css pins. The pitch is `height + gap`, so a gap that changed in the
+    // stylesheet alone would leave the spacers short by 8px per card — 1,000px
+    // of missing column on a 125-card book, which reads as a scrollbar that
+    // lies rather than as a bug in a number.
+    const rem = /--space-2:\s*([\d.]+)rem/.exec(CSS)?.[1]
+    expect(rem, '--space-2 is not declared in rem').toBeDefined()
+    // The rem→px conversion is only true because the root is left at the
+    // browser default, which reset.css states rather than assumes. If that ever
+    // becomes a number, this multiplication is the line that has to change with
+    // it — so it is asserted here instead of being a fact somebody remembers.
+    expect(RESET, 'the 16px root the rem conversion depends on').toMatch(/font-size:\s*100%/)
+    expect(CARD_GAP_PX).toBe(Number(rem) * 16)
+
+    expect(cardPitchPx(false)).toBe(CARD_H_DESKTOP_PX + CARD_GAP_PX)
+    expect(cardPitchPx(true)).toBe(CARD_H_MOBILE_PX + CARD_GAP_PX)
   })
 
   it('never lets one name mean both geometries', async () => {

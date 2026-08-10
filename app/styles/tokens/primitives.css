@@ -26,6 +26,12 @@
   --p-n-900: #161b22; /* 17.30 — primary text, EVERY money total */
   --p-n-1000: #0b0e13; /* shadow/scrim alpha anchor */
 
+  /* The same anchor as --p-n-1000, in channels, because a shadow needs an alpha
+   * and `#0b0e13` cannot carry one. Every elevation step and the modal scrim are
+   * built from this in theme.css, so the colour literal stays in this file —
+   * which is the rule this file's header states. */
+  --p-shadow-rgb: 11 14 19;
+
   /* --- Blue: primary action, focus, information -------------------------- */
   --p-b-50: #eef4ff;
   --p-b-100: #dae6ff;

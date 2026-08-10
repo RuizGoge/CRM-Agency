@@ -5,6 +5,8 @@ import { format, fromWireString } from '~/lib/money/money'
 import type { BoardCard, BoardColumn } from '~/routes/api/board'
 import { BREAKPOINTS } from '~/styles/tokens/timing'
 
+import { sliceFor, useBoardWindow } from './column-window'
+
 /**
  * The board's columns, with drag bound on top of them.
  *
@@ -23,6 +25,18 @@ import { BREAKPOINTS } from '~/styles/tokens/timing'
  * The check runs in an effect, so the server renders cards that are not
  * draggable. That is the honest default — without JavaScript there is no drag,
  * and the markup should not claim otherwise.
+ *
+ * A column over `VIRTUALIZE_ABOVE` cards renders a WINDOW of its cards and pads
+ * for the rest — see `column-window.ts` for the contract and for what half of it
+ * is not built. One consequence is worth stating plainly rather than leaving to
+ * be found: a card outside the window is not in the DOM, so it is not in tab
+ * order either. Tabbing still reaches it, because the browser scrolls a newly
+ * focused element into view, the scroll moves the window, and the next card
+ * mounts before the next Tab — the overscan is what guarantees there is always a
+ * mounted card past the fold to step onto. That chain is asserted in
+ * `column-virtualization.spec.ts`, because it is a chain and not a property, and
+ * a chain with one link missing looks exactly like a working one until a
+ * keyboard user meets it.
  */
 export function PipelineColumns({
   columns,
@@ -48,6 +62,10 @@ export function PipelineColumns({
   const [dragEnabled, setDragEnabled] = useState<boolean | null>(null)
   const [draggingId, setDraggingId] = useState<string | null>(null)
   const [overStageId, setOverStageId] = useState<string | null>(null)
+
+  // Shared by every column: they sit in one row, so they scroll together and
+  // there is exactly one window index to compute per scroll rather than six.
+  const { window: boardWindow, registerList } = useBoardWindow()
 
   useEffect(() => {
     const query = window.matchMedia(`(min-width: ${BREAKPOINTS.lg}px) and (pointer: fine)`)
@@ -108,23 +126,49 @@ export function PipelineColumns({
       {columns.map((column) => {
         const earning = column.stageType === 'earning'
         const over = overStageId === column.id && draggingId !== null
+        const slice = sliceFor(column.cards.length, boardWindow)
 
         return (
           <section
             key={column.id}
             aria-label={column.name}
             style={{
-              flex: '0 0 17rem',
+              // The width is a token now. It was `17rem` — 272px against the
+              // 288 the design system publishes — and below the density
+              // breakpoint it widens, because at 272px on a phone the next
+              // column is sliced through the middle of a card.
+              flex: '0 0 var(--column-w)',
               display: 'flex',
               flexDirection: 'column',
-              gap: 'var(--space-3)',
+              // THE COLUMN IS A SURFACE, and it was not one before: the list
+              // carried --color-surface-2, one step off the canvas, so on screen
+              // there was no column at all — just cards floating under a label.
+              background: 'var(--color-surface-3)',
+              borderRadius: 'var(--radius-lg)',
             }}
           >
             {/* The total sits BELOW the name rather than flush right. Pushed
                 right it lands against the next column's heading, and two
-                adjacent columns read as one run-on line. */}
+                adjacent columns read as one run-on line.
+
+                STICKY, which C-32 asked for and which only started to matter
+                today: a column can now hold 125 cards, and scrolling to card
+                ninety used to leave the seller with no idea which column they
+                were in or what it was worth. It sticks inside its own section,
+                so it travels only as far as its own column goes. */}
             <header
-              style={{ display: 'grid', gap: 'var(--space-1)', minHeight: 'var(--space-10)' }}
+              style={{
+                position: 'sticky',
+                top: 0,
+                zIndex: 'var(--z-raised)',
+                display: 'grid',
+                gap: 'var(--space-1)',
+                minHeight: 'var(--space-10)',
+                padding: 'var(--space-3) var(--space-2) var(--space-2)',
+                // Opaque, or the cards would scroll through the heading.
+                background: 'var(--color-surface-3)',
+                borderRadius: 'var(--radius-lg) var(--radius-lg) 0 0',
+              }}
             >
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 'var(--space-2)' }}>
                 <h2
@@ -132,7 +176,13 @@ export function PipelineColumns({
                 >
                   {column.name}
                 </h2>
-                <span style={{ fontSize: 'var(--type-xs)', color: 'var(--color-text-tertiary)' }}>
+                {/* SECONDARY, not tertiary, and the reason is the tint behind
+                    it. §5's contrast matrix is measured against
+                    --color-surface-1: the tertiary step is 4.90 there, which
+                    leaves it 4.29 on the column and below AA. Moving a surface
+                    means re-picking the text step, not carrying the old one
+                    across — the ramp has no spare margin by construction. */}
+                <span style={{ fontSize: 'var(--type-xs)', color: 'var(--color-text-secondary)' }}>
                   {column.cards.length}
                 </span>
               </div>
@@ -153,6 +203,12 @@ export function PipelineColumns({
             </header>
 
             <div
+              // The window's origin is measured from these, and from nothing
+              // else — never from the section, whose header height differs
+              // between a column that shows a total and one that does not.
+              ref={registerList}
+              data-cards={column.cards.length}
+              data-window={slice.virtualized ? `${slice.first}-${slice.last}` : 'all'}
               // dragover fires continuously; the state only changes on enter
               // and leave. Re-rendering the board on every dragover event is
               // how a drag stops holding 60fps.
@@ -183,8 +239,23 @@ export function PipelineColumns({
                 alignContent: 'start',
                 minHeight: 'var(--space-16)',
                 padding: 'var(--space-2)',
-                background: over ? 'var(--color-selected-bg)' : 'var(--color-surface-2)',
-                borderRadius: 'var(--radius-lg)',
+                // THE SPACERS, and they are padding rather than two empty
+                // children on purpose — an empty child is a grid item and would
+                // collect its own gap, growing the column by 16px it does not
+                // own. Zero on an unvirtualized column and zero before the
+                // viewport is measured, so the pre-hydration render is the same
+                // markup the server produced.
+                paddingTop: `calc(var(--space-2) + ${slice.padTopPx}px)`,
+                paddingBottom: `calc(var(--space-2) + ${slice.padBottomPx}px)`,
+                // Transparent at rest: the COLUMN is the surface now, and the
+                // list painting a second one over it produced the two nearly
+                // identical greys that made the board look untinted. The drop
+                // tint stays here rather than moving to the section, because the
+                // element that carries the handlers is the element that must
+                // light up — a ring around a box that is not the drop target is
+                // a lie with good intentions.
+                background: over ? 'var(--color-selected-bg)' : 'transparent',
+                borderRadius: '0 0 var(--radius-lg) var(--radius-lg)',
                 // An inset ring rather than a border: a border changes the box
                 // and every card below it shifts by a pixel as the pointer
                 // crosses columns.
@@ -212,23 +283,28 @@ export function PipelineColumns({
                     padding: 'var(--space-4) var(--space-2)',
                     textAlign: 'center',
                     fontSize: 'var(--type-xs)',
-                    color: 'var(--color-text-tertiary)',
+                    // The node axe named. Tertiary is 4.29 on the column tint —
+                    // the gate caught it the same hour the tint arrived, which
+                    // is the whole reason it runs on every surface.
+                    color: 'var(--color-text-secondary)',
                   }}
                 >
                   Nothing here yet.
                 </p>
               ) : (
-                column.cards.map((card) => (
-                  <Card
-                    key={card.id}
-                    card={card}
-                    draggable={dragEnabled === true}
-                    dragging={draggingId === card.id}
-                    pending={pendingCardId === card.id}
-                    onDragStart={handleCardDragStart}
-                    onDragEnd={handleCardDragEnd}
-                  />
-                ))
+                column.cards
+                  .slice(slice.first, slice.last)
+                  .map((card) => (
+                    <Card
+                      key={card.id}
+                      card={card}
+                      draggable={dragEnabled === true}
+                      dragging={draggingId === card.id}
+                      pending={pendingCardId === card.id}
+                      onDragStart={handleCardDragStart}
+                      onDragEnd={handleCardDragEnd}
+                    />
+                  ))
               )}
             </div>
           </section>
@@ -278,6 +354,10 @@ const Card = memo(function Card({
       draggable={draggable}
       onDragStart={draggable ? handleDragStart : undefined}
       onDragEnd={draggable ? onDragEnd : undefined}
+      // Carries --elev-1 at rest and --elev-2 on hover. It is a class and not a
+      // style attribute because a hover cannot be expressed in one, and §4.6
+      // wants the lift to be a heavier resting shadow rather than a transition.
+      className="kanban-card"
       style={{
         padding: 'var(--space-3)',
         background: 'var(--color-surface-1)',
@@ -308,7 +388,12 @@ const Card = memo(function Card({
         // the only other hard-coded breakpoint number in the tree.
         height: 'var(--card-h)',
         gridAutoRows: 'min-content',
-        alignContent: 'start',
+        // SPREAD, not stacked at the top, and the difference only shows where it
+        // matters. Desktop's 120px holds the four rows with almost nothing left
+        // over, so this changes nothing there; mobile's 156px had a third of the
+        // card empty below the last line, which is what made a phone card look
+        // like a box somebody forgot to finish.
+        alignContent: 'space-between',
         overflow: 'hidden',
         gap: 'var(--space-2)',
         cursor: draggable ? 'grab' : undefined,
@@ -391,8 +476,16 @@ const Card = memo(function Card({
         style={{
           justifySelf: 'start',
           fontSize: 'var(--type-xs)',
+          fontWeight: 'var(--font-weight-semibold)',
           color: 'var(--color-text-link)',
+          // A STANDALONE ACTION, not a link inside a sentence — which is the
+          // distinction WCAG 1.4.1 draws, and the reason dropping the underline
+          // here is not the failure it would be mid-paragraph. It comes back on
+          // hover and on focus, so the cue exists wherever a pointer or a
+          // keyboard asks for it.
+          textDecoration: 'none',
         }}
+        className="card-action"
       >
         Move
       </Link>
