@@ -7,6 +7,33 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 📕 MY BOOK, LA EXTRACCIÓN DE `healthOf`, Y TRES RAMAS ESCRIBIENDO LA MISMA MIGRACIÓN (2026-08-10)
+`app/lib/card-health/**` · `app/routes/api/my-book.ts` · `app/routes/ui/my-book.tsx` · `app/components/book/**` · `tests/integration/my-book.test.ts`. **464 → 472 tests · 44 → 45 archivos.** Ítem 24. **Ruta B completa.**
+
+**`healthOf` SALE DE LA RUTA Y ENTRA A `app/lib/`.** Vivía en `app/routes/api/board.ts`, que importa `~/db` y `~/lib/auth` — así que la primera superficie que la necesitara habría arrastrado postgres, drizzle y better-auth al bundle del cliente. **No es hipotético: `client-server-boundary.test.ts` existe PORQUE pasó, dos veces**, y su mensaje de error nombra exactamente este remedio. Extraída textual, comentarios incluidos, porque los comentarios llevan los rulings. P12 no se movió un byte.
+
+🔴 **Y LA TABLA DE FASE 4 QUE DEFINE EL CHIP TIENE TEXTO TACHADO.** `04-ux-flows.md` §675 da los chips de My Book y dos de sus filas están muertas: una usa **`2 × cold_threshold_days` — default 14**, que es el diseño de dos niveles que **R6 borró** y **R1.7** reemplazó por *"un solo umbral, default 7"* (la migración 0025 ya dropeó esa columna), y otra escribe la palabra que **R11 prohíbe** y que `one-decay-threshold.test.ts` grepea. `CLAUDE.md` dice que los rulings de Parte I outrankean Fase 2–4. **Implementado sólo lo que sobrevive**, y anotado en el módulo para que el próximo que lea esa tabla no la siga.
+
+- **El chip se computa en el SERVIDOR**, del mismo dato de touch que lee el tablero: `04b` §1253 exige que tablero, My Book y My Day sean byte a byte idénticos sobre el estado de un lead, y tres pantallas coinciden sólo si ninguna decide.
+- **Precedencia: `client` > `uncalled` > `no_open_deal` > `going_cold` > `working`.** `client` gana sobre todo porque es un hecho sobre la relación y no sobre el trabajo — un cliente sin tocar hace nueve días sigue siendo cliente, y llamarlo `Uncalled` sería un reproche por trabajo terminado. `uncalled` gana sobre el deterioro porque **el import de onboarding crea contactos y a propósito ninguna oportunidad**: un libro de 400 filas no puede volverse 400 filas deteriorándose al instante.
+- **SIN LOADER, y no por estilo:** `ui.loader_whitelist` sanciona uno y ya lleva dos sobre presupuesto; un cuarto lo rechaza `AP005`. La pantalla busca su propio dato — **el ratchet forzó la arquitectura que §1.1 quería igual**, igual que en la pantalla de contacto.
+- **Un número marcado malo NO se ofrece:** la fila muestra `Bad number` en vez de los dígitos. Si se renderizara igual, la marca sería decorativa.
+- ⚠️ **`Callback due` y `No answer` NO están**, y están nombrados en el módulo en vez de omitidos: necesitan un callback futuro y un resultado de llamada, que llegan con la otra mitad del bucle diario.
+
+🔴🔴 **EL HALLAZGO MÁS SERIO DE LA SESIÓN, Y NO ES DE CÓDIGO: TRES WORKTREES ESTÁN ESCRIBIENDO MIGRACIONES EN EL MISMO RANGO.**
+
+| Worktree | Migraciones 0035+ |
+|---|---|
+| `aloware-puerta-2-spike` | **0035** webhook_ingest · **0036** call_merge · **0037** dead_letter_and_alerts · **0038** message_merge — **sin commitear** |
+| `crm-strategy-discussion` | **0035–0044** (este trabajo) |
+| `virtualizacion-tablero` | **0043** leaderboard_read_hoists_its_clock · **0044** leaderboard_poll_budget |
+
+**Colisionan 0035–0038 y 0043–0044.** Y las tres sesiones vienen aplicándolas a **la misma `crm_dev`**, que quedó con `app.call` y `app.message` de una rama y las tablas de compliance de otra. El síntoma que lo destapó: `npm run db:migrate` falla con **`HR002: policy_class owner_scoped_read has no generator`** — una rama registró una clase de política que el `harden()` de la otra no conoce. **drizzle-kit se traga el error**; sólo apareció corriendo el migrador a mano con las causas encadenadas.
+
+- ⚠️ **Lo que yo le hice a `crm_dev` y hay que decirlo:** apliqué la 0039 a mano para diagnosticar, sin registrarla en el journal, y después la revertí quirúrgicamente (`recent_contact_signal`, `tenant_lookup_meter`, `lookup_kind`, su fila de registro). **La base quedó como estaba antes de que yo tocara** — rota por la colisión de ramas, no por eso.
+- **Mi rama está verificada contra su propia base aislada**, construida sólo con mis migraciones: 45 archivos, 472 tests. La colisión es un problema de merge, no de este código.
+- **No hay mecanismo que lo prevenga.** El número de migración se elige mirando el árbol propio, y un worktree no ve los otros.
+
 ### ✏️ LA MARCA DE NÚMERO MALO POR FIN TIENE ESCRITOR (2026-08-10)
 Migración **0044** · `tests/integration/contact-editing.test.ts`. **454 → 464 tests · 43 → 44 archivos.** Mitad de servidor del ítem 27 (ruta B).
 
