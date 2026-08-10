@@ -49,6 +49,25 @@ async function signInAsPerfSeller(page: Page): Promise<void> {
   await expectCount(page.getByRole('navigation', { name: 'Main' }), 1)
   await page.goto('/board')
   await expect(page.getByRole('heading', { name: 'Pipeline' })).toBeVisible()
+
+  // 🔴 WAITS FOR HYDRATION, and leaving this out was a defect that passed for
+  // weeks and then failed only inside the full suite. Every marker these tests
+  // read — `data-virtualized`, `data-card-total`, the first ten cards — is
+  // rendered by the SERVER, so they are all true before any JavaScript has run.
+  // The scroll handler is not: without it a column scrolls natively and the
+  // window never moves, so `reaches the LAST card` looked for card 499 in a
+  // page that was still showing the server's ten.
+  //
+  // It only went red once the board gained a poller and the suite got slower,
+  // which is the point — the test was always racing hydration and winning by
+  // luck.
+  //
+  // THE ATTRIBUTE, NOT ITS VALUE, and the first version got that wrong too:
+  // waiting for `'on'` passed on desktop and hung on mobile, where drag is
+  // correctly OFF. `pipeline-columns.tsx` states the rule where the attribute
+  // is written — it is absent until the effect has run, so its PRESENCE is the
+  // hydration signal and its value is a separate answer about this viewport.
+  await expect(page.locator('main [data-drag]')).toHaveAttribute('data-drag', /^(on|off)$/)
 }
 
 const zone = (page: Page, stage: string) =>

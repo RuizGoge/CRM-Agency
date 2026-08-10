@@ -2,7 +2,9 @@ import { isRouteErrorResponse, useRouteError } from 'react-router'
 
 import { FirstRunChecklist } from '~/components/home/first-run-checklist'
 import { StandingBlock } from '~/components/leaderboard/standing-block'
+import { useConditionalPoll } from '~/lib/http/use-conditional-poll'
 import { readMyDay, type MyDayItem, type MyDayPayload } from '~/routes/api/my-day'
+import { POLL_SLOW_MS } from '~/styles/tokens/timing'
 
 import type { Route } from './+types/my-day'
 
@@ -15,7 +17,16 @@ export async function loader({ request }: Route.LoaderArgs): Promise<MyDayPayloa
 }
 
 export default function MyDay({ loaderData }: Route.ComponentProps): React.JSX.Element {
-  const day = loaderData
+  // `POLL_SLOW_MS` named this screen and the board as its two consumers and
+  // had NEITHER: the constant sat in the tokens module with zero readers. This
+  // screen covers what OTHER systems did — a meeting that ended, a task that
+  // came due — so a seller who leaves it open through a morning was watching a
+  // list that stopped being today's at the moment it rendered.
+  const day = useConditionalPoll<MyDayPayload>({
+    path: '/api/my-day',
+    initial: loaderData,
+    intervalMs: POLL_SLOW_MS,
+  })
   const clear =
     day.needsOutcome.length === 0 &&
     day.appointments.length === 0 &&

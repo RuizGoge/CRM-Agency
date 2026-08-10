@@ -167,7 +167,20 @@ test.describe('the NEW clock counts up from the lead’s arrival', () => {
 
     // R11's full sentence as the accessible name, the abbreviation on the card
     // face — the same two-renderings rule every other signal follows.
-    await expect(chip).toHaveAttribute('aria-label', 'New — 07:30 since arrival')
+    //
+    // 🔴 DERIVED FROM THE CHIP, NOT PINNED, and this is the SECOND time the same
+    // trap caught me in this file. The first two tests were rewritten when they
+    // went red on the exact starting value; this one kept `07:30` and passed
+    // for a fortnight of nothing, then failed the moment the suite got slower
+    // and sign-in took a second and a half instead of one. What the rule
+    // actually says is that the two renderings carry the SAME clock — which is
+    // what this now checks, and which no amount of machine load can move.
+    const visible = await chip.textContent()
+    expect(visible, 'the chip is not the NEW clock').toMatch(/^NEW \d{2}:\d{2}$/)
+    await expect(chip).toHaveAttribute(
+      'aria-label',
+      `New — ${(visible ?? '').replace('NEW ', '')} since arrival`,
+    )
 
     // §4.2 registers this row as aria-live="off", and it is asserted rather
     // than left to the default. A clock in the attention slot is the obvious

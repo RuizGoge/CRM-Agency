@@ -16,9 +16,11 @@ import { PipelineColumns } from '~/components/board/pipeline-columns'
 import { UndoBar } from '~/components/board/undo-bar'
 import { withTenant } from '~/db'
 import { requireIdentity } from '~/lib/auth/identity'
+import { useConditionalPoll } from '~/lib/http/use-conditional-poll'
 import { MoneyError, parseUserAmount } from '~/lib/money/money'
 import { CelebrationToken } from '~/modules/earnings/celebration'
 import { readPipeline, type BoardColumn, type PipelinePayload } from '~/routes/api/board'
+import { POLL_SLOW_MS } from '~/styles/tokens/timing'
 
 import type { Route } from './+types/board'
 
@@ -214,9 +216,24 @@ export default function Board({ loaderData, actionData }: Route.ComponentProps) 
   const navigate = useNavigate()
   const drag = useFetcher<typeof action>()
 
+  // THE BOARD DELTAS POLL — the other half of `POLL_SLOW_MS`, which named this
+  // screen and My Day and had no reader at all. It covers what OTHER systems
+  // did: a card that went overdue, an activity somebody else completed, a lead
+  // that aged past the fresh window. The seller's OWN moves do not arrive here
+  // — those redirect and revalidate the loader, which then wins over any tick.
+  //
+  // 15 s and conditional, so a board nobody touched costs a 304 with an empty
+  // body and NO re-render: the hook does not touch state on a 304, which is
+  // what keeps a poll off the drag's frame budget.
+  const live = useConditionalPoll<PipelinePayload>({
+    path: '/api/board',
+    initial: loaderData,
+    intervalMs: POLL_SLOW_MS,
+  })
+
   const movingId = params.get('move')
-  const moving = loaderData.columns.flatMap((c) => c.cards).find((c) => c.id === movingId)
-  const from = loaderData.columns.find((c) => c.cards.some((k) => k.id === movingId))
+  const moving = live.columns.flatMap((c) => c.cards).find((c) => c.id === movingId)
+  const from = live.columns.find((c) => c.cards.some((k) => k.id === movingId))
 
   // A drop's refusal arrives on the fetcher, not on actionData — different
   // channel, same requirement. `CLAUDE.md`: if the server disagrees with the
@@ -232,7 +249,7 @@ export default function Board({ loaderData, actionData }: Route.ComponentProps) 
   const pendingCardId = drag.formData ? field(drag.formData, 'opportunityId') || null : null
   const pendingToStageId = drag.formData ? field(drag.formData, 'toStageId') || null : null
 
-  const columns = optimisticallyPlaced(loaderData.columns, pendingCardId, pendingToStageId)
+  const columns = optimisticallyPlaced(live.columns, pendingCardId, pendingToStageId)
 
   // The card that just moved, resolved against the board as it is NOW rather
   // than trusted from the URL. A stale link, a card moved in another tab, or a
@@ -241,10 +258,10 @@ export default function Board({ loaderData, actionData }: Route.ComponentProps) 
   const movedId = params.get('moved')
   const backId = params.get('from')
   const movedTo = movedId
-    ? loaderData.columns.find((c) => c.cards.some((k) => k.id === movedId))
+    ? live.columns.find((c) => c.cards.some((k) => k.id === movedId))
     : undefined
   const movedCard = movedTo?.cards.find((k) => k.id === movedId)
-  const back = backId ? loaderData.columns.find((c) => c.id === backId) : undefined
+  const back = backId ? live.columns.find((c) => c.id === backId) : undefined
 
   // The celebration, armed only by a MOVE and never by a page load.
   //
@@ -386,7 +403,7 @@ export default function Board({ loaderData, actionData }: Route.ComponentProps) 
           card={moving}
           fromId={from.id}
           fromName={from.name}
-          columns={loaderData.columns}
+          columns={live.columns}
           lostReasons={loaderData.lostReasons}
           error={error}
         />
