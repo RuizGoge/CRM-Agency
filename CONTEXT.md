@@ -1164,9 +1164,22 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 | 12 | Drag a 60 fps con 500 tarjetas | ✅ **CERRADA.** Perfil `dnd-ci` (2× CPU throttle) sobre `perf-500`, **contra el BUILD DE PRODUCCIÓN**: **p95 16,8 ms · max 16,8 ms (cero frames perdidos) · cero long tasks**, contra p95≤20 / frame≤34 / longtask≤50. El fixture se assertea antes de medir, y el gate está probado con dientes (bloqueo de 60 ms → las tres aserciones rojas) |
 | 13 | Publicar las contradicciones | ✅ `docs/sprint-0/g13-published-contradictions.md` |
 
-### ▶️ LO SIGUIENTE — sesión del 2026-08-03, cierre
+### ▶️ LO SIGUIENTE — sesión del 2026-08-09, cierre
 
-**`master` = `origin/master` + commits locales sin empujar. 243 tests · 83 e2e · árbol limpio · demo sembrado.** Los puntos 1, 2, 3, 4 y 6 de la lista anterior están cerrados, y también el riel de salud que abría esta lista (ver las entradas del 2026-08-03 arriba).
+**Rama `claude/virtualizacion-tablero-304005`, 12 commits, árbol limpio. 270 tests · 109 e2e.** Cerrados esta sesión: virtualización del tablero · reloj `NEW` · handoff plegado (Puerta 4) · conditional GET en las tres superficies · los tres pollers.
+
+🎯 **EL PRÓXIMO BLOQUE, definido con precisión porque ya está todo lo que lo precede: MEDIR LA PATA DEL PISO DE LA PUERTA 6.** Son dos presupuestos con nombre en `04b` §3.2:
+
+- **P11 — coste del poll del leaderboard:** *"p95 server time for a `304`"*, warn > 40 ms, **rojo > 80 ms**.
+- **P7 — API p95:** 60 s, **50 vendedoras virtuales**, los 14 endpoints de §3.4, **rojo > 300 ms**.
+
+**Lo que ya existe y hay que reutilizar, no rehacer:** `tests/integration/search-perf.test.ts` **ya construye 50 vendedoras con 500 contactos cada una (25.000)** — eso es el grueso del fixture `perf-floor` de §3.1, hoy inline en ese spec. **Lo que le falta a `perf-floor`:** ~200.000 actividades y **6.400 filas de ledger repartidas en los cuatro períodos**, y esas últimas son las que importan para P11, porque el leaderboard lee la **proyección** (§3.6 P7/P10) y una proyección vacía mide un `304` que no representa nada.
+
+**El orden que yo seguiría:** extraer el fixture de 50 libros a `tests/e2e/fixtures/perf-floor.ts` con su aserción de forma · sembrarle el ledger por el camino real (`ledger_append`, retrofechado como hace `scripts/seed.ts`) · medir P11 y publicarlo **sin ratchetear todavía** · recién después la migración con la fila de `ref.ci_ratchet` y el `monotonic_down`. Es el mismo orden que cerró la Puerta 11: medir primero, ratchetear como acto aparte.
+
+⚠️ **P7 nombra k6 y este árbol no lo tiene.** Antes de agregar una herramienta, vale la pena decidir si un driver en Node dentro de la suite existente compra lo mismo — §9.4.1 hace que una herramienta que hay que encender aparte sea una herramienta que se apaga.
+
+**Lo demás sigue igual: la tormenta de la Puerta 6 espera Aloware, y las Puertas 7 y 9 esperan la instancia de Render.**
 
 **Lo que NO depende de nadie — por acá seguir, en este orden:**
 
