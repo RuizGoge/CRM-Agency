@@ -89,6 +89,33 @@ describe('the card height is pinned at the engine, not in a stylesheet', () => {
     ).resolves.toBeDefined()
   })
 
+  it('anchors the row pitch to the pinned height on both breakpoints', async () => {
+    // THE PITCH IS WHAT THE VIRTUALIZER COUNTS IN, and it is the number that has
+    // no ratchet row of its own. It does not need one: the height it is derived
+    // from is `pinned`, so as long as the DIFFERENCE is the gap, the pitch
+    // cannot drift without this going red. Retuning the pitch alone is the
+    // silent version of the failure — every card still renders at exactly
+    // `--card-h`, so the card-box assertion above stays green while the column
+    // the scroll container computes and the column the browser lays out slide
+    // apart by 8px per row, and card 40 is 320px from where the window thinks.
+    const gapDesktop = declared('size-card-pitch') - (await pinned('ui.card_h_desktop'))
+    const gapMobile = declared('size-card-pitch-mobile') - (await pinned('ui.card_h_mobile'))
+
+    // `--space-2`, which is what `--card-gap` resolves to by construction.
+    expect(gapDesktop, 'the desktop pitch is not the card plus the gap').toBe(8)
+    expect(gapMobile, 'the mobile pitch is not the card plus the gap').toBe(8)
+
+    // Both paths read ONE number. `--card-gap` is a calc over the pitch and the
+    // height rather than a literal, so a plain-DOM column under 30 cards and a
+    // windowed column above it cannot end up on two rhythms. If this line is
+    // ever replaced by a hard-coded gap, the two paths become independent and
+    // only the demo tenant — which never reaches thirty cards — gets tested.
+    expect(CSS).toMatch(/--card-gap:\s*calc\(var\(--card-pitch\) - var\(--card-h\)\)/)
+    expect(RESET, 'the pitch must swap with the height').toMatch(
+      /--card-pitch:\s*var\(--size-card-pitch-mobile\)/,
+    )
+  })
+
   it('switches the rendered height at exactly one breakpoint', () => {
     // `--card-h` is what a card renders at, and it resolves to the desktop
     // token by default and the mobile one below the density breakpoint. If the

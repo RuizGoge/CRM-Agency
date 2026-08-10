@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm'
 
 import { withTenant, type SessionIdentity } from '~/db'
 import { requireIdentity } from '~/lib/auth/identity'
+import { jsonConditional } from '~/lib/http/conditional'
 import { fromWireString, subtract, sum, toWireString } from '~/lib/money/money'
 
 /**
@@ -222,34 +223,17 @@ export async function readBoardFor(
 }
 
 export async function loader({ request }: { request: Request }): Promise<Response> {
-  const payload = await readBoard(request)
-  const body = JSON.stringify(payload)
-
-  // Conditional GET. The board is polled every five seconds by every seller,
-  // so almost all of these must answer 304 — see the p95 <= 80ms budget.
+  // Conditional GET. This route had the only working implementation in the
+  // tree, inline; it now shares the one in `~/lib/http/conditional` with the
+  // two surfaces that had none. The reason it must stay derived from the
+  // RENDERED BODY is preserved there: the public value is time-dependent
+  // because entries younger than the undo window are excluded, so a purely
+  // write-derived tag would answer 304 while the visible number changed as a
+  // pending entry aged out.
   //
-  // Derived from the rendered body rather than from a write watermark, and
-  // that is deliberate: the PUBLIC value is time-dependent, because entries
-  // younger than the undo window are excluded. A purely write-derived ETag
-  // would answer 304 while the visible number changed as a pending entry aged
-  // out. Cheaper forms exist; none of them may lose that property.
-  let hash = 0
-  for (let i = 0; i < body.length; i++) {
-    hash = (hash * 31 + body.charCodeAt(i)) | 0
-  }
-  const etag = `W/"${hash.toString(36)}"`
-
-  if (request.headers.get('if-none-match') === etag) {
-    return new Response(null, { status: 304, headers: { etag } })
-  }
-
-  return new Response(body, {
-    headers: {
-      'content-type': 'application/json; charset=utf-8',
-      etag,
-      // Never a shared cache. Two sellers must never be served one another's
-      // response, and this board is per-viewer because of `isSelf`.
-      'cache-control': 'private, no-store',
-    },
-  })
+  // ⚠️ Nothing in the product calls this route. The seller's board polls by
+  // revalidating the UI route's loader, which is a `/earnings.data` request
+  // that carries no tag and answers 200 every time — measured, three ticks out
+  // of three. See CONTEXT.md.
+  return jsonConditional(request, await readBoard(request))
 }

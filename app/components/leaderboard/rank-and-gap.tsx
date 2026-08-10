@@ -92,7 +92,7 @@ export function RankAndGap({ board }: { board: BoardPayload }): React.JSX.Elemen
         You&rsquo;re #{board.self.rank}
       </span>
 
-      <Dot />
+      <Dot className="standing-separator" />
 
       <span
         className="money"
@@ -105,9 +105,14 @@ export function RankAndGap({ board }: { board: BoardPayload }): React.JSX.Elemen
         {format(fromWireString(board.self.totalCents))}
       </span>
 
-      {/* The one that disappears on a phone, where the wrap does its job —
-          see the rule in reset.css. */}
-      <Dot className="standing-separator-last" />
+      {/* BOTH separators go on a phone, and it took two passes to see why. The
+          first fix removed only this one, because it was the only one left
+          dangling in the screenshot of the day. The sentence has since grown a
+          line, so the wrap moved and the FIRST dot became the orphan instead —
+          the same blemish, one clause to the left. The rule was never about
+          which dot: below the density breakpoint the sentence stacks and the
+          line break is doing every separator's job. */}
+      <Dot className="standing-separator" />
 
       <Gap nextUp={board.nextUp} leadCents={board.leadCents} />
     </Frame>

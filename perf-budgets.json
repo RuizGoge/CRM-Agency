@@ -6,7 +6,7 @@
     "approved 2.0 s TTI are mutually unsatisfiable, and ruled: register the ratchet",
     "NAME with direction monotonic_down and NO VALUE ROW until the gate measures.",
     "Until this file existed the null-budget build failure E6 calls 'the only gate",
-    "before then' did not exist anywhere in the tree — the build was green because",
+    "before then' did not exist anywhere in the tree \u2014 the build was green because",
     "nothing measured, not because anything passed.",
     "",
     "Direction is monotonic_down on every row: a number here may be TIGHTENED freely",
@@ -14,7 +14,7 @@
     "10.0.1) EXISTS since migration 0022 and check-perf-budgets.ts compares the two,",
     "failing with PERF006 when the file and the engine ship different numbers. This",
     "paragraph used to end 'is NOT built yet, so today loosening a value is still a",
-    "file edit' — it was true when written and had stopped being true, which is the",
+    "file edit' \u2014 it was true when written and had stopped being true, which is the",
     "specific way a file like this goes quietly wrong.",
     "",
     "What is still a file edit is a run that cannot REACH the engine: CI needs crm_ci",
@@ -22,7 +22,7 @@
     "cross-check did not happen rather than passing in silence.",
     "",
     "Every row now names a tier, and every tier names the command that runs it. A",
-    "tier nothing runs fails with PERF007 — P20 sat in an imaginary 'nightly' tier",
+    "tier nothing runs fails with PERF007 \u2014 P20 sat in an imaginary 'nightly' tier",
     "for a month and looked, from this file, exactly like a budget being enforced."
   ],
   "budgets": [
@@ -41,12 +41,12 @@
       "note": [
         "Measured from the client module graph, then cross-checked against a real",
         "browser on both Playwright profiles: 105.6 KB gzip over 10 files, identical",
-        "to the byte. The graph computation is what runs here — it needs no browser,",
+        "to the byte. The graph computation is what runs here \u2014 it needs no browser,",
         "no database and no session, and /board redirects when signed out.",
         "",
         "Headroom is ~18% over the measurement, deliberately not zero. This budget",
-        "exists to catch a REGRESSION — the shape of it being the 147 KB gzip",
-        "better-auth 'identity' chunk reaching a seller-facing route — not to fail",
+        "exists to catch a REGRESSION \u2014 the shape of it being the 147 KB gzip",
+        "better-auth 'identity' chunk reaching a seller-facing route \u2014 not to fail",
         "the build the next time a screen gains a component."
       ]
     },
@@ -86,7 +86,7 @@
       "note": [
         "04b 3.2 P6: rAF deltas during a scripted 1200 ms three-column drag on a",
         "500-card board. Fails on p95 > 20 ms, OR any frame > 34 ms, OR any long",
-        "task > 50 ms. Three separate failures, not one — a smooth average with a",
+        "task > 50 ms. Three separate failures, not one \u2014 a smooth average with a",
         "single 60 ms stall is a drag that visibly jumps.",
         "",
         "Enforced by tests/e2e/drag-perf.spec.ts, not by check-perf-budgets.ts:",
@@ -94,7 +94,7 @@
         "there is one place they can be read from and one place they can be",
         "loosened from.",
         "",
-        "The profile is dnd-ci — desktop-ci with a 2x CPU slowdown (04b 3.1), so a",
+        "The profile is dnd-ci \u2014 desktop-ci with a 2x CPU slowdown (04b 3.1), so a",
         "green build means headroom on a seller's five-year-old laptop rather than",
         "60 fps on a CI runner with nothing else to do."
       ]
@@ -119,7 +119,7 @@
         "6 stages), signed in as the fixture seller. Lighthouse's own mobile preset,",
         "unmodified: 4x CPU slowdown, simulated slow 4G, phone viewport.",
         "",
-        "Five runs measured 2227 2248 2251 2265 2276 ms — a spread of 49 ms. Per 8.1",
+        "Five runs measured 2227 2248 2251 2265 2276 ms \u2014 a spread of 49 ms. Per 8.1",
         "the median rounded up to the next 100 ms becomes the budget: 2251 -> 2300,",
         "inside the 3000 ms ceiling. The gate compares the MEDIAN of 3 runs, never",
         "the best of them and never the mean.",
@@ -157,12 +157,12 @@
         "'a consequence, not a budget' and is deliberately not ratcheted here.",
         "",
         "MEASURED at 55-60 ms across 25,000 contacts in 50 books, over the six",
-        "queries §7 puts a seller in front of: a pasted number, a number typed",
+        "queries \u00a77 puts a seller in front of: a pasted number, a number typed",
         "with hyphens, the last four digits, a surname with many matches, a first",
         "name with more, and an email fragment.",
         "",
         "120, not 60. The budget exists to catch a REGRESSION, not to break the",
-        "build the next time a result row gains a column — the same deliberate",
+        "build the next time a result row gains a column \u2014 the same deliberate",
         "headroom P12 was given over its own measurement, for the same reason.",
         "",
         "The first measurement was 1,053 ms. Nothing about the schema changed to",
@@ -175,6 +175,43 @@
         "check-perf-budgets.ts: this one needs a database and a 25,000-contact",
         "fixture. The number lives here so there is one place to read it from and",
         "one place it can be loosened from."
+      ]
+    },
+    {
+      "id": "P11",
+      "name": "perf.P11_leaderboard_304_p95",
+      "title": "Leaderboard poll cost, server p95 for a 304",
+      "tier": "integration",
+      "metric": "server_ms",
+      "route": "/api/leaderboard",
+      "unit": "ms",
+      "direction": "monotonic_down",
+      "fixture": "perf-floor",
+      "value": 80,
+      "measured": 14.6,
+      "measured_on": "2026-08-09",
+      "note": [
+        "04b 3.2 P11: p95 server time for a 304, warn over 40 ms, red over 80.",
+        "Unlike P12, P13, P20 and N13, this number was NOT derived from the",
+        "measurement: it was ratified in Phase 4 and the measurement was checking",
+        "whether the product was inside it. Registering the measured 14.6 would",
+        "invent a stricter rule than the one that was signed, on one machine.",
+        "",
+        "MEASURED at p95 14.6 ms / median 12.6 ms over perf-floor (50 sellers,",
+        "25,000 contacts, 6,400 ledger rows across all four periods), by",
+        "tests/integration/leaderboard-poll-perf.test.ts. Inside the WARN, not",
+        "merely inside the red.",
+        "",
+        "It measured 238 ms p95 before migration 0029. The split said where:",
+        "the projection read was 192 ms and the ETag serialize-and-compare was",
+        "0.2 ms, so the caching layer was never the problem. clock_timestamp()",
+        "is VOLATILE, so the reveal-delay predicate was re-evaluated per row and",
+        "dragged a ref.timing_constant lookup with it 6,400 times per board read.",
+        "",
+        "1183 assumed 2 ms per 304 and built the USD 7/month cost model on it,",
+        "saying plainly that it is an assumption until the storm gate measures",
+        "it. 14.6 ms is the first figure that assumption has been checked",
+        "against. It is one order of magnitude out, not two, and inside budget."
       ]
     }
   ]

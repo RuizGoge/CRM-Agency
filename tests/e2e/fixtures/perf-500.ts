@@ -140,6 +140,25 @@ export async function seedPerf500(): Promise<void> {
       WHERE tenant_id = ${PERF_TENANT} AND owner_user_id = ${PERF_SELLER}`
     const have = Number(countRow?.n ?? '0')
     const missing = PERF_CARD_COUNT - have
+
+    // 🔴 THE ARRIVALS ARE RESET ON EVERY RUN, and this is not housekeeping.
+    //
+    // These rows are persistent, so `created_at` kept whatever value the first
+    // seed gave it — and the fresh window is sixty minutes. An hour after the
+    // fixture was first built, not one of the 500 cards was `fresh` any more,
+    // so the NEW clock rendered on none of them and P6 measured a board with no
+    // clocks on it. The gate that refused this feature twice would have gone
+    // green WITHOUT MEASURING IT, and nothing would have said so.
+    //
+    // All 500 fresh is the fixture's documented worst case rather than a
+    // convenience — a seller who has just imported their book has exactly that
+    // — so this restores the shape the file already claims, instead of relaxing
+    // it. `drag-perf.spec.ts` now asserts the clocks are on screen while it
+    // measures, so this cannot quietly stop working again.
+    await sql`
+      UPDATE app.opportunity SET created_at = clock_timestamp()
+       WHERE tenant_id = ${PERF_TENANT} AND owner_user_id = ${PERF_SELLER}`
+
     if (missing <= 0) return
 
     // Round-robin across the OPEN stages only, so the three columns the drag

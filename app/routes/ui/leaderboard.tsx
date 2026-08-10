@@ -1,10 +1,10 @@
-import { useEffect } from 'react'
-import { isRouteErrorResponse, useNavigation, useRevalidator, useRouteError } from 'react-router'
+import { isRouteErrorResponse, useNavigation, useRouteError } from 'react-router'
 
 import { BoardSkeleton } from '~/components/leaderboard/board-skeleton'
 import { BoardRow } from '~/components/leaderboard/board-row'
 import { BOARD_EMPTY } from '~/components/leaderboard/empty-copy'
 import { Podium } from '~/components/leaderboard/podium'
+import { useConditionalPoll } from '~/lib/http/use-conditional-poll'
 import { fromWireString, isZero } from '~/lib/money/money'
 import { readBoard, type BoardPayload, type Period } from '~/routes/api/leaderboard'
 import { POLL_FAST_MS } from '~/styles/tokens/timing'
@@ -35,46 +35,33 @@ const PERIOD_LABELS: ReadonlyArray<readonly [Period, string]> = [
 ]
 
 export default function Leaderboard({ loaderData }: Route.ComponentProps): React.JSX.Element {
-  const board = loaderData
-  const revalidator = useRevalidator()
   const navigation = useNavigation()
 
-  // The poll is the truth. It stops while the tab is hidden — a backgrounded
-  // board is fifty requests a minute nobody is reading — and fires immediately
-  // on refocus so a seller never looks at a stale number.
-  useEffect(() => {
-    let timer: ReturnType<typeof setInterval> | undefined
-
-    // `void`: a poll tick that loses the race is not an error to handle. The
-    // next tick supersedes it, and the board is allowed to be one interval
-    // stale — that is what "the poll is the truth" costs and buys.
-    const start = (): void => {
-      timer ??= setInterval(() => {
-        void revalidator.revalidate()
-      }, POLL_FAST_MS)
-    }
-    const stop = (): void => {
-      if (timer !== undefined) {
-        clearInterval(timer)
-        timer = undefined
-      }
-    }
-    const onVisibility = (): void => {
-      if (document.visibilityState === 'visible') {
-        void revalidator.revalidate()
-        start()
-      } else {
-        stop()
-      }
-    }
-
-    if (document.visibilityState === 'visible') start()
-    document.addEventListener('visibilitychange', onVisibility)
-    return () => {
-      stop()
-      document.removeEventListener('visibilitychange', onVisibility)
-    }
-  }, [revalidator])
+  /**
+   * The poll is the truth — and since this change it is also CONDITIONAL.
+   *
+   * 🔴 IT WAS NOT, and that was measured rather than reasoned about: this
+   * screen polled with `revalidator.revalidate()`, which re-runs the UI route's
+   * loader. That is an `/earnings.data` request, it carries no entity tag, and
+   * it answered `200` on three ticks out of three. Meanwhile the only working
+   * `304` in the tree sat on `api/leaderboard.ts`, a route nothing called.
+   *
+   * This is the most expensive surface in the polling floor: five seconds, per
+   * seller, all day. `05-architecture.md` §1183 builds the whole cost model on
+   * these being cheap — *"17 req/s × 2 ms = 34 ms of CPU per wall second ≈ 7 %
+   * of a 0.5-CPU Starter instance. That is the number that makes a 5-second
+   * poll compatible with USD 7/month of compute."* Every one of those was a
+   * full query and a full serialization.
+   *
+   * THE PERIOD IS IN THE PATH because the selector is a real navigation and
+   * `readBoard` reads it off the URL. Polling `/api/leaderboard` bare would
+   * quietly serve All-time to a seller looking at Today.
+   */
+  const board = useConditionalPoll<BoardPayload>({
+    path: `/api/leaderboard?period=${loaderData.period}`,
+    initial: loaderData,
+    intervalMs: POLL_FAST_MS,
+  })
 
   const switching = navigation.state === 'loading'
   const top = board.rows.slice(0, 3)

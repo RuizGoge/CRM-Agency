@@ -18,6 +18,7 @@ export default [
   // the signed-out redirect lives — once, rather than repeated per screen.
   layout('routes/ui/shell.tsx', [
     route('my-day', 'routes/ui/my-day.tsx'),
+    route('my-book', 'routes/ui/my-book.tsx'),
     route('board', 'routes/ui/board.tsx'),
     route('earnings', 'routes/ui/leaderboard.tsx'),
     // No loader, deliberately: the sanctioned UI-loader count is one and three
@@ -33,6 +34,7 @@ export default [
   route('api/board', 'routes/api/board.ts'),
   route('api/leaderboard', 'routes/api/leaderboard.ts'),
   route('api/my-day', 'routes/api/my-day.ts'),
+  route('api/my-book', 'routes/api/my-book.ts'),
   route('api/home-setup', 'routes/api/home-setup.ts'),
   route('api/search', 'routes/api/search.ts'),
   route('api/contacts/:contactId', 'routes/api/contact.ts'),

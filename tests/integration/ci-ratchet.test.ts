@@ -194,9 +194,18 @@ describe('the budgets this project actually ships are registered', () => {
     // The exact list, so registering a budget is a decision somebody made
     // rather than a name that appeared. This assertion going red on a new arm
     // is the mechanism working — it went red for N13, which is how the search
-    // budget got read by a person before it counted as shipped.
+    // budget got read by a person before it counted as shipped, and it went red
+    // again for P11 below.
     expect(arms.map((a) => a.name)).toEqual([
       'perf.N13_search_server_p95',
+      // 🔴 P11 IS NEW HERE, and unlike every other row it was not derived from
+      // its own measurement: `04b` §3.2 ratified 80 ms in Phase 4 and nothing
+      // in this repository read it, so the number was documentation. Migration
+      // 0044 registers the RATIFIED figure; the measurement (14.6 ms p95 on
+      // perf-floor) is what says the product is inside it rather than what sets
+      // it. Registering 14.6 would have invented a stricter rule than the one
+      // that was signed, on the strength of one machine.
+      'perf.P11_leaderboard_304_p95',
       'perf.P12_initial_js_gzip',
       'perf.P13_initial_css_gzip',
       'perf.P20_mobile_tti_pipeline',

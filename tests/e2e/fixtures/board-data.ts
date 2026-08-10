@@ -75,6 +75,28 @@ export async function createOpenCard(label: string): Promise<FixtureCard> {
 }
 
 /**
+ * Moves a card's arrival back by `seconds`, so a test can stand at a chosen
+ * point in the sixty-minute fresh window.
+ *
+ * RELATIVE TO NOW, never an absolute timestamp, and that is the whole reason
+ * this exists rather than a seeded card. `card-anatomy.spec.ts` has twice been
+ * red because the seed stamps an absolute age and the assertion was relative:
+ * Ruth's `fresh` chip was true for one hour after `db:seed` and false forever
+ * after, and Curtis's `9d` became `13d`. A test that backdates from
+ * `clock_timestamp()` at the moment it runs cannot acquire an expiry date.
+ */
+export async function backdateArrival(card: FixtureCard, seconds: number): Promise<void> {
+  const sql = client()
+  try {
+    await sql`UPDATE app.opportunity
+                 SET created_at = clock_timestamp() - make_interval(secs => ${seconds})
+               WHERE tenant_id = ${TENANT} AND id = ${card.opportunityId}`
+  } finally {
+    await sql.end()
+  }
+}
+
+/**
  * Removes the card and its contact.
  *
  * The LEDGER and the TRANSITIONS stay, and that is not an oversight: both are

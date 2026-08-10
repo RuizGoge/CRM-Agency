@@ -180,6 +180,32 @@ async function main(): Promise<void> {
   // authentication failed for user "crm_app"` before reaching the line that
   // sets the password. Invisible until now because every run since migration
   // 0018 landed on a database that already had one.
+  // 🔴 THE SEED IS WHAT MAKES A DATABASE A DEVELOPMENT DATABASE, so it is what
+  // says so — AND IT HAS TO SAY SO BEFORE THE IMPORTS BELOW. Migration 0032
+  // derives the environment from the presence of a demo tenant and classifies
+  // an unclassified database as `production`, which is the right default: a
+  // real production database is unclassified on the day it is created.
+  //
+  // `db:migrate` runs BEFORE `db:seed` on a fresh setup, so at 0032 time there
+  // is no demo tenant and the database correctly calls itself production.
+  //
+  // 🔴 THIS USED TO SIT THIRTY LINES LOWER AND IT NEVER RAN. `~/db` asserts the
+  // MVP capabilities at module load, so the dynamic import below refuses with
+  // `CAP200: call_list (unknown)` before any statement after it executes. The
+  // documented chain — `db:reset && db:up && db:migrate && db:seed` — could not
+  // complete on a genuinely fresh volume, and the note under the old line
+  // described this exact failure while sitting on the wrong side of it.
+  //
+  // Found by running that chain: the seed died on CAP200, and setting this one
+  // row by hand let it finish end to end. The dynamic imports were already here
+  // for the sibling hazard documented above; this is the same lesson applied to
+  // the row they depend on.
+  await client`
+    INSERT INTO ref.system_constant (key, value, reason)
+    VALUES ('environment', 'development',
+            'Set by scripts/seed.ts. This database holds the demo tenant, so it is a development database — 0032 could not see that yet because migrations run before the seed.')
+    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, reason = EXCLUDED.reason`
+
   const { withTenant } = await import('../app/db')
   const { auth } = await import('../app/lib/auth/server')
 
@@ -193,24 +219,6 @@ async function main(): Promise<void> {
     ON CONFLICT (id) DO UPDATE SET is_demo = true`
 
   await refuseToSeedTwice()
-
-  // 🔴 THE SEED IS WHAT MAKES A DATABASE A DEVELOPMENT DATABASE, so it is what
-  // says so. Migration 0032 derives the environment from the presence of a demo
-  // tenant and classifies an unclassified database as `production` — the right
-  // default, because a real production database is unclassified on the day it
-  // is created.
-  //
-  // But `db:migrate` runs BEFORE `db:seed` on a fresh setup, so at 0032 time
-  // there is no demo tenant yet and the database correctly classifies itself
-  // production; `ON CONFLICT DO NOTHING` then means creating the demo tenant a
-  // moment later cannot move it. Without this line the documented fresh-install
-  // chain ends with a dev server that refuses to boot on CAP200, and the cause
-  // would look nothing like the symptom.
-  await client`
-    INSERT INTO ref.system_constant (key, value, reason)
-    VALUES ('environment', 'development',
-            'Set by scripts/seed.ts. This database holds the demo tenant, so it is a development database — 0032 could not see that yet because migrations run before the seed.')
-    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, reason = EXCLUDED.reason`
 
   await seedLostReasons()
 

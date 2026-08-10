@@ -97,6 +97,36 @@ BEGIN
     SELECT * INTO reg FROM security.table_registry tr
      WHERE tr.schema_name = r.schema_name AND tr.table_name = r.table_name;
 
+    -- 🔴 A PARTITION INHERITS ITS PARENT'S CLASSIFICATION, and this block was
+    -- MISSING from this function until the merge that renumbered this migration
+    -- to 0048. It is carried forward verbatim from 0043, which introduced it.
+    --
+    -- The failure it prevents is one only a merge could produce. This migration
+    -- was written on a branch that started before the event store existed, so
+    -- its copy of `harden()` was correct then and stale by the time it landed:
+    -- running AFTER 0043 it replaced the function with a body that had never
+    -- heard of partitions, and the next call raised
+    -- `HR001: app.event_log_2026_08 has no security.table_registry row`. Each
+    -- side was right on its own; only the order made it wrong.
+    --
+    -- 0043 states the reasoning and it is repeated because a function body
+    -- cannot be patched: `event_log_2026_08` exists because August happened,
+    -- and demanding a registry row per month would be a rule kept by whoever
+    -- remembers — which is the failure mode this registry replaces. Skipping
+    -- partitions instead of resolving the parent was tried and `silo.test.ts`
+    -- caught it in one run, with FORCE RLS disabled on a managed relation.
+    IF NOT FOUND THEN
+      SELECT tr.* INTO reg
+        FROM pg_class c
+        JOIN pg_inherits inh ON inh.inhrelid = c.oid
+        JOIN pg_class par ON par.oid = inh.inhparent
+        JOIN pg_namespace pn ON pn.oid = par.relnamespace
+        JOIN security.table_registry tr
+          ON tr.schema_name = pn.nspname AND tr.table_name = par.relname
+       WHERE c.oid = ident::regclass
+         AND c.relispartition;
+    END IF;
+
     IF NOT FOUND THEN
       RAISE EXCEPTION
         'HR001: relation % has no security.table_registry row. Classify it in the migration that creates it.',
@@ -164,7 +194,25 @@ BEGIN
                    ident);
 
     EXECUTE format('REVOKE ALL ON %s FROM crm_app', ident);
-    EXECUTE format('GRANT SELECT ON %s TO crm_app', ident);
+
+    -- 🔴 SELECT IS CONDITIONAL, and this migration had made it unconditional
+    -- again. Carried forward from 0035, verbatim, for the same reason as the
+    -- partition block above: this function was copied on a branch that started
+    -- before consent_ledger existed, so it was correct when written and stale
+    -- when it landed.
+    --
+    -- 0035 states the rule and it is worth repeating: `definer_only` already
+    -- generates USING (false), so crm_app reads zero rows — but it HELD the
+    -- SELECT privilege, and a privilege that only a policy neutralises is one
+    -- dropped policy away from a tenant-wide read of consent. The constitution
+    -- ranks a revoked privilege above a policy, and consent_ledger is the first
+    -- table that needs the ranking.
+    --
+    -- `owner_scoped_read` is deliberately NOT in the exclusion list: it is a
+    -- read class, and its write side is already shut by `with_check := 'false'`.
+    IF reg.policy_class NOT IN ('definer_only', 'system_cross_tenant') THEN
+      EXECUTE format('GRANT SELECT ON %s TO crm_app', ident);
+    END IF;
 
     IF NOT append_only THEN
       IF reg.app_can_insert

@@ -248,30 +248,114 @@
       "breakpoints": true
     },
     {
+      "idx": 35,
+      "version": "7",
+      "when": 1786330824577,
+      "tag": "0035_consent_ledger",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1786331872359,
+      "tag": "0036_suppression_list",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1786332728918,
+      "tag": "0037_calling_window",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1786333621885,
+      "tag": "0038_compliance_gate",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1786334454402,
+      "tag": "0039_recent_contact_signal",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1786334455402,
+      "tag": "0040_tz_dataset_absent",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1786363855437,
+      "tag": "0041_touch_engine",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1786364848880,
+      "tag": "0042_event_vocabulary",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1786366260588,
+      "tag": "0043_event_store",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1786366261588,
+      "tag": "0044_contact_editing",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1786369861588,
+      "tag": "0045_leaderboard_read_hoists_its_clock",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1786373461588,
+      "tag": "0046_leaderboard_poll_budget",
+      "breakpoints": true
+    },
+    {
       "idx": 47,
       "version": "7",
-      "when": 1786115007307,
+      "when": 1786377061588,
       "tag": "0047_webhook_ingest",
       "breakpoints": true
     },
     {
       "idx": 48,
       "version": "7",
-      "when": 1786118239055,
+      "when": 1786380661588,
       "tag": "0048_call_merge",
       "breakpoints": true
     },
     {
       "idx": 49,
       "version": "7",
-      "when": 1786119166622,
+      "when": 1786384261588,
       "tag": "0049_dead_letter_and_alerts",
       "breakpoints": true
     },
     {
       "idx": 50,
       "version": "7",
-      "when": 1786119885357,
+      "when": 1786387861588,
       "tag": "0050_message_merge",
       "breakpoints": true
     }

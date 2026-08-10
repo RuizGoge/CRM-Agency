@@ -258,22 +258,42 @@ describe('the token is the only thing that produces a tenant', () => {
   })
 
   it('hides app.webhook_endpoint from the app role entirely', async () => {
-    // `definer_only`: harden() builds USING (false) WITH CHECK (false). The
-    // role may issue the SELECT and reads zero rows — the token digests are
-    // reachable only by the definer.
-    const rows = await app<{ n: string }[]>`SELECT count(*) AS n FROM app.webhook_endpoint`
-    expect(Number(rows[0]?.n ?? '-1')).toBe(0)
+    // `definer_only`: harden() builds USING (false) WITH CHECK (false) AND
+    // revokes SELECT. The token digests are reachable only by the definer.
+    //
+    // 🔴 THIS USED TO ASSERT ZERO ROWS, and the guarantee got STRONGER while
+    // this branch was away. Migration 0035 stopped granting SELECT to
+    // `definer_only` tables at all: the policy already returned nothing, but
+    // the role still HELD the privilege, and a privilege that only a policy
+    // neutralises is one dropped policy away from reading every token digest in
+    // the system. The constitution ranks a revoked grant above a policy.
+    //
+    // So the read is now refused rather than empty, which is exactly the shape
+    // `consent-ledger.test.ts` asserts for the same class. Asserting zero rows
+    // here would have passed on the weaker of the two behaviours and gone quiet
+    // if the revocation were ever lost.
+    await expect(app`SELECT count(*) AS n FROM app.webhook_endpoint`).rejects.toThrow(
+      /permission denied/,
+    )
 
     const grants = await owner<{ privilege_type: string }[]>`
       SELECT privilege_type FROM information_schema.role_table_grants
        WHERE grantee = 'crm_app' AND table_schema = 'app' AND table_name = 'webhook_endpoint'
        ORDER BY privilege_type`
-    // 🔴 SELECT and nothing else. `app_can_insert = false` alone would NOT have
-    // produced this — it governs INSERT and only INSERT, and harden() still
-    // grants UPDATE to any class that is not immutable or read-only. That
-    // mistake was made in 0033 and repeated in 0034 an hour later; here the
-    // class excludes both grants, so the flag is belt and the class is braces.
-    expect([...grants].map((g) => g.privilege_type)).toEqual(['SELECT'])
+    // 🔴 NOTHING AT ALL, and this line used to read `['SELECT']`.
+    //
+    // The original note still holds and is kept because it names a mistake made
+    // twice: `app_can_insert = false` alone would NOT produce this — it governs
+    // INSERT and only INSERT, and harden() still grants UPDATE to any class
+    // that is not immutable or read-only. That was got wrong in 0033 and
+    // repeated in 0034 an hour later, so the flag is belt and the class is
+    // braces.
+    //
+    // What changed is the floor under both: 0035 stopped granting SELECT to
+    // `definer_only` at all, so crm_app now holds no privilege whatsoever on
+    // this table. The token digests were already unreadable by policy; they are
+    // now unreachable by grant, which is the ranking the constitution states.
+    expect([...grants].map((g) => g.privilege_type)).toEqual([])
   })
 
   it('still refuses the app role a direct write to either ingest table', async () => {
