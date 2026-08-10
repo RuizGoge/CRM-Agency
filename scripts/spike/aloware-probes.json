@@ -1,0 +1,130 @@
+{
+  "$schema": "./aloware-probes.schema.md",
+  "$comment": [
+    "The declaration half of Sprint-0 Gate G2's outbound probe.",
+    "",
+    "EVERY `request` STARTS null AND THAT IS THE POINT. This project's most",
+    "likely failure is implementing from text that was superseded; the version",
+    "of it that applies here is implementing from a REMEMBERED vendor endpoint.",
+    "A probe that runs against a path nobody read off the real account produces",
+    "a 404 that looks exactly like the capability being absent — and `absent` on",
+    "an mvp_required row is the finding that stops the MVP.",
+    "",
+    "So: `source` must name where the path was read (the account's own API",
+    "reference, with its URL or screen), and the runner REFUSES to execute any",
+    "probe whose source is empty. Filling this file is a reading task against",
+    "the real panel, never a recall task.",
+    "",
+    "`subject` records whose phone number the probe uses. E9 puts the stored",
+    "response body on a permanent clock, so it must never be a real consumer."
+  ],
+  "probes": [
+    {
+      "capability": "two_legged_call",
+      "tier": "mvp_required",
+      "question": "Does a server-side API call ring the seller's leg and then the destination leg, end to end?",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/webhook/two-legged-call",
+        "auth": "none",
+        "body": {
+          "api_token": "[API_TOKEN]",
+          "ring_group_id": "29109",
+          "contact_phone_number": "[DESTINATION_E164]",
+          "line_id": "63949"
+        }
+      },
+      "source": "Aloware panel -> Integrations -> Two-Legged Call API tab, read 2026-08-05. Path, field names and the body-token auth scheme are copied from that page's own example, not from memory.",
+      "subject": "[DESTINATION_E164] — supplied by the owner as a phone he answers himself. E9 requires a synthetic subject because this row is never purged; a real consumer here would acquire a permanent clock.",
+      "$notes": [
+        "AUTH IS IN THE BODY. The panel's example puts api_token as a JSON field; there is no Authorization header. A Bearer assumption returns 401, which this gate would have read as `absent` on an mvp_required capability.",
+        "ring_group_id 29109 = Default Inbox, the one the Test Line routes to. The agent leg therefore rings the Aloware app rather than a second handset, so only ONE phone is needed.",
+        "line_id 63949 = 'Test Line' (+1 737 427 3994), a single-number line. Chosen over line 65123 so the dial cannot touch the 58-number Local Presence pool that carries production traffic.",
+        "The panel warns in its own words: 'Two-Legged Call API usage is considered automated & paid.' Each run of this probe places a billable call and rings two phones. It is never run without an explicit go-ahead.",
+        "line_phone_number is per call, which answers a Phase-2 open question: the two-legged path CAN present a per-seller caller ID rather than dialling from one shared line."
+      ]
+    },
+    {
+      "capability": "call_list",
+      "tier": "mvp_required",
+      "question": "Is there a GET that lists calls since a timestamp? ARR-INT-08's reconciliation backfill has no implementation without it.",
+      "request": null,
+      "source": null,
+      "subject": null
+    },
+    {
+      "capability": "webhook_subscription",
+      "tier": "mvp_required",
+      "question": "Can a webhook destination be registered, and does the API report what is registered? If subscription is panel-only, that is itself the finding.",
+      "request": null,
+      "source": null,
+      "subject": null
+    },
+    {
+      "capability": "contact_lookup",
+      "tier": "mvp_optional",
+      "question": "Can a contact be looked up by E.164? Dedupe is OURS either way — we never ask a third party who owns a lead.",
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/webhook/contact/phone-number",
+        "auth": "none",
+        "query": {
+          "api_token": "[API_TOKEN]",
+          "phone_number": "2025550100"
+        }
+      },
+      "source": "Aloware panel -> Integrations -> Contact Lookup API tab, read 2026-08-05. Path, parameter names and the query-string token placement are copied from that page's own cURL example.",
+      "subject": "2025550100 — the North American reserved fictional range (555-0100..0199). Guaranteed not to belong to a person and guaranteed not to be in the account's contacts, which is what makes it a lawful subject for a row E9 never purges.",
+      "$notes": [
+        "THIRD ENDPOINT, THIRD AUTH PLACEMENT: the token is a QUERY PARAMETER here, while two-legged takes it in the JSON body. There is no single scheme to assume.",
+        "That placement is exactly why request_url is redacted before it is stored: `api_token` matches SECRET_PARAM and the substituted value is matched too, so the permanent row holds [REDACTED].",
+        "EXPECTED OUTCOME IS 404 {\"error\":\"Contact not found.\"} and that is a SUCCESSFUL run. A 404 in the documented shape proves the endpoint exists and the token was accepted; only a 401/403 would say otherwise. It is NOT evidence of `absent`.",
+        "It also cannot promote contact_lookup to `verified`: CAP003 requires a 2xx, and a 2xx here would mean a real consumer's record in a permanent row. Verifying this capability lawfully needs a synthetic contact that does not exist yet — creating one is an account change and is Jorge's call.",
+        "PRIMARY PURPOSE OF THIS RUN: prove the API token works, using a GET that costs nothing and rings no phone, before spending a billable dial against an account with an unpaid invoice."
+      ]
+    },
+    {
+      "capability": "sms_send",
+      "tier": "mvp_optional",
+      "question": "Does the SMS endpoint exist and answer? NOT to be fired until 10DLC status is known — an unregistered send is a compliance event, not a probe.",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/webhook/sms-gateway/send",
+        "auth": "none",
+        "body": {
+          "api_token": "[API_TOKEN]",
+          "from": "+17374273994",
+          "to": "[DESTINATION_E164]",
+          "message": "Sprint-0 Gate G2 test message. Reply STOP to opt out.",
+          "user_id": 120776
+        }
+      },
+      "source": "Aloware panel -> Integrations -> SMS API tab, read 2026-08-05. Path, field names and the body-token placement copied from that page's own example.",
+      "subject": "[DESTINATION_E164] — a colleague of the owner. CONSENT BASIS: the owner states he notified the recipient in advance and authorised this send explicitly on 2026-08-05, after being told that this is a real TCPA-governed text from a 10DLC-registered business number and that E9 stores the response permanently. Recorded here because a consent basis that lives only in a chat log is not a consent basis.",
+      "$notes": [
+        "THE 10DLC PRECONDITION IS SATISFIED: Business Registration, A2P Brand and A2P Campaigns all read Approved, so this send is carrier-legal. That was the gate on firing this probe at all.",
+        "`from` is the Test Line (+1 737 427 3994), never the 58-number Local Presence pool.",
+        "`user_id: 120776` is deliberate and is itself part of the measurement. The panel documents three behaviours: -1 sends as the company with no owner, omitting it sends as the contact owner, and a real id sends AS THAT USER. Per-seller attribution on SMS therefore exists at the API level — which the MCP surface notably cannot do.",
+        "The message stays under 160 characters (one segment) and carries opt-out language, because a real 10DLC-registered business number is sending it to a real handset.",
+        "DESTINATION_E164 is the only unresolved value and SPIKE014 refuses to send until it is filled. It must be a number the owner controls and consents to receive on: this is a real text under TCPA, and E9 stores the response body permanently.",
+        "WATCH FOR: whether a `to` that is not already a contact gets one created silently. Aloware does this on the MCP surface; if the REST SMS path does it too, it is a consent-ledger hazard worth recording."
+      ]
+    },
+    {
+      "capability": "sequence_disenroll",
+      "tier": "probe_only",
+      "question": "Does disenrolment exist? Enrolment is structurally unreachable until it does — sequenceEnroll() needs a DisenrollProof token only a verified disenroll can mint.",
+      "request": null,
+      "source": null,
+      "subject": null
+    },
+    {
+      "capability": "sequence_enroll",
+      "tier": "probe_only",
+      "question": "Probed for completeness only. Nothing in the MVP enrols.",
+      "request": null,
+      "source": null,
+      "subject": null
+    }
+  ]
+}

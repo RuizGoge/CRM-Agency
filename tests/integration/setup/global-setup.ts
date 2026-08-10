@@ -49,6 +49,27 @@ export async function setup(): Promise<void> {
     // the out-of-band step, and here it is a dev-only literal; production sets
     // it in the provider's console.
     await sql.unsafe(`ALTER ROLE crm_app WITH PASSWORD '${APP_ROLE_PASSWORD}'`)
+
+    // 🔴 THE TEST DATABASE DECLARES ITSELF, and it has to.
+    //
+    // Migration 0032 classifies an unclassified database as `production` on
+    // purpose — a real production database is unclassified on the day it is
+    // created, and defaulting the other way leaves every gate keyed on it
+    // silent exactly there. It derives `development` from the presence of a
+    // demo tenant, and `crm_test` is built from migrations with no seed, so it
+    // holds none and would classify as production.
+    //
+    // The symptom would not have been a failing assertion. `pool.ts` fires the
+    // capability boot gate as an import-time side effect and its failure mode
+    // is `process.exit(1)`, so the FIRST test file importing anything under
+    // `~/db` would have taken the runner down with it — `call_list` is still
+    // unverified. A harness that cannot say what it is gets treated as the
+    // dangerous case, which is the design working rather than failing.
+    await sql`
+      INSERT INTO ref.system_constant (key, value, reason)
+      VALUES ('environment', 'test',
+              'Set by tests/integration/setup/global-setup.ts. crm_test is built from migrations with no seed, so it holds no demo tenant and 0032 would otherwise classify it production.')
+      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, reason = EXCLUDED.reason`
   } finally {
     await sql.end()
   }

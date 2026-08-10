@@ -14,6 +14,7 @@ import {
 import { Celebration } from '~/components/board/celebration'
 import { PipelineColumns } from '~/components/board/pipeline-columns'
 import { UndoBar } from '~/components/board/undo-bar'
+import { ContactDrawer } from '~/components/contacts/contact-drawer'
 import { withTenant } from '~/db'
 import { requireIdentity } from '~/lib/auth/identity'
 import { MoneyError, parseUserAmount } from '~/lib/money/money'
@@ -215,6 +216,11 @@ export default function Board({ loaderData, actionData }: Route.ComponentProps) 
   const drag = useFetcher<typeof action>()
 
   const movingId = params.get('move')
+  // Read straight from the URL and NOT resolved against the board, unlike
+  // `moving` below. A contact is not required to have a card on this screen —
+  // the drawer answers not-found on its own, which is the same sentence a
+  // foreign id gets, and that is the behaviour a pasted link needs.
+  const openContactId = params.get('contact')
   const moving = loaderData.columns.flatMap((c) => c.cards).find((c) => c.id === movingId)
   const from = loaderData.columns.find((c) => c.cards.some((k) => k.id === movingId))
 
@@ -375,6 +381,19 @@ export default function Board({ loaderData, actionData }: Route.ComponentProps) 
           error={error}
         />
       ) : null}
+
+      {/* The record drawer, keyed on the CONTACT rather than the card, because
+          a seller opening "who is this" is asking about a person and one person
+          can hold two deals. In the URL for the same reason `?move=` is: back
+          closes it, and a link to it survives being pasted. */}
+      {openContactId === null ? null : (
+        <ContactDrawer
+          contactId={openContactId}
+          onClose={() => {
+            void navigate('/board', { replace: true })
+          }}
+        />
+      )}
 
       {/* One timer, and it is the bar's. Undo or Dismiss unmount the bar, its
           cleanup clears the timeout, and this never renders — which is the

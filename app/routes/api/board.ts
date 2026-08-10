@@ -14,6 +14,16 @@ import { requireIdentity } from '~/lib/auth/identity'
 export interface BoardCard {
   readonly id: string
   readonly contactName: string
+  /**
+   * The contact behind the card, so opening the record needs no second lookup.
+   *
+   * Nullable because the join is a LEFT JOIN and always was: an opportunity can
+   * outlive its contact row, and the card already renders `Unnamed lead` for
+   * that case. A card with no contact cannot open a record and must not offer
+   * to — which is why this is `string | null` rather than a string the UI
+   * would have to guess about.
+   */
+  readonly contactId: string | null
   readonly premiumCents: string | null
   readonly daysUntouched: number
   /**
@@ -247,6 +257,7 @@ export async function readPipelineFor(identity: SessionIdentity): Promise<Pipeli
       stage_id: string
       stage_type: 'open' | 'earning' | 'lost'
       contact_name: string
+      contact_id: string | null
       premium_cents: string | null
       days_untouched: number
       attempts: number
@@ -259,6 +270,12 @@ export async function readPipelineFor(identity: SessionIdentity): Promise<Pipeli
              o.stage_id,
              s.stage_type::text AS stage_type,
              coalesce(c.full_name, 'Unnamed lead') AS contact_name,
+             -- Read from the CONTACT row, not from o.contact_id. RLS scopes the
+             -- join, so a contact the seller cannot see comes back NULL here
+             -- and the card offers no way in — rather than rendering a link
+             -- that answers not-found, which is a slower way of telling
+             -- somebody a record exists.
+             c.id AS contact_id,
              o.premium_annual_cents::text AS premium_cents,
              greatest(0, extract(day from clock_timestamp()
                - coalesce(o.last_activity_at, o.stage_entered_at))::integer) AS days_untouched,
@@ -301,6 +318,7 @@ export async function readPipelineFor(identity: SessionIdentity): Promise<Pipeli
       list.push({
         id: row.id,
         contactName: row.contact_name,
+        contactId: row.contact_id,
         premiumCents: row.premium_cents,
         daysUntouched: row.days_untouched,
         attempts: row.attempts,

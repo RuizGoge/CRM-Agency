@@ -28,6 +28,8 @@
     "events:generate": "tsx scripts/generate-events.ts",
     "worker": "tsx --env-file-if-exists=.env scripts/worker.ts",
     "perf": "npm run build && tsx scripts/check-perf-budgets.ts",
+    "spike:receiver": "tsx --env-file-if-exists=.env scripts/spike/aloware-receiver.ts",
+    "spike:probe": "tsx --env-file-if-exists=.env scripts/spike/aloware-probe.ts",
     "verify": "npm run typecheck && npm run lint && npm run format:check && npm run test && npm run perf",
     "prepare": "husky"
   },

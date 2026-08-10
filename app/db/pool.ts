@@ -1,6 +1,9 @@
 import postgres from 'postgres'
 
+import { installCapabilities } from '~/modules/communications/capability'
+
 import { assertSafeConnection } from './boot-assert'
+import { assertRequiredCapabilities, readCapabilities } from './capability-registry'
 
 /**
  * The one connection pool in the process.
@@ -61,6 +64,55 @@ void assertSafeConnection(pool).catch((err: unknown) => {
   console.error(err instanceof Error ? err.message : err)
   process.exit(1)
 })
+
+/**
+ * §3's boot assertion, enforced at boot — the second half of the capability
+ * gate, and the half that has been unbuildable until migration 0032 gave the
+ * process a way to know which environment it is in.
+ *
+ * The type gate (`alowareCapability`) makes an unverified capability
+ * uncallable; this makes an unverified `mvp_required` capability unSERVEABLE.
+ * They fail at different times on purpose: one at compile, one at boot, and
+ * neither is a rule anybody has to remember.
+ *
+ * Same shape as the check above and for the same reasons: not awaited, because
+ * the pool has to be exported synchronously and a guard that delayed every
+ * import is a guard people route around; `process.exit` rather than a thrown
+ * promise, because an unhandled rejection here would be logged while the server
+ * kept serving — the one outcome this must not have.
+ *
+ * ⚠️ IT IS SILENT OUTSIDE PRODUCTION, which is the whole point and also its
+ * weakness: development and CI never exercise the refusal. `capability-boot.test.ts`
+ * is what covers it, by calling the same predicate with production asserted.
+ */
+void assertRequiredCapabilities(pool).catch((err: unknown) => {
+  console.error(err instanceof Error ? err.message : err)
+  process.exit(1)
+})
+
+/**
+ * The capability registry, read once and memoised for the life of the process.
+ *
+ * WHY A PROMISE AND NOT A FIRE-AND-FORGET. The two assertions above can be
+ * fired and forgotten because their failure mode is `process.exit(1)` and
+ * nothing downstream needs their result. This one HAS a result, and a request
+ * arriving during the read would find the registry uninstalled and get
+ * `CAP101`. So callers await it, and the await is free after the first.
+ *
+ * Capability status changes only by migration, so caching it for the process
+ * lifetime is not a staleness risk: a migration is a deploy, and a deploy is a
+ * new process.
+ *
+ * It lives HERE rather than beside its own functions because it needs the pool,
+ * and `capability-registry.ts` refuses to import it — see the note at the top
+ * of that file for the cycle this avoids.
+ */
+let capabilitiesReady: Promise<void> | undefined
+
+export function ensureCapabilities(): Promise<void> {
+  capabilitiesReady ??= readCapabilities(pool).then(installCapabilities)
+  return capabilitiesReady
+}
 
 /** Closes the pool. Process shutdown only. */
 export async function closePool(): Promise<void> {

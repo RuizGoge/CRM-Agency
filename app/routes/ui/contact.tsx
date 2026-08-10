@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useParams } from 'react-router'
 
+import { AlowareCapturePanel } from '~/components/communications/aloware-capture-panel'
 import { format, fromWireString } from '~/lib/money/money'
 import type { ContactRecord } from '~/routes/api/contact'
 
@@ -193,6 +194,13 @@ function Record({ contact }: { contact: ContactRecord }): React.JSX.Element {
           ))}
         </ul>
       )}
+
+      {/* The Aloware inspection surface. It sits on the FULL contact view and
+          deliberately not in the drawer: the drawer is a seller's first glance
+          and this is a reference wall. It is the same panel on every contact
+          because it renders the Gate-2 capture, not this contact's history —
+          which the panel's own first paragraph says rather than implying. */}
+      <AlowareCapturePanel />
     </>
   )
 }
