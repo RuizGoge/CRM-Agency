@@ -253,6 +253,13 @@
       "when": 1786330824577,
       "tag": "0035_consent_ledger",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1786331872359,
+      "tag": "0036_suppression_list",
+      "breakpoints": true
     }
   ]
 }

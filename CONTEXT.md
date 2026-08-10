@@ -7,6 +7,24 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 🚫 LA LISTA DE SUPRESIÓN, Y UNA PUERTA QUE SU PROPIO COMENTARIO DERROTABA (2026-08-09)
+`app/db/schema/suppression.ts` · migración **0036** · `tests/integration/suppression-list.test.ts` · `definer-tenancy.test.ts`. **366 → 381 tests · 34 → 36 archivos.** Ítem 9 del MVP.
+
+**LA TABLA ES TENANT-WIDE A PROPÓSITO, y es lo contrario de todo lo demás en este esquema.** Ping-post revende al mismo consumidor a dos vendedores de la misma agencia, así que un STOP que recibe Ana **tiene que apagar el discador de Ben** —de inmediato, y sin que Ben se entere nunca de que Ana tiene ese lead. Acotarla por dueño produciría un producto que honra el STOP para quien lo recibió y sigue discando desde el escritorio de al lado: una violación TCPA con el documento de diseño que prueba que fue deliberada.
+
+- **Las aserciones corren en dos direcciones a la vez, que es raro: el DATO tiene que cruzar el silo, la CONSULTA no.** `definer_only` otra vez, porque `stop` significa *un consumidor le contestó STOP a alguien de esta agencia* — así que contestar *"¿este número está suprimido?"* sobre un número arbitrario contesta *"¿hay un colega trabajando a este consumidor?"*.
+- **La forma estructural de la regla: no hay columna de dueño donde escribir.** El test assertea la ausencia de `owner_user_id` **y** que la fila de registro tiene `owner_column NULL`, que es lo que impide que una migración futura la reclasifique como `owner_scoped` y vuelva el STOP local al vendedor sin que nada se ponga rojo.
+- **Un START no borra el STOP**, appendea y la fila anterior queda. *"¿Este número estaba suprimido el día 14?"* tiene que seguir contestando que sí para siempre.
+- **Siete `kind`, y no son severidades sino PROCEDENCIAS**: `stop` es la palabra del consumidor, `dnc_federal`/`dnc_state` vienen de una lista que no escribimos nosotros, `litigator` es una decisión comercial y no una obligación legal, y `carrier_block` es la red diciendo que el mensaje nunca llegó — que no es consentimiento en absoluto. Colapsarlas a un booleano las vuelve indistinguibles el día que haya que explicarle una a un regulador.
+
+✅ **LA PUERTA SOBRE `pg_proc` QUE `05b` PEDÍA POR ESCRITO Y NO EXISTÍA.** *"Every SECURITY DEFINER function's body must contain `app.current_tenant()`, asserted by a CI query over `pg_proc.prosrc`."* Adentro de un definer el RLS que acota todo lo demás **está apagado** —corre como `crm_migrator`, cuya política `p_sys` es `USING (true)`—, así que la frontera de tenant deja de ser estructural y pasa a ser lo que diga el cuerpo. Un cuerpo que se olvida no falla con un error: filtra las filas de una agencia a otra, en silencio, para siempre.
+
+- **Cuatro excepciones, cada una con su razón, y la lista está FIJADA:** `begin_request` y `begin_system_work` **son** la llamada que establece (exigirles leer lo que ellas escriben sería circular), `resolve_identity` corre **antes** de que exista un tenant, y `scheduled_job_claim` es un camino cross-tenant **sancionado** —abanica sobre todos los tenants a propósito, `DISTINCT ON (tenant_id)` es equidad para que una agencia ocupada no deje sin turno al resto— y devuelve sólo coordenadas de job, ningún dato de contacto ni de dinero.
+
+🔴 **Y LA MUTACIÓN ENCONTRÓ QUE MI PROPIA PUERTA ERA FALSA.** Cambié `app.current_tenant()` por `current_setting('app.tenant_id', true)::uuid` en `suppression_append` —mismo comportamiento, sin la llamada nombrada, que es el fallo realista— y **el gate pasó igual**. La causa: **`prosrc` es el texto crudo del cuerpo, comentarios incluidos**, y el comentario que satisfacía al grep era el que explica esta misma regla. **Una puerta derrotada por su propia documentación pasa para siempre.** Ahora la consulta despoja comentarios de línea y de bloque antes de machear; con la mutación puesta se pone roja nombrando la función con su firma completa, y vuelve a verde al revertir.
+
+⚠️ **NO SHIPPEA LECTOR, y la ausencia es el diseño.** `app.suppression_state(phone)` sería el compañero obvio y es exactamente el oráculo entre silos que esta clase existe para prevenir. El único lector sancionado es `app.compliance_check()`, y **no se puede escribir hasta que exista la ventana de llamada local al lead (ítem 10)**: una puerta que contesta sobre consentimiento y supresión ignorando el reloj devolvería *"se puede enviar"* a las 2 de la mañana en la zona horaria del lead. **Hasta entonces la tabla registra y no contesta** — y registrar desde el día uno es lo que hace que la puerta sea correcta el día que aterriza, en vez de correcta de ahí en adelante.
+
 ### 🔒 EL LEDGER DE CONSENTIMIENTO, Y LA PRIMERA TABLA QUE NADIE PUEDE LEER (2026-08-09)
 `app/db/schema/consent.ts` · migración **0035** · `tests/integration/consent-ledger.test.ts`. **349 → 366 tests · 33 → 34 archivos.** Ítem 8 del MVP. Primer trabajo sobre el `master` consolidado.
 
