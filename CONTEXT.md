@@ -7,6 +7,27 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 🕘 LA VENTANA DE LLAMADA: LA INTERSECCIÓN, NO UNA ELECCIÓN (2026-08-09)
+`app/db/schema/timezone.ts` · migración **0037** · `tests/integration/calling-window.test.ts`. **381 → 393 tests · 36 → 37 archivos.** Ítem 10 del MVP. Construido contra **§SEC-9**, que es rango Parte I y cierra la decisión de fuente de datos.
+
+**LA PARTE FILOSA, Y ES CONTRAINTUITIVA: un ZIP o un estado que abarca dos zonas NO se puede colapsar a una respuesta, porque el colapso intuitivo se equivoca en UNA SOLA dirección del día.** Para un lead de Florida —Eastern y Central— elegir Eastern cierra la ventana temprano a la tarde (conservador) y la **abre antes de las 9:00 AM Central** (permisivo). Elegir Central invierte los dos errores. **Ninguna zona sola es conservadora en las dos puntas.** Por eso el resolver devuelve un CONJUNTO y la ventana es la **intersección**: `bool_and` sobre todos los candidatos.
+
+- 🎯 **Probado por mutación con las dos formas realistas de romperlo, y las dos caen sobre el mismo caso: Florida a las 9:30 Eastern.** (1) `bool_and` → `bool_or` (*"alcanza con que una zona esté abierta"*). (2) Colapsar el conjunto a una zona con `LIMIT 1` (*"elegí Eastern para Florida, que es lo poblado y defendible"*). **Ninguna otra aserción de la suite atrapa eso** — y sería un discado ilegal para cada consumidor del Panhandle en el libro.
+- ✅ **El evaluador es tzdata de verdad, no un offset fijo, y hay un test que lo prueba:** 13:30 UTC son 09:30 EDT en julio y 08:30 EST en enero — **misma hora UTC, veredictos opuestos**. §SEC-9 nombra exactamente ese fallo como la razón de que esto viva en Postgres y no en JavaScript: un offset a mano da la misma respuesta las dos veces y se equivoca para cada lead en los dos días de transición de DST al año.
+
+🟢 **DOS DECISIONES DE DISEÑO QUE SALIERON MEJOR DE LO ESPECIFICADO, las dos por quitar definers.** Las tres tablas son clase `reference`, que `crm_app` ya puede leer, así que **el resolver no necesita ser `SECURITY DEFINER`**: no hay privilegio que pedir prestado ni tenant que afirmar. Y `calling_window_check` es **invoker sobre tablas `owner_scoped`**, así que **el RLS le pone el silo sin una sola línea de predicado escrita a mano** — un contacto ajeno no resuelve a nada y la respuesta es `blocked_timezone_unknown`, indistinguible de un contacto inexistente, y **falla cerrado** que es la dirección correcta para un accidente. Un definer menos es un lugar menos donde el silo se puede apagar sin querer.
+
+🔴 **DOS DE LAS TRES TABLAS SHIPPEAN VACÍAS, Y ES DELIBERADO, NO UN PENDIENTE OLVIDADO.**
+- **`ref.zip_timezone` (~41k filas) vacía.** §SEC-9 exige que se genere **sólo de fuentes de dominio público redistribuibles** —relaciones ZCTA del Census unidas a `tzdata` de IANA—, con un generador que emita URLs y checksums y un chequeo de CI que compare el encabezado. **Escribir 41.000 filas de memoria sería un dataset plausiblemente-mal alimentando un BLOQUEO DURO**, que es exactamente el fallo que este proyecto existe para rechazar.
+- **`ref.area_code_timezone` (~340) vacía, y por una segunda razón encima de la procedencia:** esa capa **está mal para móviles portados**, que son comunes en el mercado de final expense —quien se mudó de Nueva York a Florida se queda con su 718—, y por eso §SEC-9 le fija la confianza en `low` **siempre**. Una tabla parcialmente sembrada sería **peor que vacía**: una falla cae al estado y sigue conservadora, un acierto equivocado da una respuesta confiada y falsa.
+- **Vacío es seguro, no roto:** la cadena degrada a estado y lo no resuelto **falla cerrado**.
+
+**`ref.state_timezone` SÍ sembrada, 51 códigos.** Es la única capa chica y estable como para escribirse a mano. ⚠️ **Lleva TRES straddles más que los doce que nombra el ruling, y es un agregado deliberado y no una corrección:** `AZ` (el estado no observa DST, la Nación Navajo adentro sí), `NV` (Pacific salvo West Wendover) y `AK` (salvo las Aleutianas occidentales). **La aritmética del propio diseño decide la dirección: sumar un candidato sólo puede ACHICAR la ventana.** Un straddle omitido es el único error que produce un discado ilegal; uno agregado cuesta un poco de tiempo legal de llamada, que es el intercambio que el ruling ya aceptó por escrito.
+
+- ✅ **`TZ001`: una zona que la base no conoce no se puede guardar.** Un typo acá no es un problema de calidad de datos — la fila nunca matchea, el resolver cae o devuelve nada, y **un lead queda permanentemente inllamable sin que nada tire error**. Validado contra `pg_timezone_names`, que es el mismo catálogo que evalúa `AT TIME ZONE`.
+
+⚠️ **LO QUE FALTA PARA EL ÍTEM 11, y el diagrama D-SEC-4 lo da entero:** la puerta única encadena `blocked_sms_disabled` → `blocked_suppressed` → resolución de zona → **esta ventana** → `blocked_recording_unverified` → allow. Existen los eslabones 3 y 4. Faltan el orden, los otros tres veredictos, el break-glass —que libera **exactamente** `blocked_timezone_unknown` y `blocked_calling_window`, y nada más— y la razón en inglés llano escrita al timeline.
+
 ### 🚫 LA LISTA DE SUPRESIÓN, Y UNA PUERTA QUE SU PROPIO COMENTARIO DERROTABA (2026-08-09)
 `app/db/schema/suppression.ts` · migración **0036** · `tests/integration/suppression-list.test.ts` · `definer-tenancy.test.ts`. **366 → 381 tests · 34 → 36 archivos.** Ítem 9 del MVP.
 

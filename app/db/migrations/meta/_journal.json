@@ -260,6 +260,13 @@
       "when": 1786331872359,
       "tag": "0036_suppression_list",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1786332728918,
+      "tag": "0037_calling_window",
+      "breakpoints": true
     }
   ]
 }
