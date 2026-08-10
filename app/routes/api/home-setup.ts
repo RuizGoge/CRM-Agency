@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm'
 
 import { withTenant, type SessionIdentity } from '~/db'
 import { requireIdentity } from '~/lib/auth/identity'
+import { defineEndpoint } from '~/lib/endpoint/define'
 
 /**
  * The first-run checklist's state — US-9.14, `FirstRunChecklist` (C-41).
@@ -98,3 +99,26 @@ export async function loader({ request }: { request: Request }): Promise<Respons
     },
   })
 }
+
+/**
+ * The first-run checklist's state.
+ */
+export const endpoint = defineEndpoint({
+  method: 'GET',
+  path: '/api/home-setup',
+  role: 'web',
+  audience: 'owner',
+  scope: 'owner',
+  surface: 'json',
+  summary: 'Which first-run checklist items this seller has completed.',
+  etag: {
+    kind: 'none',
+    reason:
+      'Four booleans read once at first paint and not polled. A watermark would cost more than the body.',
+  },
+  siloProbe: {
+    kind: 'none',
+    reason:
+      'Takes no id and returns no rows - four booleans about the CALLER, derived from app.current_user_id() inside the query. There is no foreign id to present and no listing to canary.',
+  },
+})

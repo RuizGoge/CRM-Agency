@@ -1,5 +1,6 @@
 import { ingestWebhook } from '~/db'
 import { extractKeys } from '~/modules/communications/aloware-ingest'
+import { defineEndpoint } from '~/lib/endpoint/define'
 
 /**
  * `POST /webhooks/aloware/v1/{endpoint_token}` — the ingest edge (ARR-INT-04).
@@ -136,3 +137,30 @@ const unauthorized = (): Response =>
 /** Over the cap. The one refusal that is about the payload rather than the caller. */
 const tooLarge = (): Response =>
   new Response(null, { status: 413, headers: { 'cache-control': 'no-store' } })
+
+/**
+ * The ingest edge. Not under api/, and versioned, because ruling P8.2 fixes
+ * both: this URL lives in Aloware's panel and we cannot redeploy them.
+ */
+export const endpoint = defineEndpoint({
+  method: 'POST',
+  path: '/webhooks/aloware/v1/:endpointToken',
+  // Reachable in the ingest role, never in the worker: a bulkhead that shares
+  // a process with the relay is not one.
+  role: 'ingest',
+  audience: 'public-ingress',
+  scope: 'provider',
+  surface: 'ingress',
+  summary: 'Stores one provider delivery and enqueues its merge, in one round trip.',
+  // G2 measured that Aloware does NOT retry, so the edge admits and stores
+  // rather than rejecting - and the dedupe is on the provider's own id.
+  idempotency: {
+    kind: 'natural',
+    constraint: 'inbound_webhook_event dedupe on (tenant, provider_event_id)',
+  },
+  siloProbe: {
+    kind: 'none',
+    reason:
+      'Arrives with no session and no tenant: app.webhook_ingest DERIVES the tenant from the endpoint token, so there is no caller identity to present a foreign id with. An unknown token is the only 401 in the product.',
+  },
+})

@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm'
 
 import { withTenant, type SessionIdentity } from '~/db'
 import { requireIdentity } from '~/lib/auth/identity'
+import { defineEndpoint } from '~/lib/endpoint/define'
 
 /**
  * One contact record — the destination Ctrl+K opens.
@@ -136,3 +137,23 @@ export async function loader({
     },
   })
 }
+
+/**
+ * One contact, by id. The narrowest owner-scoped read, and the one whose denial
+ * shape matters most: a 403 here would confirm the record exists.
+ */
+export const endpoint = defineEndpoint({
+  method: 'GET',
+  path: '/api/contacts/:contactId',
+  role: 'web',
+  audience: 'owner',
+  scope: 'owner',
+  surface: 'json',
+  summary: 'A single contact with its phones, deals and compliance state.',
+  etag: {
+    kind: 'none',
+    reason:
+      'Opened once per navigation, not polled. The drawer refetches on open rather than revalidating.',
+  },
+  siloProbe: { kind: 'foreign-id', param: 'contactId' },
+})

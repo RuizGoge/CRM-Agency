@@ -1,6 +1,7 @@
 import { redirect } from 'react-router'
 
 import { auth } from '~/lib/auth/server'
+import { defineEndpoint } from '~/lib/endpoint/define'
 
 /**
  * Sign out, as its own route.
@@ -24,3 +25,25 @@ export async function action({ request }: { request: Request }): Promise<Respons
 export function loader(): Response {
   return redirect('/my-day')
 }
+
+/**
+ * Sign out, as its own route.
+ */
+export const endpoint = defineEndpoint({
+  method: 'POST',
+  path: '/sign-out',
+  role: 'web',
+  audience: 'owner',
+  scope: 'owner',
+  surface: 'json',
+  summary: 'Destroys the session and redirects to sign-in.',
+  idempotency: {
+    kind: 'natural',
+    constraint: 'destroying an already-destroyed session is a no-op that still redirects',
+  },
+  siloProbe: {
+    kind: 'none',
+    reason:
+      'Acts only on the session cookie the caller presented and reads no tenant data. There is no id to present.',
+  },
+})

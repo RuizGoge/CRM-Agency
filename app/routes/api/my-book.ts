@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm'
 import { withTenant, type SessionIdentity } from '~/db'
 import { requireIdentity } from '~/lib/auth/identity'
 import { bookChipOf, type BookChip } from '~/lib/card-health/book-chip'
+import { defineEndpoint } from '~/lib/endpoint/define'
 
 /**
  * My Book — ONE list, ONE status chip (MVP item 24).
@@ -115,3 +116,26 @@ export async function loader({ request }: { request: Request }): Promise<Respons
     headers: { 'content-type': 'application/json; charset=utf-8' },
   })
 }
+
+/**
+ * My Book. One list, one status chip.
+ *
+ * THIS ROUTE IS WHY THE FACTORY EXISTS. The audit found it shipping a seller's
+ * entire book with NO cache-control header at all, while contact.ts and
+ * search.ts - the same class of body - both send one. Nothing noticed, because
+ * nothing was looking.
+ */
+export const endpoint = defineEndpoint({
+  method: 'GET',
+  path: '/api/my-book',
+  role: 'web',
+  audience: 'owner',
+  scope: 'owner',
+  surface: 'json',
+  summary: 'The whole book with a server-computed status chip per row.',
+  etag: {
+    kind: 'custom',
+    reason: 'tag over the serialized rows; the book changes only when a row does',
+  },
+  siloProbe: { kind: 'listing', canary: true },
+})

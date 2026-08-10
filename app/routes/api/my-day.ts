@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm'
 import { withTenant } from '~/db'
 import { requireIdentity } from '~/lib/auth/identity'
 import { jsonConditional } from '~/lib/http/conditional'
+import { defineEndpoint } from '~/lib/endpoint/define'
 
 /**
  * My Day — the seller's own work, and only ever their own.
@@ -137,3 +138,18 @@ export async function loader({ request }: { request: Request }): Promise<Respons
   // this surface and the board as its two consumers.
   return jsonConditional(request, await readMyDay(request))
 }
+
+/**
+ * My Day. The seller's first screen, and the one the ten-minute demo opens on.
+ */
+export const endpoint = defineEndpoint({
+  method: 'GET',
+  path: '/api/my-day',
+  role: 'web',
+  audience: 'owner',
+  scope: 'owner',
+  surface: 'json',
+  summary: 'Due now, appointments, needs outcome and fresh, in one ranked surface.',
+  etag: { kind: 'watermark', channel: 'my-day', key: 'owner+day' },
+  siloProbe: { kind: 'listing', canary: true },
+})

@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm'
 
 import { withTenant } from '~/db'
 import { requireIdentity } from '~/lib/auth/identity'
+import { defineEndpoint } from '~/lib/endpoint/define'
 
 /**
  * Records that a celebration was shown. Nothing else.
@@ -54,3 +55,24 @@ export async function action({ request }: { request: Request }): Promise<Respons
     throw err
   }
 }
+
+/**
+ * Claims the closed-won celebration, once per opportunity, after the undo
+ * window.
+ */
+export const endpoint = defineEndpoint({
+  method: 'POST',
+  path: '/api/celebrate',
+  role: 'web',
+  audience: 'owner',
+  scope: 'owner',
+  surface: 'json',
+  summary: 'Claims the celebration for one opportunity; the second claimer is told already.',
+  // app.celebrate_once is a conditional UPDATE - two claimants produce one
+  // winner because the UPDATE is atomic, and the loser gets a success path.
+  idempotency: {
+    kind: 'natural',
+    constraint: 'celebrate_once: UPDATE ... WHERE celebrated_at IS NULL',
+  },
+  siloProbe: { kind: 'foreign-id', param: 'opportunityId' },
+})

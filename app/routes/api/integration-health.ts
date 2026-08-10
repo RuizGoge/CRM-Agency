@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm'
 
 import { withTenant } from '~/db'
 import { requireIdentity } from '~/lib/auth/identity'
+import { defineEndpoint } from '~/lib/endpoint/define'
 
 /**
  * `GET /api/integration-health` — §4.6's counter, as data.
@@ -157,3 +158,34 @@ export async function loader({ request }: { request: Request }): Promise<Respons
     headers: { 'cache-control': 'private, no-store' },
   })
 }
+
+/**
+ * The admin's view of the ingest edge: dead letters and alerts.
+ */
+export const endpoint = defineEndpoint({
+  method: 'GET',
+  path: '/api/integration-health',
+  role: 'web',
+  audience: 'tenant',
+  scope: 'tenant_admin',
+  surface: 'health',
+  summary: 'Dead letters and admin alerts for the tenant, admin only.',
+  // ADR-084: MFA is NOT required on admin endpoints in the MVP. Declared
+  // rather than omitted so the day that ruling changes, the compiler finds
+  // every site instead of somebody grepping for them.
+  mfa: false,
+  mfaReason:
+    'ADR-084 rules MFA is not required on admin endpoints in the MVP; the compensating control is that admin is a database role, not a UI flag.',
+  etag: {
+    kind: 'none',
+    reason: 'An operator surface read on demand, not polled. Its rows are counted in tens.',
+  },
+  // The one route in the tree that answers 403 rather than 404, argued in
+  // place: this is a SCREEN whose existence is not secret, not a RECORD whose
+  // existence a 403 would confirm.
+  siloProbe: {
+    kind: 'none',
+    reason:
+      'Admin-only by scope and tenant_admin_only by policy: a seller reading it gets zero rows rather than another tenant data. There is no per-record id to present, and the cross-tenant case is covered by the table classification rather than by the route.',
+  },
+})

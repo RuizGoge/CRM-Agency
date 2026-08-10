@@ -7,6 +7,24 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 🏭 LA ENDPOINT FACTORY EXISTE, Y LA MARCA ES INFALSIFICABLE (2026-08-10)
+`app/lib/endpoint/define.ts` · las 13 rutas de recurso · `tests/integration/route-registry.test.ts`. **589 → 597 tests · 59 → 60 archivos.** `verify` verde.
+
+🔴 **`CLAUDE.md` LA DESCRIBÍA COMO VIGENTE DESDE LA FASE 6.** *"Every file goes through the endpoint factory so the generated registry can drive the cache, silo, auth and topology suites"* — y `grep defineEndpoint` sobre todo el árbol devolvía **cero**. `app/routes.ts:10-12` repetía la frase. El único lugar que lo confesaba era `contracts/protected-list.json` para DEMO-04: *"The route registry that would drive it does not exist yet"*.
+
+**LA MARCA ES UN SÍMBOLO REAL, NO UN TIPO FANTASMA, y la diferencia es el mecanismo entero.** Un brand de sólo-tipo hace que un objeto sin factory **no compile**, que vale y no alcanza: la puerta tiene que contestar *"¿este módulo pasó por la factory?"* **en runtime**, sobre módulos que importa, y ahí un fantasma es invisible. El símbolo es privado del módulo y nunca se exporta, así que `isEndpoint` chequea **identidad, no forma**. 🎯 **Mutación: cambiar `defineEndpoint({…})` por `({…})` —el mismo objeto, todos los campos, los tipos correctos— pone rojo nombrando el archivo.**
+
+**CUATRO REQUISITOS QUE NO COMPILAN SI FALTAN**, que es como un comentario de review se vuelve un error de tipo: un **GET sin `etag`**, un **no-GET sin `idempotency`**, un **`scope: 'tenant_admin'` sin `mfa`**, y **cualquier endpoint sin `siloProbe`**. Los tres `kind: 'none'` existen y **piden razón**, y la razón se lee: el test exige más de 80 caracteres y **fija la lista de los seis que optan por salir**.
+
+**El registro sale de la TABLA DE RUTAS del framework, nunca de un glob de directorios.** `05c`:1911 supersede a §995 (*"scanning routes/api/**"*) y la razón vale: una ruta que existe está en `app/routes.ts` **por construcción**, así que un registro derivado de ahí es exhaustivo en vez de convencional.
+
+- **Una exención, con razón y fijada: `routes/api/auth.ts`.** better-auth monta su superficie entera bajo un splat, así que no hay *un* método, path, audiencia ni idempotencia que declarar — sign-in, sign-up, refresh y callback llegan al mismo módulo.
+- ✅ **El defecto que motivó el archivo queda cerrado por el tipo:** `my-book.ts` shippeaba el libro entero de una vendedora **sin ningún `cache-control`** mientras `contact.ts` y `search.ts` —el mismo tipo de cuerpo— sí lo mandaban. Nadie lo notó porque nadie miraba las rutas **como conjunto**.
+
+⚠️ **UNA CONTRADICCIÓN QUE CUENTO EN VEZ DE RESOLVER: el header de caché.** ADR-011 dice que un GET poleable es `private, max-age=0, must-revalidate` y **nunca** `no-store` —`private` ya prohíbe la caché compartida, y `no-store` prohíbe guardar la respuesta que un 304 existe para no reenviar—. `conditional.ts:63` shippea `no-store` *"en cada una de estas, sin excepción"* con su propio argumento escrito. **En los méritos el ADR parece tener razón.** No lo toco: las tres superficies poleadas contestan 304 hoy, y el piso de polling es **lo que la Puerta 6 mide** — cambiar el header de cada superficie poleada mueve un número medido, y eso es un ruling, no un refactor. Hay un test que lo **cuenta**.
+
+⚠️ **LO QUE ESTO NO ES TODAVÍA, dicho y no insinuado.** §964 declara **quince** campos y **cuatro** factories hermanas (`defineStream`, `defineIngress`, `defineDocument`), y manda que **la tabla de rutas del framework se genere DESDE el registro**, no al lado. Esto es lo primero: la declaración, la marca, el registro y la puerta. **Los handlers NO están envueltos** — el descriptor va al lado de `loader`/`action`, no alrededor — así que **no puede rechazar un handler pelado** todavía, y las suites comparan lo que una ruta **declara** contra lo que **hace** en vez de imponerlo en el camino de la llamada. Faltan también las suites 4 y 5 (auth y topología).
+
 ### 🔊 EL PRIMER EMISOR REAL, Y LA PUERTA DE COMPLIANCE ENTRA AL DISCADO (2026-08-10)
 Migración **0054** · `app/routes/api/calls.ts` · `app/components/contacts/contact-drawer.tsx` · `tests/integration/stage-move-emits.test.ts` · `dial-gate.test.ts`. **578 → 589 tests · 57 → 59 archivos.** `verify` verde.
 

@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm'
 import { ensureCapabilities, withTenant, type SessionIdentity } from '~/db'
 import { requireIdentity } from '~/lib/auth/identity'
 import { alowareCapability } from '~/modules/communications/capability'
+import { defineEndpoint } from '~/lib/endpoint/define'
 
 /**
  * `POST /api/calls` — the dial.
@@ -266,3 +267,28 @@ export async function action({ request }: { request: Request }): Promise<Respons
     headers: { 'cache-control': 'private, no-store' },
   })
 }
+
+/**
+ * The dial. Every outbound call in the product goes through here, and since
+ * this branch, through app.compliance_check first.
+ */
+export const endpoint = defineEndpoint({
+  method: 'POST',
+  path: '/api/calls',
+  role: 'web',
+  audience: 'owner',
+  scope: 'owner',
+  surface: 'json',
+  summary: 'Two-legged dial, gated by the one outbound compliance gate.',
+  // A 'none' WITH A REASON THAT IS A DEBT, not a dismissal. Every two-legged
+  // dial is billable and G2 measured that Aloware never retries, so a repeated
+  // POST must not become a second call. The adapter is not written yet, so
+  // there is no provider call to be idempotent about; the key has to arrive
+  // WITH the adapter.
+  idempotency: {
+    kind: 'none',
+    reason:
+      'The dial adapter is not written - dialFor stops at no_credentials. A provider idempotency key must land in the same change that makes the call, because every dial is billable and Aloware does not retry.',
+  },
+  siloProbe: { kind: 'foreign-id', param: 'contactId' },
+})

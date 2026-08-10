@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm'
 import { withTenant, type SessionIdentity } from '~/db'
 import { requireIdentity } from '~/lib/auth/identity'
 import { toE164 } from '~/lib/phone/e164'
+import { defineEndpoint } from '~/lib/endpoint/define'
 
 /**
  * Quick-add — the other end of the loop §7 opens.
@@ -166,3 +167,24 @@ export async function action({ request }: { request: Request }): Promise<Respons
     },
   })
 }
+
+/**
+ * Quick-add a lead. Mobile-first, fifteen seconds.
+ */
+export const endpoint = defineEndpoint({
+  method: 'POST',
+  path: '/api/quick-add',
+  role: 'web',
+  audience: 'owner',
+  scope: 'owner',
+  surface: 'json',
+  summary: 'Creates a contact and its primary phone in one step.',
+  // The duplicate is refused by the UNIQUE index from 0010 rather than by a
+  // pre-flight SELECT, which is what makes two taps safe rather than racy.
+  idempotency: { kind: 'natural', constraint: 'contact_phone tenant+phone unique index' },
+  siloProbe: {
+    kind: 'none',
+    reason:
+      'Creates rows owned by the caller and takes no id of an existing record. There is nothing belonging to another seller to present it with.',
+  },
+})

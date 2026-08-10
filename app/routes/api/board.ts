@@ -5,6 +5,7 @@ import { requireIdentity } from '~/lib/auth/identity'
 import { decayOf, healthOf, signalOf } from '~/lib/card-health/card-health'
 import { jsonConditional } from '~/lib/http/conditional'
 import type { CardHealth, CardSignal } from '~/lib/card-health/card-health'
+import { defineEndpoint } from '~/lib/endpoint/define'
 
 /**
  * The pipeline board.
@@ -242,3 +243,25 @@ export async function loader({ request }: { request: Request }): Promise<Respons
   const payload = await readPipeline(request)
   return jsonConditional(request, payload, etagSourceOf(payload))
 }
+
+/**
+ * The pipeline board. The one anchor surface, and the widest owner-scoped read
+ * in the product.
+ */
+export const endpoint = defineEndpoint({
+  method: 'GET',
+  path: '/api/board',
+  role: 'web',
+  audience: 'owner',
+  scope: 'owner',
+  surface: 'json',
+  summary: 'The seller own kanban board, with card health computed server-side.',
+  // The board payload carries the NEW clock's starting second, so a tag over
+  // the body would be fresh on every poll forever. jsonConditional takes a
+  // projection for exactly this surface.
+  etag: {
+    kind: 'custom',
+    reason: 'tag is over a projection, not the body: the NEW clock ticks in the payload',
+  },
+  siloProbe: { kind: 'listing', canary: true },
+})

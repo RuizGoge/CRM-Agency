@@ -4,6 +4,7 @@ import { withTenant, type SessionIdentity } from '~/db'
 import { requireIdentity } from '~/lib/auth/identity'
 import { jsonConditional } from '~/lib/http/conditional'
 import { fromWireString, subtract, sum, toWireString } from '~/lib/money/money'
+import { defineEndpoint } from '~/lib/endpoint/define'
 
 /**
  * The public board.
@@ -237,3 +238,25 @@ export async function loader({ request }: { request: Request }): Promise<Respons
   // of three. See CONTEXT.md.
   return jsonConditional(request, await readBoard(request))
 }
+
+/**
+ * The public Earnings board. Tenant-wide numbers by design - this is the one
+ * read where seeing a colleague's total is the product, not a leak.
+ */
+export const endpoint = defineEndpoint({
+  method: 'GET',
+  path: '/api/leaderboard',
+  role: 'web',
+  audience: 'tenant',
+  scope: 'owner',
+  surface: 'json',
+  summary: 'Podium, top ten and the caller rank with neighbours and gap.',
+  etag: { kind: 'watermark', channel: 'leaderboard', key: 'period+tenant' },
+  // The ONE endpoint where a listing carrying other sellers' rows is correct.
+  // A canary probe here would assert the opposite of the requirement.
+  siloProbe: {
+    kind: 'none',
+    reason:
+      'The public board is tenant-wide on purpose (ruling D7, protected item 1). Every row is another seller by design, so a foreign-id or canary probe would assert the opposite of the requirement. What IS scoped - that a seller sees only their own money - is probed on /api/board.',
+  },
+})

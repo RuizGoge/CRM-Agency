@@ -4,6 +4,7 @@ import { withTenant, type SessionIdentity } from '~/db'
 import { requireIdentity } from '~/lib/auth/identity'
 import { looksNumeric, toE164 } from '~/lib/phone/e164'
 import { MIN_QUERY_LENGTH } from '~/lib/search/query'
+import { defineEndpoint } from '~/lib/endpoint/define'
 
 /**
  * Global search — MVP item 8, protected item `DEMO-08`, and §7's recovery path.
@@ -202,3 +203,24 @@ export async function loader({ request }: { request: Request }): Promise<Respons
     },
   })
 }
+
+/**
+ * Global owner-scoped search. Name, phone in E.164, email.
+ */
+export const endpoint = defineEndpoint({
+  method: 'GET',
+  path: '/api/search',
+  role: 'web',
+  audience: 'owner',
+  scope: 'owner',
+  surface: 'json',
+  summary: 'Owner-scoped search across name, phone and email.',
+  etag: {
+    kind: 'none',
+    reason:
+      'A query result keyed on a string the user is still typing. Revalidating it costs the same as answering it.',
+  },
+  // The silo-collision fixture lives here: two sellers, one consumer, one
+  // phone number in three formats.
+  siloProbe: { kind: 'listing', canary: true },
+})
