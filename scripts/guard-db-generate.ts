@@ -1,4 +1,6 @@
+import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { basename, dirname, join, resolve } from 'node:path'
 
 /**
  * `npm run db:generate` refuses while the Drizzle snapshot chain is behind.
@@ -53,6 +55,8 @@ function main(): void {
     process.exit(1)
   }
 
+  refuseIfIndexTaken(latestEntry.idx + 1)
+
   if (latestSnapshot >= latestEntry.idx) {
     process.exit(0)
   }
@@ -83,6 +87,97 @@ function main(): void {
       `Nothing was broken today only because nobody had run this command. Migration\n` +
       `0026 is what a reconciliation looks like: no SQL, one snapshot.`,
   )
+  process.exit(1)
+}
+
+/** Migration indices already used by a sibling worktree or another branch. */
+function indicesElsewhere(): Map<number, string[]> {
+  const taken = new Map<number, string[]>()
+  const note = (idx: number, where: string): void => {
+    taken.set(idx, [...(taken.get(idx) ?? []), where])
+  }
+  const indexOf = (name: string): number | null => {
+    const m = /^(\d{4})_.*\.sql$/.exec(name)
+    return m?.[1] === undefined ? null : Number.parseInt(m[1], 10)
+  }
+
+  // (a) SIBLING WORKTREES — uncommitted work, which no git command can see.
+  const here = resolve(process.cwd())
+  if (basename(dirname(here)) === 'worktrees') {
+    for (const sibling of readdirSync(dirname(here))) {
+      if (sibling === basename(here)) continue
+      const dir = join(dirname(here), sibling, 'app', 'db', 'migrations')
+      if (!existsSync(dir)) continue
+      for (const f of readdirSync(dir)) {
+        const idx = indexOf(f)
+        if (idx !== null) note(idx, `worktree ${sibling}`)
+      }
+    }
+  }
+
+  // (b) EVERY BRANCH — committed but unmerged work.
+  try {
+    const branches = execFileSync('git', ['branch', '--format=%(refname:short)'], {
+      encoding: 'utf8',
+    })
+      .split('\n')
+      .map((b) => b.trim())
+      .filter(Boolean)
+    const current = execFileSync('git', ['branch', '--show-current'], { encoding: 'utf8' }).trim()
+
+    for (const branch of branches) {
+      if (branch === current) continue
+      const listing = execFileSync(
+        'git',
+        ['ls-tree', '--name-only', branch, 'app/db/migrations/'],
+        {
+          encoding: 'utf8',
+        },
+      )
+      for (const path of listing.split('\n')) {
+        const idx = indexOf(basename(path.trim()))
+        if (idx !== null) note(idx, `branch ${branch}`)
+      }
+    }
+  } catch {
+    // No git, or a repository shape this cannot read. The worktree half still
+    // ran; a guard that cannot see everything is better than one that refuses
+    // to run at all.
+  }
+
+  return taken
+}
+
+function refuseIfIndexTaken(next: number): void {
+  const taken = indicesElsewhere()
+  const clash = taken.get(next)
+  if (clash === undefined) return
+
+  let free = next
+  while (taken.has(free)) free += 1
+
+  const pad = (n: number): string => String(n).padStart(4, '0')
+  const lines = [
+    `DBGEN004: refusing to generate. Migration ${pad(next)} is already used.`,
+    '',
+    ...clash.map((w) => `    ${pad(next)}  ${w}`),
+    '',
+    'A worktree isolates FILES and not the repository, so this tree reads its own',
+    'newest migration and cannot know another session already claimed the next',
+    'number. Three sessions did exactly that and each wrote an 0035; the collision',
+    'only surfaced when all three were applied to the one shared development',
+    'database, where harden() raised HR002 for a policy class the other branch had',
+    'never taught it — and drizzle-kit swallowed even that.',
+    '',
+    'Migrations are never renumbered after merge and there are no down migrations,',
+    'so this is cheap to fix now and expensive to fix later.',
+    '',
+    `  The first free index is ${pad(free)}.`,
+    '',
+    "Bump this branch's next migration to it, or agree a range with the other",
+    'session before generating.',
+  ]
+  console.error(lines.join('\n'))
   process.exit(1)
 }
 

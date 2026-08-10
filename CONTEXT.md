@@ -7,6 +7,23 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 🔢 DOS MIGRACIONES NO PUEDEN COMPARTIR UN NÚMERO (2026-08-10)
+`scripts/guard-db-generate.ts` · `scripts/migration-index.test.ts`. **472 → 476 tests · 45 → 46 archivos.** El mecanismo que faltaba detrás de la colisión de tres ramas.
+
+**LA CAUSA, dicha una vez: un worktree aísla ARCHIVOS y no el repositorio.** Tres sesiones leyeron cada una su propio árbol, las tres vieron la 0034 como la más nueva, y las tres escribieron una 0035. No había nada que pudiera notarlo — el número se elige mirando el árbol propio.
+
+✅ **`DBGEN004` — la guarda se niega a generar un número que otro ya reclamó.** Mira **las dos** cosas, y ninguna alcanza sola: los **worktrees hermanos** atrapan trabajo **sin commitear** (que es exactamente cómo pasó lo de 0035–0038) y las **ramas** atrapan trabajo commiteado y sin mergear (que es cómo pasó lo de 0043–0044). Verificado recortando el journal a 42: se niega nombrando las tres fuentes —worktree, rama y master— y da el primer índice libre.
+
+✅ **`migration-index.test.ts` — el otro extremo: el momento en que dos ramas MERGEAN y los dos archivos caen en un árbol.** No es redundante con la guarda: la guarda corre sólo cuando alguien **genera**, y de la 0019 en adelante la mayoría se escribieron **a mano** (funciones, triggers, políticas y grants no son cosas que Drizzle exprese). Este corre en cada commit y pregunta algo que no necesita base, ni git, ni red. 🎯 Probado por mutación con la colisión real: copiar `0043_leaderboard_read_hoists_its_clock.sql` al árbol lo pone rojo nombrando los dos archivos.
+
+⚠️ **LO QUE ESTO NO ARREGLA, y es de las otras sesiones:** las migraciones ya escritas siguen colisionando. **`master` tiene hasta la 0044**, así que:
+
+- **`virtualizacion-tablero`** debe renumerar sus **0043 → 0045** y **0044 → 0046** (archivo, tag del journal y snapshot) al rebasar sobre master.
+- **`aloware-puerta-2-spike`** tiene **0035–0038 sin commitear**; al rebasar, sus cuatro pasan a **0047–0050**.
+- **Ninguna de las dos la toco yo:** una es historia commiteada de una sesión activa y la otra es trabajo sin respaldo en git. La guarda ahora les dice el primer índice libre en cuanto generen.
+
+📌 **Y una nota de método que vale más que el arreglo: el síntoma estaba a cuatro pasos de la causa.** `npm run db:migrate` fallaba con exit 1 **y sin imprimir nada**; el error real (`HR002: policy_class owner_scoped_read has no generator`) sólo apareció corriendo el migrador a mano con las causas encadenadas. **drizzle-kit se traga el error de la migración**, y eso es cierto también en el CI.
+
 ### 📕 MY BOOK, LA EXTRACCIÓN DE `healthOf`, Y TRES RAMAS ESCRIBIENDO LA MISMA MIGRACIÓN (2026-08-10)
 `app/lib/card-health/**` · `app/routes/api/my-book.ts` · `app/routes/ui/my-book.tsx` · `app/components/book/**` · `tests/integration/my-book.test.ts`. **464 → 472 tests · 44 → 45 archivos.** Ítem 24. **Ruta B completa.**
 
