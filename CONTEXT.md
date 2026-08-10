@@ -7,6 +7,42 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 📐 P11 MEDIDO EN 14,6 ms — Y LOS 238 ms QUE ERA PRIMERO (2026-08-09)
+`tests/integration/fixtures/perf-floor.ts` · `leaderboard-poll-perf.test.ts` · migraciones **0043** y **0044** · `perf-budgets.json`. **270 → 274 tests.**
+
+**El fixture `perf-floor` de §3.1 existe**: 50 vendedoras · 25.000 contactos · 200.000 actividades · **6.400 filas de ledger repartidas en los cuatro períodos**, todas por `ledger_append`, que es el único escritor que el ledger tiene. Y **P11 está medido**: §3.2 lo ratificó en Fase 4 —p95 de un `304`, warn >40 ms, rojo >80— y **nada en este repositorio lo leía**.
+
+🔴 **LA PRIMERA MEDICIÓN FUE 238 ms p95, tres veces el techo. Y el desglose dijo dónde: la lectura 192 ms, el serializar-y-comparar del ETag 0,2 ms.** La capa de caché nunca fue el problema — que es exactamente lo contrario de lo que yo había escrito en este archivo la entrada anterior.
+
+```
+Seq Scan on earnings_ledger (actual time=177.597..177.597 rows=0)
+  Rows Removed by Filter: 6400
+  Buffers: shared hit=13000
+```
+
+**Trece mil buffers para descartar seis mil cuatrocientas filas.** La causa es una palabra: **`clock_timestamp()` es VOLATILE**, así que el predicado del retardo de revelación que la contiene se re-evalúa **por fila**, y arrastra con ella a `projection_reveal_delay_ms()` —que es STABLE y **lee `ref.timing_constant`**—. Seis mil cuatrocientas filas hicieron seis mil cuatrocientas consultas a una tabla de una fila.
+
+**Es la lección de N13 en el camino del dinero: el esquema ya estaba bien y la consulta no podía usarlo.** No hizo falta tocar un índice, una tabla ni una marca de volatilidad.
+
+- **La 0043 iza el corte a un CTE `MATERIALIZED`.** Medido después, mismo fixture, misma sesión: **177 ms → 0,87 ms · 13.000 buffers → 43**. De punta a punta P11 pasa de **238,6 ms a 14,6 ms p95** — adentro del **warn**, no apenas adentro del rojo.
+- ✅ **Y ES MÁS CORRECTO, que es por qué esto no es tuning.** Un `clock_timestamp()` por fila juzga filas distintas contra instantes distintos. Este predicado decide qué ventas siguen adentro del retardo y **deben ocultarse de un tablero público**; se supone que es **un** instante. Los dos `undo_deadline_ms()` de los `NOT EXISTS` se izaron por lo mismo.
+- **La 0044 registra el presupuesto en 80 — el número RATIFICADO, no el medido.** A diferencia de P12, P13, P20 y N13, esta cifra se firmó en Fase 4 y el trabajo de la medición era comprobar si el producto estaba adentro, no fijar la vara. Registrar 14,6 habría inventado una regla más estricta que la firmada, con una sola máquina de evidencia.
+- 🎯 **`ci-ratchet.test.ts` se puso rojo por el brazo nuevo**, que es ese guardián funcionando: un presupuesto lo lee una persona antes de contar como shippeado.
+
+**§1183 suponía 2 ms por `304`** y construyó sobre eso el modelo de USD 7/mes, diciendo explícitamente que *"es una suposición hasta que la Puerta 2 la mida"*. **14,6 ms es la primera cifra contra la que se comprobó**: un orden de magnitud afuera, y adentro del presupuesto.
+
+⚠️ **Dos cosas que el fixture me cobró, las dos ya comentadas en el archivo:** una oportunidad con prima y sin `premium_mode` la rechaza `opportunity_premium_mode_declared`; y anclar los cuatro buckets de llegada a *"N días atrás"* en vez de a los límites de período hizo que el tablero de día y el de semana coincidieran **un domingo** — la trampa exacta que este registro ya anotaba para el seed del demo, repetida por mí.
+
+### 🚨 COLISIÓN DE MIGRACIONES ENTRE WORKTREES — ESTO ES DE JORGE (2026-08-09)
+
+**Descubierto al intentar aplicar la 0029: `master` ya no está donde esta rama nació.** Está **16 commits adelante** y llega hasta la **0042**. Hay **cinco worktrees** trabajando en paralelo sobre **una sola base `crm_dev`**, y el esquema de numeración de migraciones no tiene ningún mecanismo de coordinación.
+
+- **Mis 0029 y 0030 chocaban de frente** con `0029_provider_capability_probe` y `0030_promote_two_legged_call`, que ya existen en master y en tres worktrees. **Renumeradas a 0043 y 0044**, que es el primer hueco libre **hoy** — y nada impide que otra sesión reclame esos mismos números antes del merge.
+- 🔴 **UN SÍNTOMA CONFUSO QUE ESTO YA PRODUJO:** `npm run db:migrate` dijo *"applied successfully"* y **no aplicó nada**. Drizzle compara su journal contra `__drizzle_migrations`, la base compartida ya tenía **39 filas** puestas por otra sesión, y mi journal tenía 31 — así que dio todo por aplicado. La medición de P11 pasaba contra `crm_test` (que se reconstruye desde mis archivos) y `npm run perf` fallaba contra `crm_dev`. **La misma verdad, dos respuestas, decidido por qué base leía cada comando.**
+- ⚠️ **`_journal.json` es UN archivo al que toda rama le agrega al final**, y la cadena `prevId` de los snapshots encadena desde el 0028 *de cada rama*. **Esto va a conflictuar en el merge de las cinco ramas**, y no es un conflicto de texto: reconciliarlo mal deja una cadena que `db:generate` no puede continuar.
+- **Lo que hice y por qué:** apliqué la 0043 y la 0044 a `crm_dev` a mano (`INSERT … ON CONFLICT DO NOTHING` y un `CREATE OR REPLACE` sobre una función que **master no toca**, verificado). Es lo mismo que habría hecho `db:migrate` si el journal no estuviera desfasado, y es aditivo e idempotente.
+- **Lo que NO hice: integrar master en esta rama.** Son 16 commits y `CONTEXT.md` va a conflictuar en grande porque las dos partes agregan entradas arriba. **Es una decisión tuya, y las otras sesiones siguen escribiendo mientras tanto.**
+
 ### ✅ EL PISO DE POLLING QUEDA COMPLETO: LAS TRES SUPERFICIES SON CONDICIONALES (2026-08-09)
 `routes/ui/leaderboard.tsx` · `use-conditional-poll.ts` · `polling.spec.ts`. **107 → 109 e2e.** Sin migración.
 
