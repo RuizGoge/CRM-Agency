@@ -220,6 +220,31 @@ export async function ensurePartitions(): Promise<void> {
   })
 }
 
+/**
+ * Raises a PROCESS-health alert across every tenant.
+ *
+ * 🔴 NO TENANT ARGUMENT, AND NO SESSION. An event loop is a property of the
+ * operating system process: when it saturates, every agency served by that
+ * process is degraded at the same instant, and picking one to attribute it to
+ * would be a lie that reads like data. `app.process_alert_raise` fans out one
+ * row per tenant, and each of those rows is TRUE.
+ *
+ * A THIRD ENTRY POINT ON A SURFACE WHOSE COMMENT SAYS "TWO FUNCTIONS", and the
+ * justification is the same as `ensureCapabilities` above: it touches the
+ * driver, and only `app/db/**` may. What it cannot do is carry business data —
+ * the function refuses any kind that is not process health, so this is not a
+ * door into `admin_alert`.
+ */
+export async function raiseProcessAlert(kind: string, detail: string): Promise<number> {
+  return db.transaction(async (tx) => {
+    await tx.execute(dropPrivilege)
+    const rows = await tx.execute<{ n: number }>(
+      sql`SELECT app.process_alert_raise(${kind}, ${detail}) AS n`,
+    )
+    return rows[0]?.n ?? 0
+  })
+}
+
 export async function withSystemWork<T>(tenantId: string, fn: (tx: Tx) => Promise<T>): Promise<T> {
   return db.transaction(async (tx) => {
     await tx.execute(sql`SELECT app.begin_system_work(${tenantId}::uuid)`)

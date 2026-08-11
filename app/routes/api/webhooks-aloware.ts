@@ -1,6 +1,7 @@
 import { ingestWebhook } from '~/db'
-import { extractKeys } from '~/modules/communications/aloware-ingest'
 import { defineEndpoint } from '~/lib/endpoint/define'
+import { admitDelivery } from '~/lib/ingest/semaphore'
+import { extractKeys } from '~/modules/communications/aloware-ingest'
 
 /**
  * `POST /webhooks/aloware/v1/{endpoint_token}` — the ingest edge (ARR-INT-04).
@@ -99,15 +100,27 @@ export async function action({
   // honest value: not "valid", not "invalid", but "this provider gives us
   // nothing to verify". The permanent line that says so belongs on
   // `/admin/integration-health`, not in a comment here.
-  const outcome = await ingestWebhook({
-    endpointToken: token,
-    body: raw,
-    providerEvent: keys.providerEvent,
-    canonical: keys.canonical,
-    alowareCallId: keys.alowareCallId,
-    parseStatus: keys.parseStatus,
-    signatureValid: null,
-  })
+  // 🔴 THE BULKHEAD, AND IT QUEUES RATHER THAN SHEDDING. §885 and three other
+  // passages describe a semaphore that answers 429/503 "to the provider, which
+  // retries — a correct outcome". G2 measured that this provider does NOT
+  // retry: six deliveries answered 500, three hours, zero came back. So the
+  // premise every one of those passages rests on is false here, and
+  // `g2-aloware.md:300` states the correction outright — under pressure the
+  // right behaviour is "queue, block, and take the time".
+  //
+  // `admitDelivery` has no way to refuse. Being slow costs us up to the 110 s
+  // the provider was measured to tolerate; refusing costs the delivery.
+  const outcome = await admitDelivery(() =>
+    ingestWebhook({
+      endpointToken: token,
+      body: raw,
+      providerEvent: keys.providerEvent,
+      canonical: keys.canonical,
+      alowareCallId: keys.alowareCallId,
+      parseStatus: keys.parseStatus,
+      signatureValid: null,
+    }),
+  )
 
   if (outcome === 'unknown_token') {
     return unauthorized()

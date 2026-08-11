@@ -63,6 +63,25 @@ beforeAll(async () => {
     INSERT INTO app.contact_phone (tenant_id, contact_id, owner_user_id, phone_e164, is_primary)
     VALUES (${TENANT}, ${WITH_PHONE}, ${OWNER}, '+12025550101', true),
            (${TENANT}, ${SOMEONE_ELSES}, ${OTHER_SELLER}, '+12025550102', true)`
+
+  // 🔴 A LIVE BREAK-GLASS OVERRIDE, AND WITHOUT IT THIS FILE PASSES BY DAY AND
+  // FAILS BY NIGHT.
+  //
+  // Since the compliance gate was wired into `dialFor`, a lead outside its own
+  // calling window is refused BEFORE the operational checks this file is about.
+  // These leads are in Texas, so between roughly 9pm and 8am Central every
+  // assertion below would get `refused` instead of the `blocked` it expects —
+  // and the gate would be right. There is no state that avoids it either:
+  // around 06:00–12:00 UTC the entire United States is asleep.
+  //
+  // The override releases EXACTLY the two clock verdicts and nothing else, so
+  // this file gets to ask its own question — what happens AFTER compliance —
+  // while suppression and the recording guard still bind. It is the product's
+  // own mechanism rather than a frozen clock, so it also fails honestly the day
+  // the release stops working.
+  await sql`
+    INSERT INTO app.break_glass_override (tenant_id, started_by_user_id, reason)
+    VALUES (${TENANT}, ${OWNER}, 'dial suite: this file tests the refusals after compliance')`
 })
 
 afterAll(async () => {

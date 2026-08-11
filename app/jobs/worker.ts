@@ -3,6 +3,8 @@ import { PgBoss } from 'pg-boss'
 import { ensurePartitions } from '~/db'
 import { dispatchDueJobs } from '~/modules/calendar/dispatch'
 import { relayOnce } from '~/modules/events/relay'
+
+import { startSaturationMonitor, stopSaturationMonitor } from './saturation'
 import { mergeCallFromEvent, type CallMergeJob } from '~/modules/communications/call-merge'
 import { mergeMessageFromEvent, type MessageMergeJob } from '~/modules/communications/message-merge'
 
@@ -190,11 +192,18 @@ export async function startWorker(): Promise<PgBoss | null> {
   relayStopped = false
   scheduleRelay()
 
+  // §2444: folded, the ingest surface, SSR and the poll floor share ONE event
+  // loop, and loop delay is the only signal in the product that sees the
+  // process rather than a request. §2550 allows the folded tier to degrade and
+  // forbids it degrading SILENTLY — this is what stops it being silent.
+  startSaturationMonitor()
+
   boss = instance
   return instance
 }
 
 export async function stopWorker(): Promise<void> {
+  stopSaturationMonitor()
   relayStopped = true
   if (relayTimer !== null) {
     clearTimeout(relayTimer)

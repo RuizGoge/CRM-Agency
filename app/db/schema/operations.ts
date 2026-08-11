@@ -119,6 +119,21 @@ export const ADMIN_ALERT_KINDS = [
    * acknowledged away.
    */
   'reconciliation_unavailable',
+
+  /**
+   * The event loop of a FOLDED process is saturated: `perf_hooks`
+   * `monitorEventLoopDelay` p99 over 200 ms sustained for 60 s (§2444).
+   *
+   * Added by 0055 because Gate 6 could not close without it: §2548 requires the
+   * folded leg to assert that this row "actually fires", and it was not a legal
+   * value — the CHECK enumerated five literals and this was not one, so it
+   * could not be written even by hand.
+   *
+   * The ONLY kind whose subject is the PROCESS rather than a record, which is
+   * why it is written by `app.process_alert_raise` — fanned out one row per
+   * tenant, because every agency the process serves is degraded at once.
+   */
+  'folded_topology_saturated',
 ] as const
 
 /**
@@ -165,7 +180,8 @@ export const adminAlert = app.table(
     check(
       'admin_alert_kind',
       sql`${t.kind} IN ('unmapped_number', 'mapping_unverified', 'unmapped_disposition',
-                        'ingest_throttled', 'reconciliation_unavailable')`,
+                        'ingest_throttled', 'reconciliation_unavailable',
+                        'folded_topology_saturated')`,
     ),
     check('admin_alert_occurrences_positive', sql`${t.occurrenceCount} >= 1`),
     check('admin_alert_detail_present', sql`length(btrim(${t.detail})) > 0`),

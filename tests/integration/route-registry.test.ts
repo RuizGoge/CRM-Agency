@@ -3,6 +3,19 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 import { cacheControlFor, isEndpoint, type Endpoint } from '~/lib/endpoint/define'
+import * as board from '~/routes/api/board'
+import * as calls from '~/routes/api/calls'
+import * as celebrate from '~/routes/api/celebrate'
+import * as contact from '~/routes/api/contact'
+import * as homeSetup from '~/routes/api/home-setup'
+import * as integrationHealth from '~/routes/api/integration-health'
+import * as leaderboard from '~/routes/api/leaderboard'
+import * as myBook from '~/routes/api/my-book'
+import * as myDay from '~/routes/api/my-day'
+import * as quickAdd from '~/routes/api/quick-add'
+import * as search from '~/routes/api/search'
+import * as signOut from '~/routes/api/sign-out'
+import * as webhooksAloware from '~/routes/api/webhooks-aloware'
 
 /**
  * The route registry, and the gate that makes the endpoint factory a mechanism
@@ -56,6 +69,48 @@ function mountedApiRoutes(): readonly Mounted[] {
 
 const MOUNTED = mountedApiRoutes()
 
+/**
+ * The modules, imported STATICALLY.
+ *
+ * 🔴 THE FIRST VERSION USED `import(\`../../app/${'${'}path}\`)` AND WAS UNSOUND. Vite
+ * warned that a dynamic import with a variable in its static part cannot be
+ * analysed, and the consequence showed up exactly where this kind of thing
+ * always does: the file passed alone and failed inside the full suite, which is
+ * the signature this project has now paid for six times.
+ *
+ * Static imports also make the gate STRONGER rather than merely reliable. This
+ * map and `app/routes.ts` are two independent lists, and the assertion below
+ * requires them to agree — so a route mounted without being added here is as
+ * red as a route with no descriptor.
+ */
+const MODULE_ENTRIES: readonly (readonly [string, Record<string, unknown>])[] = [
+  ['routes/api/board.ts', board],
+  ['routes/api/calls.ts', calls],
+  ['routes/api/celebrate.ts', celebrate],
+  ['routes/api/contact.ts', contact],
+  ['routes/api/home-setup.ts', homeSetup],
+  ['routes/api/integration-health.ts', integrationHealth],
+  ['routes/api/leaderboard.ts', leaderboard],
+  ['routes/api/my-book.ts', myBook],
+  ['routes/api/my-day.ts', myDay],
+  ['routes/api/quick-add.ts', quickAdd],
+  ['routes/api/search.ts', search],
+  ['routes/api/sign-out.ts', signOut],
+  ['routes/api/webhooks-aloware.ts', webhooksAloware],
+]
+
+const MODULES: ReadonlyMap<string, Record<string, unknown>> = new Map(MODULE_ENTRIES)
+
+function registry(): readonly { mount: Mounted; spec: Endpoint }[] {
+  const out: { mount: Mounted; spec: Endpoint }[] = []
+  for (const mount of MOUNTED) {
+    if (EXEMPT.has(mount.modulePath)) continue
+    const spec = MODULES.get(mount.modulePath)?.['endpoint']
+    if (isEndpoint(spec)) out.push({ mount, spec })
+  }
+  return out
+}
+
 describe('every resource route goes through the factory', () => {
   it('is reading a real route table', () => {
     // The mutation guard. A regex that matched nothing would make every
@@ -64,16 +119,17 @@ describe('every resource route goes through the factory', () => {
     expect(MOUNTED.length).toBeGreaterThan(10)
   })
 
-  it('exports a branded descriptor from every module that is not exempt', async () => {
+  it('exports a branded descriptor from every module that is not exempt', () => {
     const missing: string[] = []
 
     for (const { modulePath } of MOUNTED) {
       if (EXEMPT.has(modulePath)) continue
 
-      const mod: Record<string, unknown> = (await import(`../../app/${modulePath}`)) as Record<
-        string,
-        unknown
-      >
+      const mod = MODULES.get(modulePath)
+      if (mod === undefined) {
+        missing.push(`${modulePath} (mounted in app/routes.ts, not imported by this file)`)
+        continue
+      }
 
       // IDENTITY, NOT SHAPE. `isEndpoint` checks a module-private symbol, so an
       // object that carries every field with the right types still fails.
@@ -103,25 +159,12 @@ describe('every resource route goes through the factory', () => {
 })
 
 describe('what the registry lets the suites ask', () => {
-  async function registry(): Promise<readonly { mount: Mounted; spec: Endpoint }[]> {
-    const out: { mount: Mounted; spec: Endpoint }[] = []
-    for (const mount of MOUNTED) {
-      if (EXEMPT.has(mount.modulePath)) continue
-      const mod: Record<string, unknown> = (await import(
-        `../../app/${mount.modulePath}`
-      )) as Record<string, unknown>
-      const spec = mod['endpoint']
-      if (isEndpoint(spec)) out.push({ mount, spec })
-    }
-    return out
-  }
-
-  it('declares a path that matches where the route is actually mounted', async () => {
+  it('declares a path that matches where the route is actually mounted', () => {
     // A descriptor whose path has drifted from the route table describes a
     // route that does not exist, and every suite reading it would be checking
     // the wrong URL while passing.
     const drifted: string[] = []
-    for (const { mount, spec } of await registry()) {
+    for (const { mount, spec } of registry()) {
       const declared = spec.path.replace(/^\//, '')
       if (declared !== mount.urlPath)
         drifted.push(`${mount.modulePath}: ${spec.path} vs /${mount.urlPath}`)
@@ -129,13 +172,13 @@ describe('what the registry lets the suites ask', () => {
     expect(drifted, drifted.join('\n')).toEqual([])
   })
 
-  it('gives every endpoint exactly one permitted cache-control value', async () => {
+  it('gives every endpoint exactly one permitted cache-control value', () => {
     // 🎯 THE DEFECT THIS FILE WAS WRITTEN FOR. `my-book.ts` shipped a seller's
     // entire book with NO cache-control header while `contact.ts` and
     // `search.ts` — the same class of body — both sent one. Nothing noticed
     // because nothing was looking at the routes as a SET.
     const allowed = new Set(['private, no-store', 'private, max-age=0, must-revalidate'])
-    for (const { mount, spec } of await registry()) {
+    for (const { mount, spec } of registry()) {
       expect(
         allowed.has(cacheControlFor(spec)),
         `${mount.modulePath} resolves to a value that is not one of the two permitted`,
@@ -143,10 +186,10 @@ describe('what the registry lets the suites ask', () => {
     }
   })
 
-  it('counts the endpoints that opt out of a silo probe, and makes each say why', async () => {
+  it('counts the endpoints that opt out of a silo probe, and makes each say why', () => {
     // ADR-073 makes silo testability a DECLARED property of every endpoint. The
     // opt-outs are allowed and COUNTED, so the number moving is visible.
-    const optedOut = (await registry()).filter(({ spec }) => spec.siloProbe.kind === 'none')
+    const optedOut = registry().filter(({ spec }) => spec.siloProbe.kind === 'none')
 
     for (const { mount, spec } of optedOut) {
       if (spec.siloProbe.kind !== 'none') continue
@@ -168,10 +211,10 @@ describe('what the registry lets the suites ask', () => {
     ])
   })
 
-  it('makes every non-GET answer the idempotency question', async () => {
+  it('makes every non-GET answer the idempotency question', () => {
     // The sendBeacon-on-tab-close double delivery is real in this product and
     // already cost a double credit once. `none` is permitted and takes a reason.
-    for (const { mount, spec } of await registry()) {
+    for (const { mount, spec } of registry()) {
       if (spec.method === 'GET') continue
       expect(
         spec.idempotency,
@@ -186,7 +229,7 @@ describe('what the registry lets the suites ask', () => {
     }
   })
 
-  it('records the ONE endpoint whose cache header contradicts ADR-011', async () => {
+  it('records the ONE endpoint whose cache header contradicts ADR-011', () => {
     // Counted rather than hidden, and counted rather than silently fixed.
     //
     // ADR-011 rules a pollable GET is `private, max-age=0, must-revalidate` and
@@ -199,7 +242,7 @@ describe('what the registry lets the suites ask', () => {
     // today and the polling floor is what Gate 6 measures: changing the header
     // on every polled surface moves a measured number, which is a ruling and
     // not a refactor. This assertion exists so the contradiction has a count.
-    const pollable = (await registry()).filter(
+    const pollable = registry().filter(
       ({ spec }) => spec.method === 'GET' && spec.etag.kind !== 'none',
     )
     expect(pollable.length).toBeGreaterThan(2)

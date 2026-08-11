@@ -7,6 +7,38 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 🧯 TRES DE LAS CUATRO ASERCIONES QUE LE FALTABAN A G6 YA TIENEN SUJETO (2026-08-10)
+Migración **0055** · `app/lib/ingest/semaphore.ts` · `app/jobs/saturation.ts` · `tests/integration/saturation.test.ts`. **597 → 609 tests · 60 → 61 archivos.** `verify` verde.
+
+🔴 **EL SEMÁFORO NO DESCARTA, Y EL CORPUS DICE CUATRO VECES QUE SÍ.** §885 (*"429/503 al proveedor, que reintenta — un resultado correcto"*), §1702, §2434 y ADR-035 describen todos un shed. Los cuatro descansan en la misma premisa: que una entrega rechazada vuelve.
+
+**G2 midió que no vuelve.** `g2-aloware.md:45` — seis entregas contestadas 500, tres horas, **cero redeliveries**. Y `:53` — tolera al menos **110.023 ms** de silencio. `g2-aloware.md:300` escribe la corrección: *"cuando el borde está bajo presión, la conducta correcta es encolar, bloquear y tomarse el tiempo — nunca descartar, nunca devolver no-2xx, nunca rate-limitar"*. Y `05c`:905 exige **cero 429** en esta superficie. **Así que la aserción "conteo de 429" de G6 sí tiene sujeto: el contador existe y su valor correcto es CERO**, por construcción — `admitDelivery` no recibe opciones y no expone ningún camino que rechace.
+
+🎯 **Y EL BOUND NO ES UN COSTO PAGADO POR OBSERVABILIDAD: ES LO QUE SOSTIENE EL PISO.** Corrida controlada, misma máquina, minutos de diferencia, sólo cambia el bound:
+
+| | bound 8 | bound 64 (apagado) |
+|---|---|---|
+| p95 de ingesta | **220 ms** | 603 ms |
+| **piso de polling p95** | **59 ms** | **576 ms** ← el presupuesto del 304 es 80 |
+| pared | 82 s | 119 s |
+| throughput | 244/s | 168/s |
+
+Sin bound, el tablero de la vendedora se va a **siete veces** su presupuesto mientras el proveedor reintenta, **y la tormenta tarda MÁS en absorberse** — 20.000 entregas peleando por ocho conexiones del pool encolan igual, pero encolan donde nadie las ve.
+
+✅ **EL MONITOR DE EVENT LOOP, con el umbral literal de §2444: `monitorEventLoopDelay`, p99 > 200 ms sostenido 60 s.** Medido durante la tormenta: **p99 15,6 ms, max 34,7 ms**. Cinco tests fijan la conducta: no dispara bajo el umbral por larga que sea la racha, no dispara sobre el umbral hasta que se sostiene, dispara al minuto, y **una sola muestra por debajo limpia la ventana** — "sostenido" significa sin interrupción, y un promedio móvil dejaría que un proceso sano la mayor parte del tiempo se acumule hasta la alerta.
+- ⚠️ **Todos los valores de esa API salen en NANOSEGUNDOS.** Leerlos como ms da un número un millón de veces mayor y la alerta dispara en la primera muestra de un proceso ocioso — una alerta siempre encendida es igual a ninguna, y más difícil de notar.
+
+✅ **`folded_topology_saturated` es un kind legal Y TIENE ESCRITOR.** `app.process_alert_raise` **abanica una fila por tenant**, porque un event loop es propiedad del PROCESO: cuando satura, todas las agencias que ese proceso sirve están degradadas en el mismo instante, y elegir una sería una mentira con forma de dato.
+- ⚠️ **Es la PRIMERA escritura cross-tenant del árbol** — los cuatro caminos sancionados hasta ahora son claims o lecturas. Acotada a un grado que la hace defendible: una tabla, lista de kinds chequeada adentro de la función, cero datos de negocio, y no lee nada más que `app.tenant.id`. **No es precedente para uno más ancho.**
+- **La alerta DES-ACUSA al recurrir.** `admin_alert_subject_uidx` no es parcial, así que una fila acusada una vez quedaría silenciada para siempre: para una condición que va y viene, eso significa que **la primera tormenta es la única de la que alguien se entera**.
+- **No se agregó `topology_split_required`**, que §2453 nombra: su condición depende de `fold_split_webhooks_per_day_max`, que la Puerta 6 se negó a escribir. Agregar un valor sin escritor es exactamente lo que el registro ya reprocha de cuatro de los cinco kinds existentes.
+
+🔴 **Y UN DEFECTO REAL EN MIS PROPIOS TESTS, que sólo aparece de noche.** `dial.test.ts` y `dial-gate.test.ts` sembraban leads de Texas y asserteaban que el discado pasaba. **Pasaban a la tarde y fallaban esa misma noche** — correctamente: un lead de Texas a las 10 de la noche Central **está** fuera de la ventana. Y no hay estado que lo arregle: entre las 06:00 y las 12:00 UTC **Estados Unidos entero está durmiendo** y ningún lead es legalmente llamable. Arreglado con un break-glass por test, que libera **exactamente** zona y ventana y nada más — así el reloj deja de decidir mientras supresión y grabación siguen atando. Se agregó de yapa la mutación que la constitución prohíbe: **un admin bajo break-glass sigue sin poder discar un STOP**.
+
+📌 **Y la sexta vez con la misma firma: el gate del registro de rutas pasaba solo y fallaba en la suite completa.** La causa era un `import()` con variable, que vite avisa que no puede analizar estáticamente. Reemplazado por imports estáticos — que además hace el gate **más fuerte**: el mapa y `app/routes.ts` son dos listas independientes que tienen que coincidir, así que una ruta montada sin agregarla es tan roja como una ruta sin descriptor.
+
+⚠️ **LA CUARTA SIGUE SIN SUJETO, y es la PROTEGIDA.** G6/P24: inyectar un STOP durante la tormenta y afirmar `suppression_list` en 5 s más un discado bloqueado a T+5 s. **No hay sniff de STOP en el ingreso** y `message.received` es inalcanzable. **La puerta pasa de estar a cuatro aserciones de cerrar a estar a una** — la que el registro marca protegida con `retries: 0`.
+
 ### 🌩️ PUERTA 6 CORRIDA: 20.000 WEBHOOKS, CERO PERDIDOS — Y NO SE PUEDE CERRAR (2026-08-10)
 `scripts/gate-6-storm.ts`. **La tormenta se midió; la puerta NO queda cerrada, y la razón es la mitad que le falta al producto, no al arnés.**
 

@@ -9,6 +9,7 @@ export {
   claimOutbox,
   ensurePartitions,
   ingestWebhook,
+  raiseProcessAlert,
   withSystemWork,
   withTenant,
 } from './client'

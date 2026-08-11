@@ -69,6 +69,10 @@ const EXEMPT: ReadonlyMap<string, string> = new Map([
     'The trigger half of the same path, on the ingest table. It fires inside a transaction that has no session context by construction, because the request that opened it is a provider POST rather than a seller. It moves a row and sets no tenant of its own.',
   ],
   [
+    'app.process_alert_raise',
+    'The condition it reports belongs to the operating system PROCESS, not to an agency: when the event loop saturates, every tenant served by that process is degraded at the same instant, and there is no session because the caller is a monitor in the worker loop. It fans one row out per tenant because the statement is true for each of them. It reads nothing but app.tenant.id, writes one table, and refuses any kind that is not process health, so it cannot express a contact, a dollar or a name.',
+  ],
+  [
     'app.ensure_audit_partitions',
     'Cluster storage, exactly like app.ensure_event_partitions: a monthly partition of audit_log is shared by every agency at once, so there is no tenant whose session could scope its CREATE TABLE. Its entire body is CREATE TABLE IF NOT EXISTS, the per-partition dedupe index, and a call to security.harden(). It reads no tenant data and writes none.',
   ],
@@ -168,6 +172,10 @@ describe('a definer function cannot forget the tenant', () => {
       'app.ensure_event_partitions',
       'app.inbound_webhook_dead_letter',
       'app.outbox_claim',
+      // Added by 0055, and the third exempt for the "no tenant is the right
+      // answer" reason rather than the "before a tenant exists" one. An event
+      // loop belongs to the process.
+      'app.process_alert_raise',
       'app.resolve_identity',
       'app.scheduled_job_claim',
       'app.webhook_ingest',

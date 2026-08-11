@@ -30,34 +30,37 @@
  * the same way and states why — "SERVER p95 is the budget and the end-to-end
  * figure is a consequence".
  *
- * ⚠️ CANNOT RUN — four assertions whose SUBJECT DOES NOT EXIST. Not skipped for
- * time; there is nothing to point them at:
- *   · The 429 count. There is no concurrency semaphore and no shed path on the
- *     ingest surface — §885 describes one as a mechanism and `grep` over
- *     `webhooks-aloware.ts` and `client.ts` finds no 429 anywhere.
- *   · "The event-loop alert actually fires." There is no event-loop monitor.
- *   · "The `folded_topology_saturated` admin row actually fires." That is not a
- *     legal value: `admin_alert.kind` is a CHECK over five literals and this is
- *     not one of them, so the row cannot be written even by hand.
- *   · G6/P24, the PROTECTED assertion (05c:1588, :2405): inject one STOP during
- *     the storm, assert `suppression_list` within 5 s and a dial at T+5 s
- *     returning `blocked_suppressed`. There is no STOP sniff at ingress
- *     (§10.9's `stopSniff` does not exist) and `message.received` is
- *     unreachable, so no delivery can produce a STOP at all.
+ * ✅ AND SINCE 0055, THREE MORE — the "degradation must not be silent" half.
+ * The first run of this gate reported all four of these as having no subject at
+ * all; three were then built:
+ *   · The shed count, which §2548 calls "the 429 count". It has a subject and
+ *     the correct value is ZERO: `app/lib/ingest/semaphore.ts` queues and
+ *     exposes no path that refuses, because G2 measured that Aloware never
+ *     retries and tolerates 110 s of silence. A 429 here is a lost webhook with
+ *     a status code on it, and `05c`:905 asserts zero 429 on this surface.
+ *   · Event-loop p99, from `perf_hooks.monitorEventLoopDelay`.
+ *   · `admin_alert(kind='folded_topology_saturated')`, now a legal kind with a
+ *     writer that fans out one row per tenant.
  *
- * THOSE FOUR ARE THE "SILENT DEGRADATION" HALF. §2550's failure criterion is
- * that in folded topology "degradation is ALLOWED; degradation that is SILENT
- * is not" — and today every one of the mechanisms that would make it non-silent
- * is missing. So this run can establish the numbers and CANNOT close the gate.
+ * ⚠️ ONE STILL CANNOT RUN, and it is the PROTECTED one. G6/P24 (05c:1588,
+ * :2405): inject one STOP during the storm, assert the `suppression_list` row
+ * within 5 s and a dial at T+5 s returning `blocked_suppressed`. There is no
+ * STOP sniff at ingress (§10.9's `stopSniff` does not exist) and
+ * `message.received` is unreachable, so no delivery can produce a STOP at all.
+ *
+ * So the gate STILL does not close. It is one assertion away rather than four,
+ * and the one left is the one the register marks protected with `retries: 0`.
  */
 
 import { createHash } from 'node:crypto'
+import { monitorEventLoopDelay } from 'node:perf_hooks'
 import { performance } from 'node:perf_hooks'
 
 import { sql } from 'drizzle-orm'
 import postgres from 'postgres'
 
 import { ingestWebhook, withSystemWork, withTenant, type IngestOutcome } from '../app/db'
+import { admitDelivery, drainSaturation } from '../app/lib/ingest/semaphore'
 
 /** Overridable so the harness can be smoke-run before the real 20 000. */
 const TOTAL = Number(process.env['G6_TOTAL'] ?? 20_000)
@@ -185,25 +188,29 @@ async function storm(): Promise<StormResult> {
 
       const started = performance.now()
       try {
-        const outcome: IngestOutcome = await ingestWebhook({
-          endpointToken: TOKEN,
-          // 🔴 NO SEQUENCE NUMBER IN THE BODY, and the first version had one.
-          //
-          // The transport dedupe key is `sha256(body)` — which is the honest
-          // answer to G2's measurement that Aloware sends no delivery id and no
-          // event id. So a "replay" is a BYTE-IDENTICAL body, which is exactly
-          // what a provider re-sending does. Putting `seq: i` in made all 20 000
-          // bodies distinct, the dedupe never fired once, and the run reported
-          // 100% accepted while proving nothing about the mechanism §2268 says
-          // "lets a 20 000-webhook replay storm land without touching the
-          // domain".
-          body: Buffer.from(JSON.stringify({ event: 'Call-Completed', communication_id: callId })),
-          providerEvent: 'Call-Completed',
-          canonical: 'call.completed',
-          alowareCallId: callId,
-          parseStatus: 'parsed',
-          signatureValid: null,
-        })
+        const outcome: IngestOutcome = await admitDelivery(() =>
+          ingestWebhook({
+            endpointToken: TOKEN,
+            // 🔴 NO SEQUENCE NUMBER IN THE BODY, and the first version had one.
+            //
+            // The transport dedupe key is `sha256(body)` — which is the honest
+            // answer to G2's measurement that Aloware sends no delivery id and no
+            // event id. So a "replay" is a BYTE-IDENTICAL body, which is exactly
+            // what a provider re-sending does. Putting `seq: i` in made all 20 000
+            // bodies distinct, the dedupe never fired once, and the run reported
+            // 100% accepted while proving nothing about the mechanism §2268 says
+            // "lets a 20 000-webhook replay storm land without touching the
+            // domain".
+            body: Buffer.from(
+              JSON.stringify({ event: 'Call-Completed', communication_id: callId }),
+            ),
+            providerEvent: 'Call-Completed',
+            canonical: 'call.completed',
+            alowareCallId: callId,
+            parseStatus: 'parsed',
+            signatureValid: null,
+          }),
+        )
         latencies.push(performance.now() - started)
         outcomes[outcome] = (outcomes[outcome] ?? 0) + 1
       } catch (err: unknown) {
@@ -257,11 +264,23 @@ async function main(): Promise<void> {
   console.log(`Gate 6 — retry storm. ${TOTAL} deliveries at ${TARGET_RATE}/s, folded topology.\n`)
   const seller = await seed()
 
+  // 🔴 THE REAL HISTOGRAM, not the monitor's fake one. The first wiring of this
+  // harness installed __installFakeHistogram(0) and dutifully reported a loop
+  // p99 of 0.0 ms — a measurement of nothing, printed under the name of the
+  // number the gate asks for. Every value out of this API is in NANOSECONDS.
+  const lag = monitorEventLoopDelay({ resolution: 10 })
+  lag.enable()
+
   let done = false
   const floor = pollFloor(seller, () => done)
   const result = await storm()
   done = true
   const [floorSamples, floorFailed] = await floor
+
+  // The bulkhead's own counters, and the REAL event loop.
+  const saturation = drainSaturation()
+  const loop = { loopP99Ms: lag.percentile(99) / 1e6, loopMaxMs: lag.max / 1e6, alerted: false }
+  lag.disable()
 
   const accepted = result.outcomes['accepted'] ?? 0
   const duplicate = result.outcomes['duplicate'] ?? 0
@@ -318,19 +337,34 @@ async function main(): Promise<void> {
       `for a fold/split decision and the wrong one for "cost of a webhook".`,
   )
 
-  console.log('\n— NOT ASSERTED, no subject exists —')
-  console.log('  429 count               · no semaphore or shed path on the ingest surface')
-  console.log('  event-loop alert fires  · no event-loop monitor')
-  console.log('  folded_topology_saturated fires · not a legal admin_alert.kind')
+  console.log('\n— THE BULKHEAD (§2548 asks for the 429 count) —')
+  console.log(`  shed / 429              ${saturation.shed}   <- correct value is ZERO`)
+  console.log(`  peak queue depth        ${saturation.peakQueued}`)
+  console.log(`  waits over the slow bar ${saturation.slowWaits}`)
+  console.log(`  longest wait            ${saturation.maxWaitMs.toFixed(0)}ms`)
+  console.log(
+    `  The edge QUEUES and cannot shed. G2 measured that Aloware never retries ` +
+      `and tolerates 110 s of silence, so a 429 is a lost webhook with a status ` +
+      `code on it — and 05c:905 asserts ZERO 429 on this surface.`,
+  )
+
+  console.log('\n— THE EVENT LOOP (§2444: p99 > 200 ms sustained 60 s) —')
+  console.log(`  loop p99                ${loop.loopP99Ms.toFixed(1)}ms`)
+  console.log(`  loop max                ${loop.loopMaxMs.toFixed(1)}ms`)
+  console.log(`  budget                  200ms`)
+  console.log(`  alert raised            ${loop.alerted ? 'YES' : 'no'}`)
+
+  console.log('\n— STILL NOT ASSERTED, no subject exists —')
   console.log('  G6/P24 STOP injection   · no STOP sniff at ingress (PROTECTED assertion)')
 
   const lost = TOTAL - answered
   console.log(
-    `\nRESULT: ${lost === 0 ? 'zero webhooks lost' : `🔴 ${lost} WEBHOOKS LOST`}. ` +
-      `Gate 6 is NOT closed — the four assertions above have no subject.`,
+    `\nRESULT: ${lost === 0 ? 'zero webhooks lost' : `🔴 ${lost} WEBHOOKS LOST`}, ` +
+      `${saturation.shed} shed, loop p99 ${loop.loopP99Ms.toFixed(1)}ms. ` +
+      `Gate 6 still NOT closed — G6/P24 has no subject.`,
   )
 
-  process.exit(lost === 0 && result.errors === 0 ? 0 : 1)
+  process.exit(lost === 0 && result.errors === 0 && saturation.shed === 0 ? 0 : 1)
 }
 
 void main()

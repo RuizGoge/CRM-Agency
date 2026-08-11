@@ -62,6 +62,38 @@ beforeAll(async () => {
     VALUES (${TENANT}, '+12145550102', 'stop', NULL, clock_timestamp(), 'replied STOP')`
 })
 
+/**
+ * Runs `fn` with a live break-glass override, and ends it afterwards.
+ *
+ * 🔴 THIS IS WHAT MAKES THE POSITIVE CONTROL INDEPENDENT OF THE CLOCK.
+ *
+ * The first version of that test seeded a Texas lead and asserted the dial got
+ * through. It passed in the afternoon and failed the same evening — correctly:
+ * a Texas lead at 10pm Central IS outside the calling window, so the gate was
+ * right and the test was wrong. No choice of state fixes it either, because
+ * around 06:00–12:00 UTC the whole United States is asleep and no lead anywhere
+ * is legally callable.
+ *
+ * An override releases EXACTLY `blocked_timezone_unknown` and
+ * `blocked_calling_window` and nothing else, so the clock stops deciding while
+ * suppression and the recording guard still bind — which is exactly the
+ * discrimination being tested. Scoped per test rather than opened in
+ * `beforeAll` because the fail-closed assertions below need the clock to still
+ * apply, and an override left live would have quietly released those too.
+ */
+async function withOverride<T>(fn: () => Promise<T>): Promise<T> {
+  await sql`
+    INSERT INTO app.break_glass_override (tenant_id, started_by_user_id, reason)
+    VALUES (${TENANT}, ${ANA}, 'gate suite: the clock must not decide this assertion')`
+  try {
+    return await fn()
+  } finally {
+    await sql`
+      UPDATE app.break_glass_override SET ended_at = clock_timestamp(), end_reason = 'manual'
+       WHERE tenant_id = ${TENANT} AND ended_at IS NULL`
+  }
+}
+
 afterAll(async () => {
   await sql?.end()
 })
@@ -121,15 +153,28 @@ describe('every dial passes the gate', () => {
     // Reaching `no_credentials` is the correct destination today — the dial
     // adapter is not written — and what matters here is that it got PAST the
     // gate rather than being refused by it.
-    const outcome = await dialFor(identity, { contactId: OPEN_CONTACT })
+    const outcome = await withOverride(() => dialFor(identity, { contactId: OPEN_CONTACT }))
 
     expect(outcome.status).not.toBe('refused')
 
-    // And it was still recorded. An allowed dial leaves a row too, because a
-    // permitted call under break-glass is exactly the one somebody asks about.
+    // And it was still recorded. An allowed dial leaves a row too — a permitted
+    // call under break-glass is exactly the one somebody asks about later,
+    // which is why the snapshot carries the override id.
     const rows = await auditRows(OPEN_CONTACT)
     expect(rows).toHaveLength(1)
     expect(rows[0]?.verdict).toBe('allow')
+  })
+
+  it('does NOT release suppression under break-glass', async () => {
+    // 🎯 THE MUTATION THE CONSTITUTION FORBIDS, asserted rather than assumed.
+    // `override_scope` is an enum of ONE value, so there is no label meaning
+    // "lift the suppression" — an admin under break-glass still cannot dial a
+    // STOP, and that is structural rather than procedural.
+    const outcome = await withOverride(() => dialFor(identity, { contactId: STOPPED_CONTACT }))
+
+    expect(outcome.status).toBe('refused')
+    if (outcome.status !== 'refused') return
+    expect(outcome.verdict).toBe('blocked_suppressed')
   })
 
   it('refuses another seller’s lead the same way it refuses an absent one', async () => {
