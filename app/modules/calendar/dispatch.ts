@@ -73,25 +73,55 @@ async function handle(job: ClaimedJob, now: Date): Promise<Terminal> {
   }
 
   if (job.kind === 'meeting_reminder') {
-    const smsOn = await withSystemWork(job.tenantId, async (tx) => {
-      const rows = await tx.execute<{ enabled: boolean }>(
-        sql`SELECT sms_enabled AS enabled FROM app.tenant WHERE id = app.current_tenant()`,
+    // 🔴 THE ONE COMPLIANCE GATE, AND THIS BLOCK USED TO BE A SECOND COPY OF IT.
+    //
+    // What stood here read `tenant.sms_enabled` directly and resolved the job as
+    // `skipped: sms_disabled` — which is step 1 of `app.compliance_check`'s
+    // chain (0038:246-252), reimplemented in TypeScript. The gate's whole claim
+    // is that every outbound contact passes through ONE choke point, and a
+    // second implementation of its first link is how that claim stops being
+    // true without anything going red.
+    //
+    // It also meant the other four verdicts were unreachable on this path: a
+    // reminder to a suppressed number, or one due at 2am in the lead's own
+    // timezone, went out — or would have, once a transport existed.
+    //
+    // `app.reminder_gate` derives the job's OWNER from the row and asks the gate
+    // on their behalf, because under `withSystemWork` there is no user and the
+    // gate's visibility predicate would refuse every contact in the book.
+    const gate = await withSystemWork(job.tenantId, async (tx) => {
+      const rows = await tx.execute<{ verdict: string; event_verdict: string | null }>(
+        sql`SELECT verdict::text AS verdict, event_verdict
+              FROM app.reminder_gate(${job.jobId}::uuid)`,
       )
-      return rows[0]?.enabled ?? false
+      return rows[0]
     })
 
-    if (!smsOn) {
-      // §10.16 makes this a COLUMN on tenant, not an environment variable, and
-      // bans `process.env.SMS*` across the tree. Reading it here rather than
-      // from config is what makes the launch configuration a per-tenant fact
-      // that an admin can see.
-      await resolve(job.tenantId, job.jobId, 'skipped', 'skipped: sms_disabled')
+    // Fails CLOSED. A gate that answered nothing did not answer, and the correct
+    // reading of no answer is refusal.
+    if (gate === undefined) {
+      await resolve(job.tenantId, job.jobId, 'skipped', 'skipped: blocked_timezone_unknown')
+      return 'skipped'
+    }
+
+    if (gate.verdict !== 'allow') {
+      // ⚠️ `sms_disabled` KEEPS ITS EXACT OLD STRING. It is the terminal row the
+      // SMS-dark launch produces on every reminder, `job-dispatch.test.ts` and
+      // `scheduling.test.ts` both assert it by value, and CONTEXT records it as
+      // one of the two rows Gate 5 compared across topologies. Changing the
+      // wording would have rewritten history that other things read.
+      const reason =
+        gate.verdict === 'blocked_sms_disabled'
+          ? 'skipped: sms_disabled'
+          : `skipped: ${gate.verdict}`
+
+      await resolve(job.tenantId, job.jobId, 'skipped', reason)
       return 'skipped'
     }
 
     // The send itself belongs to the Communications module, which is blocked on
-    // the Aloware account (Sprint 1.9). Reaching here today would mean a tenant
-    // has SMS on with no transport behind it, so it resolves as skipped with a
+    // the Aloware account (Sprint 1.9). Reaching here today means the gate said
+    // yes and there is no transport behind it, so it resolves as skipped with a
     // reason that says exactly that instead of pretending to have sent.
     await resolve(job.tenantId, job.jobId, 'skipped', 'skipped: no sms transport configured')
     return 'skipped'

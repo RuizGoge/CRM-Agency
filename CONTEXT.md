@@ -7,6 +7,29 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### ⚖️ ÍTEM 11 COMPLETO — EL RECORDATORIO PASA POR LA PUERTA ÚNICA (2026-08-11)
+Migración **0058** · `app/modules/calendar/dispatch.ts` · `tests/integration/job-dispatch.test.ts`. **641 → 642 tests.** `verify` verde. **El ítem 11 del MVP queda cerrado salvo la razón escrita al timeline, que espera al timeline.**
+
+**El discado ya pasaba por `app.compliance_check`; el recordatorio no, y no podía.** `dispatch.ts` reimplementaba el paso 1 de la cadena en TypeScript —leía `tenant.sms_enabled` y resolvía `skipped: sms_disabled`—. **Una puerta con dos implementaciones no es una puerta**, y la consecuencia era concreta: los otros cuatro veredictos eran **inalcanzables en este camino**. Un recordatorio a un número con STOP salía igual.
+
+🔴 **DOS OBSTÁCULOS MEDIDOS, y ninguno es obvio.**
+1. **Bajo `withSystemWork` la puerta rechaza TODO.** `begin_system_work` deja `user_id` en `''` y scope en `'system'`; `current_user_id()` es NULL y `scope_is_global()` sólo contesta a `tenant_read`/`tenant_admin`. El predicado de visibilidad de `compliance_check` da NULL/false para **cada** contacto, dispara la salida temprana y contesta `blocked_timezone_unknown` para el libro entero. **Cablearlo ingenuo habría resuelto CADA recordatorio como bloqueado por zona desconocida, escrito esa fila terminal, y pasado los tests que existían** — un despachador que miente de forma durable y auditable.
+2. **El despachador tampoco puede encontrar al dueño del job.** `scheduled_job` es `owner_scoped` (lee cero filas bajo sistema) y `scheduled_job_claim` devuelve cuatro columnas sin dueño. **No hay camino en TypeScript.**
+
+✅ **`app.reminder_gate(job_id)` DERIVA el dueño de la fila y le pregunta a la puerta en su nombre.** El llamador pasa un id de job y nada más, así que **no puede nombrar de quién es el recordatorio** — la misma relación que `webhook_ingest` tiene con el token del endpoint. La elevación es transaccional (`set_config(..., true)`), se restaura incluso si la puerta levanta excepción, y lo único que se hace mientras está puesta es preguntarle algo a una función `STABLE`.
+- **`compliance_check` NO se modificó.** Sigue siendo el choke point con la firma que llama todo lo demás; un segundo parámetro *"en nombre de"* habría sido una segunda forma de hacer la pregunta, y todo el argumento de una sola puerta es que hay una sola.
+- **Falla cerrado en las dos direcciones:** un job sin dueño no se puede evaluar en nombre de nadie, y un recordatorio cuya reunión no tiene contacto no tiene a quién chequear. *"No pudimos saber"* nunca resuelve a *"adelante"*.
+- **`skipped: sms_disabled` conserva su string exacto**, porque es la fila terminal que el lanzamiento SMS-dark produce en cada recordatorio, dos suites la assertean por valor, y **G5 la comparó entre topologías**. Cambiar la redacción habría reescrito historia que otras cosas leen.
+- 🎯 **Mutación: angostar la puerta de vuelta a sólo `sms_disabled` → rojo**, con el STOP ignorado y el recordatorio siguiendo. Que es exactamente el defecto viejo.
+
+⚠️ **Y EL FIXTURE DEL DESPACHADOR ERA MENTIRA: agendaba con `subject_id = gen_random_uuid()`.** Una reunión que no existe. Se escribió cuando nada miraba el sujeto; ahora la puerta sigue la cadena job → reunión → contacto. Con un sujeto que apunta a nada la puerta **falla cerrado correctamente** y todas las aserciones habrían leído ese veredicto en vez del que querían leer. **El fixture era lo viejo, no la puerta.** Ahora siembra la cadena real (contacto → pipeline → etapa → oportunidad → reunión) porque `app.meeting` exige oportunidad.
+
+📌 **Tercera vez con la dependencia del reloj**, y ya es un patrón: el test de `sms_enabled` pasaba de tarde y fallaba de noche, porque con SMS prendido la puerta sigue hasta la ventana de llamada. Break-glass otra vez, que libera exactamente los dos veredictos de reloj.
+
+---
+
+🧹 **Y UNA LIMPIEZA QUE HABÍA QUE HACER: quedaron DOS worker corriendo 8,5 HORAS.** Mis dos corridas de G5(c) los dejaron huérfanos — `child.kill()` con `shell: true` en Windows mata el wrapper y no al nieto, así que la señal llegó a npm y el worker nunca se enteró. **No es un problema de prolijidad:** cada huérfano corría el relay cada segundo y el tick cada minuto, y **hasta la 0057 ese tick llamaba a `harden()`** — o sea dos procesos sueltos tomando `ACCESS EXCLUSIVE` sobre cada tabla del esquema, una vez por minuto cada uno, durante casi un día. Muertos, y `killTree()` (taskkill `/T` en Windows, grupo de procesos en el resto) lo cierra.
+
 ### ✅ G5(c) CORRIDA: IDÉNTICA EN LAS DOS TOPOLOGÍAS (2026-08-10)
 `npx tsx scripts/gate-5-equivalence.ts`. **638 → 641 tests.** `verify` verde.
 

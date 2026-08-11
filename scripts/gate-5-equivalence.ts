@@ -119,6 +119,39 @@ function startWorker(): ChildProcess {
   return child
 }
 
+/**
+ * Kills the worker AND ITS CHILDREN.
+ *
+ * 🔴 `child.kill()` DOES NOT DO THIS, and the first version of this script
+ * leaked two worker trees that ran for EIGHT AND A HALF HOURS before anybody
+ * looked. `shell: true` puts a shell between us and the process, and
+ * `npm run worker` puts npm and tsx between the shell and node — so the signal
+ * reached the wrapper and the actual worker never heard it.
+ *
+ * That was not a tidy-up problem. Each orphan ran the relay every second and
+ * the dispatch tick every minute, and until 0057 that tick called
+ * `security.harden()` — so two stray processes were taking ACCESS EXCLUSIVE on
+ * every table in the schema, once a minute each, for most of a day. A harness
+ * that leaves that behind is measuring a machine it is also degrading.
+ *
+ * `taskkill /T` walks the tree on Windows; a negative pid signals the process
+ * group everywhere else.
+ */
+function killTree(child: ChildProcess): void {
+  const pid = child.pid
+  if (pid === undefined) return
+
+  if (process.platform === 'win32') {
+    spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', shell: true })
+  } else {
+    try {
+      process.kill(-pid, 'SIGKILL')
+    } catch {
+      child.kill('SIGKILL')
+    }
+  }
+}
+
 async function main(): Promise<void> {
   console.log('Gate 5 (c) — the same suite, both topologies, compared test by test.')
 
@@ -135,7 +168,7 @@ async function main(): Promise<void> {
   try {
     split = await run('split')
   } finally {
-    worker.kill('SIGKILL')
+    killTree(worker)
     if (existsSync(REPORT)) rmSync(REPORT)
   }
 

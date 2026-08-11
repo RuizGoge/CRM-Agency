@@ -407,6 +407,13 @@
       "when": 1786413061588,
       "tag": "0057_harden_only_on_create",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1786416661588,
+      "tag": "0058_reminder_gate",
+      "breakpoints": true
     }
   ]
 }

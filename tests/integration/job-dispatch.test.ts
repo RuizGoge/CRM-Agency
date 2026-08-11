@@ -28,6 +28,9 @@ const OWNER_C = '00000000-0000-7000-8000-0000000000e3'
 
 let sql: postgres.Sql
 
+/** The contact and opportunity each tenant's reminders hang off. */
+const SUBJECTS = new Map<string, { contactId: string; opportunityId: string }>()
+
 /** Schedules through the real definer, with tenant context, exactly as the product does. */
 async function schedule(
   tenantId: string,
@@ -35,11 +38,38 @@ async function schedule(
   key: string,
   minutesFromNow: number,
 ): Promise<string> {
+  // ⚠️ A REAL MEETING, AND IT USED TO BE `gen_random_uuid()`.
+  //
+  // The subject was synthetic while nothing ever looked at it — the dispatcher
+  // read `tenant.sms_enabled` and resolved the job without ever asking what the
+  // reminder was ABOUT. Since the compliance gate was wired into this path it
+  // does: `app.reminder_gate` resolves the job's meeting to a contact and asks
+  // the one gate about that contact.
+  //
+  // With a subject that points at nothing the gate correctly fails CLOSED with
+  // `blocked_timezone_unknown` — there is nobody to check — and every assertion
+  // below would be reading that instead of the terminal row it means to read.
+  // The fixture was what went stale, not the gate.
+  // Seeded on the OWNER connection, not through `withSystemWork`. System work
+  // carries no user, and `contact` is `owner_scoped` — its WITH CHECK requires
+  // `owner_user_id = app.current_user_id()`, so the insert is refused. That is
+  // the policy working, and it is why fixtures in this tree are written as the
+  // owner rather than through the application's own door.
+  const subject = SUBJECTS.get(tenantId)
+  if (subject === undefined) throw new Error(`no subject chain seeded for ${tenantId}`)
+
+  const [meeting] = await sql<{ id: string }[]>`
+    INSERT INTO app.meeting (tenant_id, owner_user_id, contact_id, opportunity_id,
+                             starts_at_utc, contact_timezone, created_via)
+    VALUES (${tenantId}, ${ownerId}, ${subject.contactId}, ${subject.opportunityId},
+            clock_timestamp() + interval '1 hour', 'America/Chicago', 'manual')
+    RETURNING id`
+
   return withSystemWork(tenantId, async (tx) => {
     const rows = await tx.execute<{ id: string }>(
       raw`SELECT app.schedule_job(
             'meeting_reminder'::app.scheduled_kind, ${key}, 'meeting',
-            gen_random_uuid(),
+            ${meeting?.id ?? ''}::uuid,
             clock_timestamp() + make_interval(mins => ${minutesFromNow}),
             ${ownerId}::uuid) AS id`,
     )
@@ -70,6 +100,47 @@ beforeAll(async () => {
       (${TENANT_A}, ${OWNER_A}, 'a@dispatch.test', 'Ana Alpha', 'Ana', 'seller'),
       (${TENANT_B}, ${OWNER_B}, 'b@dispatch.test', 'Ben Beta',  'Ben', 'seller'),
       (${TENANT_C}, ${OWNER_C}, 'c@dispatch.test', 'Cleo Gamma', 'Cleo', 'seller')`
+
+  // A REMINDER IS ABOUT SOMETHING, and since the compliance gate was wired into
+  // this path the dispatcher follows the chain: job → meeting → contact → the
+  // one gate. `app.meeting` requires an opportunity, which requires a stage,
+  // which requires a pipeline — so the whole chain is seeded once per tenant
+  // and every scheduled job hangs a fresh meeting off it.
+  //
+  // Texas on purpose: two zones AND one-party recording, so a lead here is
+  // refused by the calling window at night and never by the recording guard,
+  // which keeps the verdicts these tests read unambiguous.
+  for (const [tenant, owner] of [
+    [TENANT_A, OWNER_A],
+    [TENANT_B, OWNER_B],
+    [TENANT_C, OWNER_C],
+  ] as const) {
+    const [contact] = await sql<{ id: string }[]>`
+      INSERT INTO app.contact (tenant_id, owner_user_id, full_name, created_via, state_code, zip5)
+      VALUES (${tenant}, ${owner}, 'Reminder Lead', 'manual', 'TX', '75201')
+      RETURNING id`
+
+    const [pipeline] = await sql<{ id: string }[]>`
+      INSERT INTO app.pipeline (tenant_id, owner_user_id, name)
+      VALUES (${tenant}, ${owner}, 'Board') RETURNING id`
+
+    const [stage] = await sql<{ id: string }[]>`
+      INSERT INTO app.stage (tenant_id, pipeline_id, owner_user_id, name, stage_type, sort_order)
+      VALUES (${tenant}, ${pipeline?.id ?? ''}, ${owner}, 'Working', 'open', 0) RETURNING id`
+
+    const [opportunity] = await sql<{ id: string }[]>`
+      INSERT INTO app.opportunity
+        (tenant_id, owner_user_id, contact_id, pipeline_id, stage_id,
+         current_stage_type, created_from)
+      VALUES (${tenant}, ${owner}, ${contact?.id ?? ''}, ${pipeline?.id ?? ''},
+              ${stage?.id ?? ''}, 'open', 'manual')
+      RETURNING id`
+
+    SUBJECTS.set(tenant, {
+      contactId: contact?.id ?? '',
+      opportunityId: opportunity?.id ?? '',
+    })
+  }
 })
 
 afterAll(async () => {
@@ -169,6 +240,22 @@ describe('a reminder is dropped rather than sent late', () => {
     // §10.16 makes this a column and bans process.env.SMS* across the tree.
     // Flipping the row must change the outcome, or the column is decoration.
     await sql`UPDATE app.tenant SET sms_enabled = true WHERE id = ${TENANT_A}`
+
+    // 🔴 A BREAK-GLASS OVERRIDE, AND WITHOUT IT THIS ASSERTION DEPENDS ON THE
+    // TIME OF DAY. With SMS on, the gate stops at `sms_disabled` and carries on
+    // down the chain — and the next thing it checks is the lead's own calling
+    // window. A Texas lead at 2am Central is refused, correctly, and this test
+    // would pass in the afternoon and fail overnight. There is no state that
+    // avoids it: between roughly 06:00 and 12:00 UTC nobody in the United
+    // States is legally callable.
+    //
+    // The override releases EXACTLY the two clock verdicts and nothing else, so
+    // what this test is actually about — that flipping the tenant row changes
+    // the outcome — is what decides the result.
+    await sql`
+      INSERT INTO app.break_glass_override (tenant_id, started_by_user_id, reason)
+      VALUES (${TENANT_A}, ${OWNER_A}, 'dispatch suite: the clock must not decide this')`
+
     try {
       const job = await schedule(TENANT_A, OWNER_A, 'smson:reminder_t60', -1)
       await dispatchDueJobs()
@@ -178,6 +265,44 @@ describe('a reminder is dropped rather than sent late', () => {
       expect(reason).toBe('skipped: no sms transport configured')
     } finally {
       await sql`UPDATE app.tenant SET sms_enabled = false WHERE id = ${TENANT_A}`
+      await sql`
+        UPDATE app.break_glass_override SET ended_at = clock_timestamp(), end_reason = 'manual'
+         WHERE tenant_id = ${TENANT_A} AND ended_at IS NULL`
+    }
+  })
+
+  it('refuses a reminder to a suppressed number, which it could not do before', async () => {
+    // 🎯 THE VERDICT THAT WAS UNREACHABLE ON THIS PATH. The dispatcher used to
+    // read `tenant.sms_enabled` and nothing else, so a STOP on the lead's number
+    // did not stop the reminder — the send simply did not exist yet to expose
+    // it. One gate with two implementations is how that happens.
+    //
+    // A STOP is tenant-wide and has no owner column: the point is that a STOP
+    // one seller receives silences the whole agency's dialler, including a
+    // reminder scheduled before it arrived.
+    await sql`UPDATE app.tenant SET sms_enabled = true WHERE id = ${TENANT_B}`
+    try {
+      const subject = SUBJECTS.get(TENANT_B)
+      const [phone] = await sql<{ phone_e164: string }[]>`
+        INSERT INTO app.contact_phone
+          (tenant_id, contact_id, owner_user_id, phone_e164, kind, is_primary)
+        VALUES (${TENANT_B}, ${subject?.contactId ?? ''}, ${OWNER_B},
+                '+12145559911', 'mobile', true)
+        RETURNING phone_e164`
+
+      await sql`
+        INSERT INTO app.suppression_list (tenant_id, phone_e164, kind, channel, effective_at, reason)
+        VALUES (${TENANT_B}, ${phone?.phone_e164 ?? ''}, 'stop', NULL,
+                clock_timestamp(), 'replied STOP')`
+
+      const job = await schedule(TENANT_B, OWNER_B, 'stopped:reminder_t60', -1)
+      await dispatchDueJobs()
+
+      const { status, reason } = await statusOf(job)
+      expect(status).toBe('skipped')
+      expect(reason).toBe('skipped: blocked_suppressed')
+    } finally {
+      await sql`UPDATE app.tenant SET sms_enabled = false WHERE id = ${TENANT_B}`
     }
   })
 })
