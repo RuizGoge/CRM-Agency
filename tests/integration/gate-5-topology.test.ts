@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
@@ -169,6 +170,52 @@ describe('(b) the union of units across the roles equals the registry', () => {
     // would pass over a registry that failed to load.
     expect(endpoints().length).toBeGreaterThan(10)
     expect(QUEUE_SPECS.length).toBeGreaterThan(3)
+  })
+})
+
+describe('(c) no test is aware of which topology it is running in', () => {
+  it('mentions the topology variable nowhere under tests/e2e', () => {
+    // 🎯 §2543 (c)'s LAST CLAUSE, and it is the half that makes the other half
+    // mean anything: "with no test aware of which is running."
+    //
+    // A suite that can see its topology is a suite that can accommodate one —
+    // a skip here, a longer timeout there — and then both runs pass while the
+    // behaviour differs, which is precisely the outcome the gate exists to
+    // refuse. Asserted statically, over the tree, so it cannot pass because
+    // something happened to be unset when it ran.
+    const offenders: string[] = []
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const path = join(dir, entry.name)
+        if (entry.isDirectory()) walk(path)
+        else if (entry.name.endsWith('.ts')) {
+          const source = readFileSync(path, 'utf8')
+          if (/E2E_TOPOLOGY|PROCESS_ROLES/.test(source)) offenders.push(path.replace(/\\/g, '/'))
+        }
+      }
+    }
+    walk('tests/e2e')
+
+    expect(
+      offenders,
+      `${offenders.join(', ')} can see which topology is running. The only thing ` +
+        `that may differ between the two runs is the SERVER's role set.`,
+    ).toEqual([])
+  })
+
+  it('is reading a real suite', () => {
+    // The mutation guard: an empty directory satisfies the assertion above.
+    const specs = readdirSync('tests/e2e').filter((f) => f.endsWith('.spec.ts'))
+    expect(specs.length).toBeGreaterThan(10)
+  })
+
+  it('switches topology on the server and nowhere else', () => {
+    // The positive control for the same property, from the other side: the
+    // variable must exist SOMEWHERE, or the two runs are the same run twice and
+    // the comparison proves nothing.
+    const config = readFileSync('playwright.config.ts', 'utf8')
+    expect(config).toContain('E2E_TOPOLOGY')
+    expect(config).toContain("PROCESS_ROLES: 'web,ingest'")
   })
 })
 

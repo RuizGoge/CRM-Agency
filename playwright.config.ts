@@ -13,6 +13,28 @@ import { defineConfig, devices } from '@playwright/test'
  */
 const PERF_SPECS = /(drag-perf|tti)\.spec\.ts/
 
+/**
+ * GATE 5 (c) — which topology the functional suite is running against.
+ *
+ * §2543 (c): "the identical E2E acceptance suite passes against the folded
+ * deployment and against the split deployment, with **no test aware of which is
+ * running**."
+ *
+ * That last clause is why this lives here and nowhere else. The only thing that
+ * changes is the SERVER's role set; not a fixture, not a helper, not a
+ * conditional inside a spec. `gate-5-topology.test.ts` asserts that no file
+ * under `tests/e2e/` so much as mentions this variable — a suite that can see
+ * which topology it is in is a suite that can quietly accommodate one.
+ *
+ *   folded  PROCESS_ROLES unset  → the worker runs INSIDE the web process
+ *   split   PROCESS_ROLES=web,ingest → the web process carries no worker, and
+ *           `scripts/gate-5-equivalence.ts` runs one alongside it
+ *
+ * Defaults to folded, which is what ships at escalón 1 and what every other run
+ * of this suite has always exercised.
+ */
+const TOPOLOGY = process.env['E2E_TOPOLOGY'] === 'split' ? 'split' : 'folded'
+
 export default defineConfig({
   testDir: './tests/e2e',
 
@@ -101,6 +123,14 @@ export default defineConfig({
     {
       command: 'npm run dev',
       url: 'http://localhost:3000',
+      // THE ONE LINE THAT DIFFERS BETWEEN THE TWO TOPOLOGY RUNS. Under `split`
+      // this process carries no worker role, so `bootFoldedWorker()` returns
+      // early and the dispatcher, the relay and the saturation monitor all live
+      // in the separate process the equivalence script starts. Under `folded`
+      // the variable is absent and they run right here.
+      //
+      // Nothing else changes — same build, same database, same specs.
+      ...(TOPOLOGY === 'split' ? { env: { PROCESS_ROLES: 'web,ingest' } } : {}),
       // NEVER reuse, and this cost four seconds a run to buy back a false green
       // that had already fooled a mutation test twice.
       //

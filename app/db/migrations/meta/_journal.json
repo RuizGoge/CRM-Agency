@@ -400,6 +400,13 @@
       "when": 1786409461588,
       "tag": "0056_idle_transaction_timeouts",
       "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "7",
+      "when": 1786413061588,
+      "tag": "0057_harden_only_on_create",
+      "breakpoints": true
     }
   ]
 }

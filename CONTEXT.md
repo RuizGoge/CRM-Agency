@@ -7,6 +7,48 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### ✅ G5(c) CORRIDA: IDÉNTICA EN LAS DOS TOPOLOGÍAS (2026-08-10)
+`npx tsx scripts/gate-5-equivalence.ts`. **638 → 641 tests.** `verify` verde.
+
+**Resultado, tras arreglar el lock storm de abajo:**
+
+```
+=== FOLDED ===   110 passed (3.1m)
+=== SPLIT ===    110 passed (3.1m)
+=== EQUIVALENCE ===
+  folded  166 tests
+  split   166 tests
+  identical: same tests, same outcomes, in both topologies.
+```
+
+**LA ASERCIÓN ES LA COMPARACIÓN, NO LAS DOS CORRIDAS VERDES.** Dos suites que pasan prueban que cada topología funciona; §2543 pregunta otra cosa — *"si alguna CONDUCTA difiere entre topologías, el split no es configuración y el escalón barato es una trampa"*. Así que se comparan los dos conjuntos **test por test: mismos títulos, mismos resultados**. Los 166 son 110 ejecutados más los que cada perfil saltea, y **los skips cuentan a propósito**: un spec salteado en una topología y ejecutado en la otra *es* una diferencia.
+
+- ✅ **(c) "sin que ningún test sepa cuál corre"** está asserteado estáticamente: ningún archivo bajo `tests/e2e/` menciona `E2E_TOPOLOGY` ni `PROCESS_ROLES`. Lo único que cambia entre las dos corridas es el set de roles **del servidor**. Una suite que puede ver su topología es una suite que puede acomodarse a una —un skip acá, un timeout más largo allá— y entonces las dos pasan mientras la conducta difiere, que es justo el resultado que la puerta rechaza.
+- ⚠️ **Dos procesos en UNA máquina.** Ejercita la frontera de ROL —el proceso web genuinamente no lleva worker, y el despachador, el relay y el monitor genuinamente viven en otro lado— y **no** ejercita dos contenedores, dos event loops en contención, ni una red entre ellos. Es el límite honesto de una corrida local.
+
+**Queda sólo (d)**, que necesita DNS y dos servicios desplegados: `in.<domain>` resolviendo al servicio plegado y, tras sólo un repunte de CNAME, al de ingesta. Se suma a G1, G4(c) y G9 esperando la instancia de Render.
+
+### 🧨 G5(c) ENCONTRÓ UN LOCK STORM QUE YO MISMO HABÍA INTRODUCIDO (2026-08-10)
+Migración **0057** · `scripts/gate-5-equivalence.ts` · `playwright.config.ts`. **La puerta hizo exactamente lo que existe para hacer.**
+
+🔴 **CORRER LA MISMA SUITE CONTRA LA TOPOLOGÍA SEPARADA PRODUJO ESTO, Y LA PLEGADA NO:**
+
+```
+[WebServer] DrizzleQueryError: SELECT * FROM app.leaderboard_board(...)
+[WebServer]   cause: PostgresError: deadlock detected
+[relay] pass failed
+```
+
+**La causa no es la topología: es un defecto que introduje en la 0051 y la 0053, y que el pliegue tapaba.** `ensure_event_partitions` y `ensure_audit_partitions` terminan en `PERFORM security.harden()`, y el worker las llama **en cada tick del despachador — una vez por minuto**. `harden()` recorre cada relación gestionada emitiendo `ALTER TABLE … FORCE ROW LEVEL SECURITY`, `DROP POLICY`, `CREATE POLICY`, `REVOKE`, `GRANT`, `DROP TRIGGER` y `CREATE TRIGGER`: **cada una toma `ACCESS EXCLUSIVE`.**
+
+O sea que **una vez por minuto el worker bloqueaba cada tabla de `app` y `ref` contra todos los lectores**. Plegado contiende consigo mismo y casi siempre intercala; separado es otro backend y Postgres reportó el deadlock. Ninguna de las dos es aceptable: un lock storm en horario fijo es un producto que tartamudea por razones que ninguna vendedora podría describir.
+
+✅ **El endurecimiento pertenece a la CREACIÓN, no al tick.** Una partición creada en caliente sí tiene que endurecerse —ese razonamiento de la 0051 se mantiene, y `silo.test.ts` ya cazó una vez una relación gestionada sin FORCE RLS—. Lo que no se sigue es endurecer cuando no se creó nada, que es lo que pasa en **1.439 de cada 1.440 ticks diarios**. Verificado: la segunda llamada devuelve `0|0` y no toca `harden()`.
+
+⚠️ **Y `made` ya venía mintiendo:** las dos funciones lo incrementaban una vez por **iteración del loop** en vez de por creación, así que devolvían 18 siempre y no había forma de distinguir un tick que hizo trabajo de uno que no — que es también por qué nadie notó que el harden era incondicional.
+
+📌 **Un segundo defecto, esta vez en mi propio arnés, y del mismo tipo que la puerta busca.** La comparación indexaba por título de test — y los dos proyectos funcionales corren **los mismos títulos**, así que 110 resultados colapsaban a 83 y la segunda escritura ganaba en silencio. **Una diferencia sólo en móvil habría quedado tapada por el resultado de escritorio del mismo test**: exactamente la clase de omisión que esta puerta existe para prevenir, reproducida adentro del arnés que la chequea. El proyecto ahora es parte de la clave.
+
 ### 💵🧬 PUERTA 3 CERRADA · PUERTA 5 A UNA ASERCIÓN (2026-08-10)
 Migración **0056** · `tests/integration/gate-3-money-path.test.ts` · `gate-5-topology.test.ts` · `fast-check`. **623 → 638 tests · 62 → 64 archivos.** `verify` verde.
 
