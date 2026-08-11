@@ -393,6 +393,13 @@
       "when": 1786405861588,
       "tag": "0055_process_saturation_alert",
       "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1786409461588,
+      "tag": "0056_idle_transaction_timeouts",
+      "breakpoints": true
     }
   ]
 }
