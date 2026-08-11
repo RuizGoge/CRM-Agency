@@ -428,6 +428,13 @@
       "when": 1786423861588,
       "tag": "0060_compliance_emits",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1786427461588,
+      "tag": "0061_event_emit_definer_only",
+      "breakpoints": true
     }
   ]
 }

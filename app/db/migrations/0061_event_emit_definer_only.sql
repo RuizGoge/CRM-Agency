@@ -1,0 +1,128 @@
+-- ===========================================================================
+-- THE EVENT STORE HAS NO APPLICATION-ROLE WRITER
+--
+-- The last door named in 0060's honesty list. Until now `crm_app` held EXECUTE
+-- on `app.event_emit` (0043:373), so any route holding a `withTenant`
+-- transaction could write any of the 49 canonical event names into
+-- `app.event_log` with a payload of its choosing.
+--
+-- WHAT THIS IS AND IS NOT. It is a fact about REACHABILITY: after this, the
+-- only paths into the event store are `app.stage_move` and
+-- `app.compliance_record`, both SECURITY DEFINER, both running as the function
+-- owner. It is NOT a fact about CONTENT — see the honesty list at the bottom,
+-- which is longer than the change itself and is the part that keeps this from
+-- being a guarantee stated one notch wider than it holds.
+--
+-- WHY IT COSTS NOTHING TODAY. There is not one production TypeScript caller.
+-- Every `event_emit` mention under `app/` is comment prose. The two callers
+-- that exist are SQL, inside definers:
+--   0054_stage_move_emits.sql:216, :248, :305  in app.stage_move    (DEFINER)
+--   0060_compliance_emits.sql:377              in app.compliance_record
+--                                              (DEFINER, granted to NOBODY)
+-- A definer's nested calls are checked against the function OWNER, never the
+-- caller, so both keep working. `app.compliance_record` is the live proof: it
+-- has run since 0060 reachable by no role at all.
+--
+-- VERIFIED RATHER THAN REASONED. The revoke was applied against the running
+-- database inside a rolled-back transaction and the real close gate was driven
+-- as `crm_app`: `app.stage_move` returned normally and wrote both
+-- `opportunity.stage_changed` and `opportunity.won`, while a direct call as
+-- `crm_app` raised `permission denied for function event_emit` (42501).
+-- ===========================================================================
+
+-- BOTH FORMS, AND THEY DO DIFFERENT WORK.
+--
+-- FROM PUBLIC strips PostgreSQL's default. 0043:370 already issued it and
+-- `CREATE OR REPLACE` in 0051 and 0052 preserved the ACL, so it is redundant
+-- today — but it is not boilerplate: the day somebody DROPs and recreates this
+-- function (0060:114 is that pattern, live in this tree), the ACL resets to
+-- EXECUTE TO PUBLIC, which is WIDER than before this migration.
+--
+-- FROM crm_app is the one doing the work now, because 0043:373 granted it to
+-- that role BY NAME, and a revoke FROM PUBLIC does not remove a named grant.
+REVOKE ALL ON FUNCTION app.event_emit(uuid, uuid, app.event_name, text, uuid, text, jsonb,
+  timestamptz, app.source_system, uuid, app.retention_class, smallint) FROM PUBLIC;--> statement-breakpoint
+REVOKE ALL ON FUNCTION app.event_emit(uuid, uuid, app.event_name, text, uuid, text, jsonb,
+  timestamptz, app.source_system, uuid, app.retention_class, smallint) FROM crm_app;--> statement-breakpoint
+
+-- 🔴 AND NO GRANT. THIS ABSENCE IS THE DESIGN — the same sentence as 0060 and
+-- the same mechanism. The two definers above reach it as the owner. Nothing
+-- else reaches it at all.
+--
+-- ⚠️ THE FULL 12-TYPE LIST IS MANDATORY and is not verbosity. `event_emit` has
+-- twelve parameters, five with defaults. A shorter list does not resolve and
+-- the migration fails, which is the good outcome; a list that resolved a
+-- DIFFERENT overload would be the bad one. There is exactly one overload today.
+--
+-- `security.harden()` cannot undo this. Its body issues table GRANTs, policies,
+-- immutability triggers and `GRANT USAGE ON SCHEMA app TO crm_app` — it
+-- contains no `ON FUNCTION`, no `ON ALL FUNCTIONS` and no
+-- `ALTER DEFAULT PRIVILEGES`. Schema USAGE is the prerequisite for CALLING a
+-- function; it is not EXECUTE. So this survives every deploy and every
+-- `SELECT security.harden()` — and it also means nothing re-asserts it, which
+-- is why the boot check exists.
+
+-- ---------------------------------------------------------------------------
+-- WHAT THIS DOES NOT CLOSE — read this before quoting the paragraph above.
+-- ---------------------------------------------------------------------------
+-- 1. `app.stage_move` IS STILL GRANTED (0054:354) and it does not construct its
+--    payload alone. `p_moved_via`, `p_actor_type` and `p_premium_cents` are all
+--    caller-supplied; the annualised premium lands in the `opportunity.won`
+--    payload, in `app.ledger_append`, and therefore on the PUBLIC LEADERBOARD,
+--    which is append-only with no recompute job. A hand-written POST can still
+--    book a money-carrying win on its own opportunity with a chosen premium and
+--    a chosen actor type. That is a LARGER forgery than a bare event row.
+--    Bounded — SM404 confines it to the caller's own opportunity and
+--    `actor_user_id` is engine-stamped — but bounded is not closed, and the
+--    only thing stopping a POST from filing a seller's drag as a machine action
+--    is TypeScript in `app/routes/ui/board.tsx`, whose own comment says that
+--    must not be possible. Under this constitution that is documentation.
+--
+-- 2. `app.timeline_upsert` IS STILL GRANTED (0059:268), and the timeline is what
+--    a seller actually reads. `p_owner_user_id`, `p_actor_user_id` and
+--    `p_event_id` are all parameters; the body checks only that a tenant exists
+--    and has NO ownership predicate, unlike `stage_move`. `built_from_event_id`
+--    has no FK while the schema comment says every row claims an event it was
+--    built from. The non-`send_blocked` branch merges arbitrary keys over an
+--    existing entry, and `timeline_entry` is registered `immutable = false`, so
+--    `harden()` installs no refusal trigger on it.
+--    `tests/integration/timeline.test.ts` demonstrates all of it, green, today.
+--    ⚠️ AFTER THIS MIGRATION THE TIMELINE IS MORE FORGEABLE THAN THE EVENT LOG.
+--    Do not let "events can no longer be fabricated by a route" be read as
+--    covering the screen those events feed.
+--
+-- 3. `app.ledger_append` IS STILL GRANTED (0009:194) with zero `crm_app`
+--    callers — vestigial by the identical argument that justifies this
+--    migration, and strictly more dangerous: its body validates only tenancy,
+--    `p_source_event_id` has no FK to `event_log`, and it writes the public
+--    leaderboard directly. If the goal is "a tenant cannot fabricate a fact",
+--    that grant outranks this one.
+--
+-- 4. `EVENT_EMITTERS` in the generated catalog remains a constant nothing
+--    checks. The contract test asserts only that the string is truthy —
+--    'banana' passes. This migration does not change that and cannot: an event
+--    that is never emitted has no symptom anywhere.
+--
+-- 5. THE ARCHITECTURAL COMMITMENT, stated rather than discovered later. Only 4
+--    of the 49 events have an emitter today. After this, emission is a
+--    SQL-ONLY capability: every future emitter is a new SECURITY DEFINER in a
+--    migration, and for the events whose causing write is an ordinary INSERT
+--    from a route, the same-transaction requirement drags the domain write into
+--    PL/pgSQL with it. That forecloses the application-layer `emit()` design,
+--    which is ratified text and unbuilt.
+--
+-- 6. AND IT DOES NOT TOUCH THE PREMISE THE WHOLE DEFINER ARCHITECTURE RESTS ON.
+--    `crm_migrator` is NOLOGIN, owns nothing and has no USAGE on schema `app`;
+--    there is no `ALTER … OWNER TO` anywhere in the tree; migrations run as
+--    `crm`, which is a SUPERUSER. So every definer body runs as a role matching
+--    NEITHER `p_app` (TO crm_app) nor `p_sys` (TO crm_migrator) on a table with
+--    FORCE ROW LEVEL SECURITY, and works only because the owner bypasses RLS.
+--    Pre-existing, unchanged by this migration — but this is the change that
+--    makes the event store depend on it exclusively, and nothing checks it.
+--    It is a separate and larger finding; burying it here is how it gets lost.
+--
+-- RE-ASSERTION AT BOOT is in `app/db/boot-assert.ts`
+-- (`assertEventEmitIsDefinerOnly`, BOOT005/BOOT006). Of the three properties
+-- that survive a migration diff nobody reads, this change has (b) a gate in the
+-- catalog and (c) a refusal to boot. It has NO (a): there is no symptom on any
+-- screen, before or after, which is exactly why (c) is not optional here.

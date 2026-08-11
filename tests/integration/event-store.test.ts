@@ -5,6 +5,7 @@ import postgres from 'postgres'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { withTenant } from '~/db'
+import { assertEventEmitIsDefinerOnly } from '~/db/boot-assert'
 
 import { TEST_URL } from './setup/urls'
 
@@ -75,17 +76,37 @@ let sql: postgres.Sql
 const EVENT_A = '01999999-0000-7000-8000-00000000ea01'
 const EVENT_B = '01999999-0000-7000-8000-00000000ea02'
 
+/**
+ * ⚠️ THE OWNER CONNECTION, AND THAT IS A LOSS RATHER THAN A FIX.
+ *
+ * This ran through `withTenant` — as `crm_app`, under the production privilege
+ * set — until migration 0061 revoked EXECUTE on `app.event_emit` from that
+ * role. The call is no longer expressible there, BY DESIGN, and what the old
+ * wrapper demonstrated is now false: it is asserted as false below, in
+ * 'rejects the application role calling the writer'.
+ *
+ * So these tests are RE-AIMED, not repaired. The describe block they live under
+ * is titled "the store is append-only and the application role is not its
+ * writer" — a title this file had been quietly contradicting since 0043 by
+ * having `crm_app` call the writer. The repoint makes the title true.
+ *
+ * The write side loses nothing: the INSERTs were always the owner's, executed
+ * inside the definer, so the caller's role never changed what got written. The
+ * session side loses a little, and the `withTenant` tests further down still
+ * carry it. Same shape as `gate-3-money-path.test.ts`, which drives
+ * `app.stage_move` this way and passes today.
+ */
 async function emit(
   tenantId: string,
   userId: string,
   eventId: string,
   name = 'opportunity.won',
 ): Promise<void> {
-  await withTenant({ tenantId, userId }, async (tx) => {
-    await tx.execute(raw`
-      SELECT app.event_emit(${eventId}::uuid, ${userId}::uuid, ${name}::app.event_name,
-                            'opportunity', ${eventId}::uuid, ${'nat-' + eventId},
-                            '{"deal_value_annual_premium":"120000"}'::jsonb)`)
+  await sql.begin(async (tx) => {
+    await tx`SELECT app.begin_request(${tenantId}::uuid, ${userId}::uuid)`
+    await tx`SELECT app.event_emit(${eventId}::uuid, ${userId}::uuid, ${name}::app.event_name,
+                                   'opportunity', ${eventId}::uuid, ${'nat-' + eventId},
+                                   '{"deal_value_annual_premium":"120000"}'::jsonb)`
   })
 }
 
@@ -205,6 +226,98 @@ describe('the store is append-only and the application role is not its writer', 
     )
     expect(mine).toHaveLength(1)
     expect(theirs).toHaveLength(0)
+  })
+
+  it('refuses crm_app EXECUTE on event_emit, and grants the two doors', async () => {
+    // 🎯 THE TEST OF MIGRATION 0061, and the only thing in the tree pinning it.
+    //
+    // MUTATION: add `GRANT EXECUTE ON FUNCTION app.event_emit(…) TO crm_app` in
+    // a later migration — one line, copied from 0043, in a diff nobody reads.
+    // Every other test in this file stays green, the board is identical, no
+    // seller sees anything, and any route can forge any of the 49 events into
+    // an append-only table with no recompute job. This assertion is the only
+    // thing that goes red.
+    //
+    // SECOND MUTATION, which matching `proacl` would miss: DROP FUNCTION +
+    // CREATE FUNCTION with no REVOKE, leaving EXECUTE TO PUBLIC — wider than
+    // before the revoke. `has_function_privilege` resolves PUBLIC membership.
+    const rows = await sql<{ proname: string; granted: boolean }[]>`
+      SELECT p.proname, has_function_privilege('crm_app', p.oid, 'EXECUTE') AS granted
+        FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname = 'app'
+         AND p.proname IN ('event_emit', 'compliance_record', 'stage_move')`
+    const granted = Object.fromEntries(rows.map((r) => [r.proname, r.granted]))
+
+    expect(granted['event_emit']).toBe(false)
+    expect(granted['compliance_record']).toBe(false)
+    // THE POSITIVE CONTROL, and it is not decoration: without it this passes
+    // over a database where none of the three functions exist and `granted` is
+    // an empty object — a vacuous green.
+    expect(granted['stage_move']).toBe(true)
+  })
+
+  it('rejects the application role calling the writer', async () => {
+    // The privilege above, observed from outside. Mutation: revert the revoke —
+    // this goes red with `undefined` instead of a permission error.
+    //
+    // The message lives in `.cause`: Drizzle rewraps the driver error one level
+    // down and the outer text is only "Failed query".
+    const error = await withTenant({ tenantId: TENANT, userId: ANA }, async (tx) =>
+      tx.execute(raw`
+        SELECT app.event_emit(${EVENT_B}::uuid, ${ANA}::uuid, 'opportunity.won'::app.event_name,
+                              'opportunity', ${EVENT_B}::uuid, 'forged', '{}'::jsonb)`),
+    ).catch((e: unknown) => e)
+
+    const parts: string[] = []
+    let cursor: unknown = error
+    while (cursor instanceof Error) {
+      parts.push(cursor.message)
+      cursor = cursor.cause
+    }
+    expect(parts.join(' | ')).toMatch(/permission denied/i)
+  })
+
+  it('has exactly two functions in the whole database that write the store', async () => {
+    // 🔴 STRONGER THAN THE PRIVILEGE CHECK, and it catches what that one cannot.
+    // `app.event_emit` is reachable by every SECURITY DEFINER the owner owns, so
+    // a THIRD definer added later — one that emits `opportunity.won` with a
+    // caller-supplied premium and no close gate in front of it — needs no GRANT
+    // and trips nothing above.
+    //
+    // Comments are stripped first: the same precedent as
+    // `definer-tenancy.test.ts`, which once went red on the prose explaining its
+    // own rule.
+    const rows = await sql<{ proname: string }[]>`
+      SELECT p.proname
+        FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname = 'app'
+         AND regexp_replace(p.prosrc, '--[^\n]*', '', 'g') LIKE '%event_emit(%'
+       ORDER BY p.proname`
+
+    expect(rows.map((r) => r.proname)).toEqual(['compliance_record', 'stage_move'])
+  })
+
+  it('refuses to boot when the writer is reachable', async () => {
+    // The third of the three properties, exercised by granting and revoking from
+    // the OWNER connection. This revoke has NO symptom on any screen, so a
+    // deploy that will not come up is the only notice a regression gets.
+    const args =
+      'uuid, uuid, app.event_name, text, uuid, text, jsonb, timestamptz, ' +
+      'app.source_system, uuid, app.retention_class, smallint'
+
+    await expect(assertEventEmitIsDefinerOnly(sql)).resolves.toBeUndefined()
+
+    await sql.unsafe(`GRANT EXECUTE ON FUNCTION app.event_emit(${args}) TO crm_app`)
+    try {
+      await expect(assertEventEmitIsDefinerOnly(sql)).rejects.toThrow(/BOOT006/)
+    } finally {
+      // ⚠️ LOAD-BEARING. `fileParallelism` is off, so a grant left behind by a
+      // failed assertion leaks into every file that runs after this one and
+      // turns the catalog test above green for the wrong reason.
+      await sql.unsafe(`REVOKE EXECUTE ON FUNCTION app.event_emit(${args}) FROM crm_app`)
+    }
+
+    await expect(assertEventEmitIsDefinerOnly(sql)).resolves.toBeUndefined()
   })
 })
 

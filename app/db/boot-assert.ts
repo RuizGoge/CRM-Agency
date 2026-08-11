@@ -140,3 +140,71 @@ export async function assertGateIsRecording(sql: postgres.Sql): Promise<void> {
     )
   }
 }
+
+/**
+ * Throws when the application role can write the event store directly.
+ *
+ * 🔴 RE-ASSERTION AT BOOT, and this one needs it more than BOOT004 does.
+ * Migration 0061's mechanism is one absence: `crm_app` has no EXECUTE on
+ * `app.event_emit`, so the only paths into `app.event_log` are
+ * `app.stage_move` and `app.compliance_record`, both SECURITY DEFINER, both
+ * running as the function owner.
+ *
+ * WHAT MAKES IT INVISIBLE. Unlike the compliance gate, this revoke has NO
+ * SYMPTOM ON ANY SCREEN — there was no production caller before it and there is
+ * none after. A `GRANT EXECUTE` in a diff nobody reads restores the ability of
+ * any route to write any of the 49 event names with a fabricated payload, and
+ * every test, every board and every seller sentence is unchanged. There is
+ * nothing to notice. So the deploy not coming up is the only symptom available.
+ *
+ * IT CATCHES BOTH REGRESSION SHAPES WITH ONE PREDICATE, which is why it asks
+ * `has_function_privilege` rather than matching `proacl`:
+ *   - a named `GRANT EXECUTE … TO crm_app`, copied back from 0043;
+ *   - a `DROP FUNCTION` + `CREATE FUNCTION` to change the signature (the live
+ *     pattern in 0060), which resets the ACL to EXECUTE TO PUBLIC — WIDER than
+ *     before the revoke. `has_function_privilege` resolves PUBLIC membership,
+ *     so the same check refuses it and `proacl` matching would not.
+ *
+ * `security.harden()` re-asserts table privileges on every deploy and touches
+ * no function privilege at all, so nothing else re-establishes this.
+ */
+export async function assertEventEmitIsDefinerOnly(sql: postgres.Sql): Promise<void> {
+  // ⚠️ A SECOND SOURCE OF TRUTH FOR THE PARAMETER LIST, on purpose. A future
+  // migration that adds a thirteenth parameter makes `to_regprocedure` return
+  // NULL and this throws BOOT005 rather than silently stopping asserting. A
+  // boot check that quietly goes vacuous is worse than one that is loud about
+  // being stale.
+  const signature =
+    'app.event_emit(uuid,uuid,app.event_name,text,uuid,text,jsonb,timestamptz,' +
+    'app.source_system,uuid,app.retention_class,smallint)'
+
+  const rows = await sql<{ present: boolean; granted: boolean | null }[]>`
+    SELECT to_regprocedure(${signature}) IS NOT NULL AS present,
+           CASE WHEN to_regprocedure(${signature}) IS NULL
+                THEN NULL
+                ELSE has_function_privilege('crm_app', to_regprocedure(${signature}), 'EXECUTE')
+           END AS granted`
+
+  const row = rows[0]
+  if (row === undefined || !row.present) {
+    throw new Error(
+      'BOOT005: refusing to start. app.event_emit does not exist in this database ' +
+        'with the signature the application was built against.\n\n' +
+        'Every sale, every refusal and every timeline entry is written through it. ' +
+        'Run the migrations — and if a migration changed its parameter list, this ' +
+        'assertion is the thing that has to be updated on purpose.',
+    )
+  }
+
+  if (row.granted === true) {
+    throw new Error(
+      'BOOT006: refusing to start. crm_app can execute app.event_emit directly.\n\n' +
+        'That is a path for any route to write any of the 49 canonical events into ' +
+        'app.event_log with a payload of its choosing — an append-only table with no ' +
+        'recompute job. Nothing on any screen would look wrong.\n\n' +
+        'Migration 0061 revoked it; something granted it back, or a DROP/CREATE reset ' +
+        'the ACL to EXECUTE TO PUBLIC. The only writers are app.stage_move and ' +
+        'app.compliance_record, both of which reach it as the function owner.',
+    )
+  }
+}

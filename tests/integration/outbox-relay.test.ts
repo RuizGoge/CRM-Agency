@@ -1,8 +1,6 @@
-import { sql as raw } from 'drizzle-orm'
 import postgres from 'postgres'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { withTenant } from '~/db'
 import { CONSUMERS, relayOnce } from '~/modules/events/relay'
 
 import { TEST_URL } from './setup/urls'
@@ -34,12 +32,19 @@ async function fanoutWidth(eventName: string): Promise<number> {
 const EVENT_OK = '01999999-0000-7000-8000-0000000071a1'
 const EVENT_TWO = '01999999-0000-7000-8000-0000000071a2'
 
+/**
+ * The OWNER connection. See the same note in `event-store.test.ts`: migration
+ * 0061 revoked EXECUTE on `app.event_emit` from `crm_app`, so a fixture that
+ * emits cannot run under the application role any more. Nothing about what this
+ * file asserts depends on who called — the relay's own work is unchanged, and
+ * `relayOnce()` never touches `event_emit`.
+ */
 async function emit(eventId: string, name: string, subjectId: string): Promise<void> {
-  await withTenant({ tenantId: TENANT, userId: ANA }, async (tx) => {
-    await tx.execute(raw`
-      SELECT app.event_emit(${eventId}::uuid, ${ANA}::uuid, ${name}::app.event_name,
-                            'opportunity', ${subjectId}::uuid, ${'nat-' + eventId},
-                            '{"deal_value_annual_premium":"120000"}'::jsonb)`)
+  await sql.begin(async (tx) => {
+    await tx`SELECT app.begin_request(${TENANT}::uuid, ${ANA}::uuid)`
+    await tx`SELECT app.event_emit(${eventId}::uuid, ${ANA}::uuid, ${name}::app.event_name,
+                                   'opportunity', ${subjectId}::uuid, ${'nat-' + eventId},
+                                   '{"deal_value_annual_premium":"120000"}'::jsonb)`
   })
 }
 

@@ -2,7 +2,11 @@ import postgres from 'postgres'
 
 import { installCapabilities } from '~/modules/communications/capability'
 
-import { assertGateIsRecording, assertSafeConnection } from './boot-assert'
+import {
+  assertEventEmitIsDefinerOnly,
+  assertGateIsRecording,
+  assertSafeConnection,
+} from './boot-assert'
 import { assertRequiredCapabilities, readCapabilities } from './capability-registry'
 
 /**
@@ -74,6 +78,20 @@ void assertSafeConnection(pool).catch((err: unknown) => {
  * `GRANT` in an unread migration diff, and that arrives in development first.
  */
 void assertGateIsRecording(pool).catch((err: unknown) => {
+  console.error(err instanceof Error ? err.message : err)
+  process.exit(1)
+})
+
+/**
+ * Migration 0061's revoke, re-asserted at every boot.
+ *
+ * Same shape and same reasons as the two checks above. It matters MORE than
+ * either of them for one reason: the thing it guards has no symptom anywhere.
+ * A `GRANT` that undoes 0061 leaves every screen, every test and every board
+ * identical while re-opening a path for any route to forge any of the 49
+ * events, so a deploy that refuses to start is the only notice available.
+ */
+void assertEventEmitIsDefinerOnly(pool).catch((err: unknown) => {
   console.error(err instanceof Error ? err.message : err)
   process.exit(1)
 })
