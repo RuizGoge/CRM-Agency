@@ -7,6 +7,40 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 🚪 ÍTEM 11 CIERRA: LA PUERTA YA NO SE PUEDE CONSULTAR SIN DEJAR CONSTANCIA (2026-08-11)
+Migración **0060** · `app.compliance_attempt` / `app.compliance_record` / `app.gate_verdict_of` · `tests/integration/compliance-emit.test.ts`. **659 → 679 tests · 65 → 66 archivos · E2E 120 verdes.** `verify` verde.
+
+`compliance.send_blocked` estaba en el catálogo canónico desde la 0042 **sin emisor**. §580 lo llama *"el número que prueba que la puerta funciona"*: hasta hoy el producto sabía contar envíos y fallos y **no sabía contar rechazos**, y a la vendedora se le decía el motivo en un panel que desaparece al navegar.
+
+🔴 **EL MECANISMO ES UN GRANT AUSENTE, NO UNA CONVENCIÓN.** `crm_app` pierde EXECUTE sobre `app.compliance_check` y no lo recupera. Desde acá el rol de aplicación consigue un veredicto **para un intento** por exactamente una función — `app.compliance_attempt` — que ya escribió la fila de auditoría y emitió el evento antes de devolverlo. *"Acordate de registrar el rechazo"* pasó a ser *"no hay forma de obtener la respuesta sin el registro"*. `app.compliance_record` **no está otorgada a nadie**: sólo la alcanzan los dos definers, así que un registro de rechazo no se puede falsificar ni escribir por un segundo camino, porque no hay segundo camino.
+
+✅ **Verificado en vivo, dos llamadas a un número suprimido: 2 filas de auditoría, 2 eventos, UNA entrada de timeline** que dice *"Call not placed — this number opted out."* Esa es la frase que gobierna el diseño —*el timeline es para la vendedora, el audit log para el abogado*— como tres tablas, recorrida de punta a punta por el proyector real por primera vez.
+
+🎯 **LOS DOS VOCABULARIOS NO SON EL MISMO Y AHÍ ESTABA EL DEFECTO MÁS PROBABLE.** `app.gate_verdict` es un **resultado** de puerta y tiene `allow`; el `verdict` del catálogo es una **razón de rechazo** y no lo tiene. El mapa directo ya existía —`compliance_check` devuelve las dos columnas— así que el emisor **copia la columna** en vez de reproducir el CASE. `app.gate_verdict_of` es el inverso, hace falta una sola vez, en el proyector, y **levanta excepción en vez de devolver NULL**: `no_consent` y `bad_number` están ratificados en el catálogo y **ninguna rama de la puerta los produce**. Ensanchar el enum para que el mapa fuera total se **rechazó**: `GateVerdict` es una unión de TypeScript escrita a mano, así que etiquetas SQL nuevas no pondrían el build en rojo ni obligarían a nadie a escribir la microcopia.
+
+**SEIS MUTACIONES, SEIS ROJOS**, cada uno en el test escrito para él:
+- volver a otorgar la puerta cruda → privilegio, comportamiento y arranque, los tres
+- `payload.verdict` con el enum de la BD → el test de vocabulario y dos más
+- el relay vuelve a auditar el rechazo → **sólo** el test de duplicado: `dial-gate` contaba con `>= 3`, así que dos filas por intento pasaban en verde
+- `ref: 'event'` → `'subject'` → choca con `lead_created` y va a dead-letter **en silencio**; el caso del mismo minuto **no** lo detecta
+- el proyector pasa el owner como actor → *"You"* en la decisión de una máquina
+- registrar **antes** de restaurar la identidad → el uuid de la vendedora en una decisión del scheduler
+
+⚠️ **UNA CORRECCIÓN VIAJÓ DE POLIZÓN Y ESTÁ DICHA, NO DESLIZADA.** `app.outbox_payload` nunca devolvía `actor_user_id`, así que el proyector pasaba el **owner** — correcto para el arrastre de la propia vendedora, falso para todo lo que un admin o el scheduler le hacen a su lead, y `timeline_read` respondía *"You"*. Ensancharla arregla **los catorce** kinds proyectados, no sólo éste.
+
+⚠️ **Y ESTE CAMBIO VOLVIÓ ALCANZABLE UNA FRASE EQUIVOCADA**, así que el arreglo va en el mismo commit. Antes sólo una llamada podía producir una fila bloqueada y un juego plano de strings era honesto. El camino de recordatorios ahora emite con `channel = 'sms'`: una vendedora a quien le rechazaron un **texto** habría leído *"Call not placed"*. Tres veredictos son ambiguos de canal y llevan las dos redacciones; `blocked_sms_disabled` y `blocked_recording_unverified` sólo pueden ocurrir en un canal y conservan su frase única. **Tres strings en-US nuevos — vale una lectura antes de la demo.**
+
+**Re-afirmado en el arranque:** `assertGateIsRecording` se niega a levantar si `crm_app` puede ejecutar la puerta cruda, y también si la puerta no existe. Ésa es la tercera de las tres propiedades que sobreviven a una migración que nadie lee. La primera —un síntoma en pantalla— es la entrada de arriba. **La segunda, una puerta anclada fuera del árbol de trabajo, este proyecto sigue sin tenerla.**
+
+⚠️ **LO QUE SIGUE SIENDO DOCUMENTACIÓN Y NO MECANISMO, dicho sin adornos:**
+- **`app.event_emit` está otorgada a `crm_app`**, así que cualquier ruta puede emitir este evento con un payload inventado. Nombrado como **el próximo revoke**, no hecho acá: pone en rojo `event-store.test.ts` con razón.
+- **`app.calling_window_check` sigue otorgada**, así que una ruta futura puede preguntar sólo por la ventana con la supresión y el guard de grabación nunca consultados.
+- **Nada obliga a una superficie NUEVA a consultar puerta alguna.** Lo que cerró es más angosto: *una superficie que pregunta no puede ignorar la respuesta, ni preguntar sin registrar*.
+- `attempted_via` no se puede **inventar** (es un enum) pero sí se puede **mentir**.
+- `opportunity_id` y `override_id` son estructuralmente `null` en toda emisión.
+- **La clave de dedupe de 60 s no lleva canal**, así que una llamada y un texto bloqueados en el mismo minuto con el mismo veredicto colapsan en una fila cuyo canal es el que llegó primero. Teórico antes; **vivo ahora**.
+- **La cadena de snapshots de Drizzle es contabilidad de índice**: la 0059 era byte a byte idéntica a la 0058 salvo los ids, y la 0060 sigue esa práctica. El contenido está congelado hace rato y reconciliarlo es un trabajo aparte.
+
 ### 🖥️ EL TIMELINE LLEGA A UNA PANTALLA, Y TRES DEFECTOS LLEGARON PRIMERO (2026-08-11)
 `app/routes/api/timeline.ts` · `app/components/contacts/timeline.tsx` · `tests/e2e/timeline.spec.ts`. **653 → 659 tests · E2E 120 verdes en los dos perfiles.** `verify` verde. Cierra el *"no hay pantalla todavía"* de la entrada de abajo.
 
