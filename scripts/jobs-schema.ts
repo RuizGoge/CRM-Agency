@@ -1,6 +1,6 @@
-import { getConstructionPlans } from 'pg-boss'
 import type postgres from 'postgres'
 
+import { jobSchemaPlans } from '../app/jobs/boss'
 import { QUEUE_SPECS, type QueueSpec } from '../app/jobs/queues'
 
 /**
@@ -61,7 +61,7 @@ export async function installJobSchema(
   if (installed?.present) {
     log(`${SCHEMA}: already installed, leaving it alone.`)
   } else {
-    await client.unsafe(getConstructionPlans(SCHEMA))
+    await client.unsafe(jobSchemaPlans(SCHEMA))
     log(`${SCHEMA}: schema created, owned by the migrator.`)
   }
 

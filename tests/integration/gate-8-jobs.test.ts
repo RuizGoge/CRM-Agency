@@ -1,8 +1,10 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 import postgres from 'postgres'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
+import { startJobRunner } from '~/jobs/boss'
 import { QUEUE_SPECS, CALL_MERGE_QUEUE, DEAD_LETTER_QUEUE } from '~/jobs/queues'
 
 import { TEST_URL } from './setup/urls'
@@ -191,21 +193,24 @@ describe('a job that exhausts its retries lands in the dead letter, body intact'
   const PROBE_DLQ = 'gate8-probe-dead-letter'
 
   it('moves the payload to the dead-letter queue, unchanged', async () => {
-    const { PgBoss } = await import('pg-boss')
-    const boss = new PgBoss({ connectionString: TEST_URL, schema: 'pgboss', migrate: false })
+    // 🔴 THE QUEUES AND THE JOB ARE CREATED IN SQL, NOT THROUGH pg-boss's API,
+    // and that is not a workaround. `app.webhook_ingest()` enqueues with a raw
+    // INSERT inside the emitting transaction — §4.2's one round trip — so SQL
+    // IS the production enqueue path, and a probe built on `boss.send` would
+    // exercise a door this product does not use. It also means this file needs
+    // no exception to the job-runner guard: only the failing handler needs a
+    // runner, and that comes from our own wrapper.
+    await sql.unsafe(`
+      SELECT pgboss.create_queue('${PROBE_DLQ}',
+        '{"policy":"standard","retryLimit":0}'::jsonb)
+       WHERE NOT EXISTS (SELECT 1 FROM pgboss.queue WHERE name = '${PROBE_DLQ}')`)
+    await sql.unsafe(`
+      SELECT pgboss.create_queue('${PROBE_QUEUE}',
+        '{"policy":"standard","retryLimit":0,"deadLetter":"${PROBE_DLQ}"}'::jsonb)
+       WHERE NOT EXISTS (SELECT 1 FROM pgboss.queue WHERE name = '${PROBE_QUEUE}')`)
 
-    await boss.start()
+    const runner = await startJobRunner(TEST_URL, () => {})
     try {
-      await boss.createQueue(PROBE_DLQ, { policy: 'standard', retryLimit: 0 })
-      await boss.createQueue(PROBE_QUEUE, {
-        policy: 'standard',
-        // ZERO retries so the test does not spend the backoff it exists to
-        // prove is configured elsewhere. What is under test here is where the
-        // job goes AFTER the last attempt, not how many there were.
-        retryLimit: 0,
-        deadLetter: PROBE_DLQ,
-      })
-
       const payload = {
         tenantId: '00000000-0000-7000-8000-0000000e8001',
         alowareCallId: 'gate8-call-42',
@@ -213,10 +218,28 @@ describe('a job that exhausts its retries lands in the dead letter, body intact'
         nested: { kept: true },
       }
 
-      await boss.send(PROBE_QUEUE, payload)
+      // 🔴 COPIED FROM THE QUEUE ROW, exactly as `app.webhook_ingest()` does.
+      //
+      // `dead_letter` is a column on the JOB, not only on the queue — pg-boss's
+      // `send()` copies it across at enqueue time, and a raw INSERT that leaves
+      // it NULL produces a job with nowhere to go. The first version of this
+      // test did exactly that and reported "never reached the dead letter"
+      // while the queue was configured perfectly.
+      //
+      // Worth stating where it lands: the ingest migration ALREADY copies these
+      // ("leaving the column defaults would give this queue the table's
+      // defaults instead of its own"), so production was never affected. The
+      // probe was the thing that was wrong, which is the right way round.
+      await sql`
+        INSERT INTO pgboss.job
+          (name, data, policy, retry_limit, retry_delay, retry_backoff,
+           expire_seconds, deletion_seconds, dead_letter)
+        SELECT q.name, ${sql.json(payload)}, q.policy, q.retry_limit, q.retry_delay,
+               q.retry_backoff, q.expire_seconds, q.deletion_seconds, q.dead_letter
+          FROM pgboss.queue q WHERE q.name = ${PROBE_QUEUE}`
 
       let attempts = 0
-      await boss.work(PROBE_QUEUE, { batchSize: 1, pollingIntervalSeconds: 1 }, () => {
+      await runner.onQueue(PROBE_QUEUE, () => {
         attempts += 1
         throw new Error('gate 8: this handler always throws')
       })
@@ -241,11 +264,59 @@ describe('a job that exhausts its retries lands in the dead letter, body intact'
       expect(JSON.stringify(dead[0]?.data)).toContain('gate8-call-42')
       expect(JSON.stringify(dead[0]?.data)).toContain('"kept":true')
     } finally {
-      await boss.stop({ graceful: false })
+      await runner.stop()
       await sql`DELETE FROM pgboss.job WHERE name IN (${PROBE_QUEUE}, ${PROBE_DLQ})`
       await sql`DELETE FROM pgboss.queue WHERE name IN (${PROBE_QUEUE}, ${PROBE_DLQ})`
     }
   }, 30_000)
+})
+
+describe('pg-boss has exactly one importer', () => {
+  it('is imported by app/jobs/boss.ts and nowhere else', () => {
+    // 🎯 GATE 8's LAST ASSERTION: "100% of its surface wrapped in src/jobs/
+    // behind our own types". The ESLint `no-restricted-imports` entry is the
+    // mechanism — it fails the build — and this is the pin that makes widening
+    // the exception an edit somebody makes on purpose rather than a line that
+    // drifts.
+    //
+    // Read STATICALLY over the tree, which is the answer this project keeps
+    // arriving at: no database, no ordering, and it cannot go green because
+    // something else mutated shared state.
+    const roots = ['app', 'scripts', 'tests']
+    const importers: string[] = []
+
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const path = join(dir, entry.name)
+        if (entry.isDirectory()) {
+          if (entry.name === 'node_modules' || entry.name === 'migrations') continue
+          walk(path)
+        } else if (entry.name.endsWith('.ts') || entry.name.endsWith('.tsx')) {
+          const source = readFileSync(path, 'utf8')
+          if (/^\s*import\s[^\n]*from\s+'pg-boss'/m.test(source)) {
+            importers.push(path.replace(/\\/g, '/'))
+          }
+        }
+      }
+    }
+    roots.forEach(walk)
+
+    expect(importers.sort(), `pg-boss is imported by ${importers.join(', ')}`).toEqual([
+      'app/jobs/boss.ts',
+    ])
+  })
+
+  it('exposes no way to enqueue, so there is one path into a queue', () => {
+    // `send` is deliberately absent from `JobRunner`. Jobs are enqueued by
+    // `app.webhook_ingest()` with a raw INSERT inside the emitting transaction,
+    // so a `send` here would be a second way in that skips the transaction the
+    // first one exists to share — and a delivery vaulted without its job, or a
+    // job without its vault row, is the split §4.2 ruling 1 exists to prevent.
+    const wrapper = readFileSync('app/jobs/boss.ts', 'utf8')
+    for (const forbidden of ['send(', 'fetch(', 'complete(', 'cancel(']) {
+      expect(wrapper, `the wrapper exposes ${forbidden}`).not.toContain(`${forbidden}`)
+    }
+  })
 })
 
 describe('the singleton key serializes two deliveries about one call', () => {

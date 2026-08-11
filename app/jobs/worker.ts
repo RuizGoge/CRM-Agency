@@ -1,9 +1,8 @@
-import { PgBoss } from 'pg-boss'
-
 import { ensurePartitions, recordJobDeadLetter } from '~/db'
 import { dispatchDueJobs } from '~/modules/calendar/dispatch'
 import { relayOnce } from '~/modules/events/relay'
 
+import { startJobRunner, type JobRunner } from './boss'
 import { startSaturationMonitor, stopSaturationMonitor } from './saturation'
 import { mergeCallFromEvent, type CallMergeJob } from '~/modules/communications/call-merge'
 import { mergeMessageFromEvent, type MessageMergeJob } from '~/modules/communications/message-merge'
@@ -40,7 +39,7 @@ interface DeadLetterJob {
  * `crm_app` has no CREATE on it, so this is belt as well as braces.
  */
 
-let boss: PgBoss | null = null
+let boss: JobRunner | null = null
 
 /**
  * The relay's poll floor.
@@ -103,7 +102,7 @@ export function workerEnabled(): boolean {
     .includes('worker')
 }
 
-export async function startWorker(): Promise<PgBoss | null> {
+export async function startWorker(): Promise<JobRunner | null> {
   if (!workerEnabled()) return null
   if (boss) return boss
 
@@ -112,21 +111,9 @@ export async function startWorker(): Promise<PgBoss | null> {
     throw new Error('JOBS001: the worker needs DATABASE_URL, and it must name crm_app')
   }
 
-  const instance = new PgBoss({
-    connectionString,
-    schema: 'pgboss',
-    migrate: false,
-    supervise: true,
+  const instance = await startJobRunner(connectionString, (message) => {
+    console.error('[worker] job runner:', message)
   })
-
-  // pg-boss reports operational failures as events rather than rejections, so
-  // without this a queue that has stopped working looks exactly like a queue
-  // with nothing to do.
-  instance.on('error', (err: Error) => {
-    console.error('[worker] pg-boss:', err.message)
-  })
-
-  await instance.start()
 
   // 🔴 RE-ASSERTED AT BOOT, and this is not defensive tidying.
   //
@@ -143,7 +130,7 @@ export async function startWorker(): Promise<PgBoss | null> {
   // below.
   await ensurePartitions()
 
-  await instance.work(DISPATCH_QUEUE, async () => {
+  await instance.onQueue(DISPATCH_QUEUE, async () => {
     // Cheap and idempotent — CREATE TABLE IF NOT EXISTS across a fixed horizon.
     // On the tick as well as at boot because a process that has been up for a
     // month has not re-asserted anything since the month it started in.
@@ -165,8 +152,7 @@ export async function startWorker(): Promise<PgBoss | null> {
   // here would not break that guarantee, but it would let two jobs for
   // DIFFERENT calls interleave in one handler invocation, and the handler is
   // written per job.
-  await instance.work<CallMergeJob>(CALL_MERGE_QUEUE, { batchSize: 1 }, async ([job]) => {
-    if (job === undefined) return
+  await instance.onQueue<CallMergeJob>(CALL_MERGE_QUEUE, async (job) => {
     const result = await mergeCallFromEvent(job.data)
 
     // An unmapped call is a PRODUCT SURFACE, not a log line: §5 renders it to
@@ -181,8 +167,7 @@ export async function startWorker(): Promise<PgBoss | null> {
     }
   })
 
-  await instance.work<MessageMergeJob>(MESSAGE_MERGE_QUEUE, { batchSize: 1 }, async ([job]) => {
-    if (job === undefined) return
+  await instance.onQueue<MessageMergeJob>(MESSAGE_MERGE_QUEUE, async (job) => {
     const result = await mergeMessageFromEvent(job.data)
     if (result.status !== 'resolved') {
       console.log(
@@ -201,9 +186,7 @@ export async function startWorker(): Promise<PgBoss | null> {
   // The original job's payload rides along in `job.data`, which is what makes
   // the row replayable rather than merely a count: the tenant, the ingest event
   // and the provider's own call id are all still there.
-  await instance.work<DeadLetterJob>(DEAD_LETTER_QUEUE, { batchSize: 1 }, async ([job]) => {
-    if (job === undefined) return
-
+  await instance.onQueue<DeadLetterJob>(DEAD_LETTER_QUEUE, async (job) => {
     const payload = job.data
     const tenantId = typeof payload?.tenantId === 'string' ? payload.tenantId : null
     const subjectId =
@@ -231,7 +214,7 @@ export async function startWorker(): Promise<PgBoss | null> {
   // because someone ran a command in a console is not a deploy artifact, and
   // this is the same reason `harden()` runs on every deploy instead of at
   // install.
-  await instance.schedule(DISPATCH_QUEUE, DISPATCH_CRON)
+  await instance.everyTick(DISPATCH_QUEUE, DISPATCH_CRON)
 
   // The outbox relay is NOT a pg-boss queue, and the reason is the poll floor:
   // ADR-005 wants one second and cron's floor is a minute. The outbox owns
@@ -261,5 +244,5 @@ export async function stopWorker(): Promise<void> {
   if (!boss) return
   const instance = boss
   boss = null
-  await instance.stop({ graceful: false })
+  await instance.stop()
 }

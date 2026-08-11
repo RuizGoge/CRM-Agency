@@ -88,6 +88,46 @@ export default tseslint.config(
   },
 
   // ---------------------------------------------------------------------------
+  // JOB-RUNNER GUARD — Gate 8's last assertion.
+  //
+  // §2558 asks for "100 % of its surface wrapped in src/jobs/ behind our own
+  // types". `app/jobs/boss.ts` is that wrapper, and this is what makes it the
+  // only door rather than the polite one.
+  //
+  // G8 is the VERSION-STRESS gate, and the reason is the point: with
+  // `instance.work(...)`, `instance.schedule(...)` and `{ graceful: false }`
+  // spread across the worker, a signature change in a minor version is a diff
+  // in as many places as we happened to call it. Behind one module it is one
+  // place, and the type error points at it.
+  // ---------------------------------------------------------------------------
+  {
+    // ⚠️ SCOPED TO scripts/ AND tests/ ONLY, and the reason is a flat-config trap
+    // this guard fell into on its first version. `no-restricted-imports` is
+    // REPLACED rather than merged when two blocks match the same file, so a block
+    // here covering `app/**` was silently discarded by the DATA-ACCESS GUARD
+    // below — which matches the same files and sets the same rule. The mutation
+    // caught it: importing and USING PgBoss inside `worker.ts` linted clean.
+    //
+    // So the `app/**` half lives inside that block instead, and this one covers
+    // the two trees nothing else restricts.
+    files: ['scripts/**/*.ts', 'tests/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: 'pg-boss',
+              message:
+                'Only app/jobs/boss.ts may import pg-boss. Use startJobRunner / JobRunner from "~/jobs/boss" — Gate 8 §2558 requires 100% of its surface behind our own types.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+
+  // ---------------------------------------------------------------------------
   // DATA-ACCESS GUARD — Sprint 1.2.
   //
   // The connection pool is module-private inside app/db/client.ts, and the only
@@ -99,11 +139,24 @@ export default tseslint.config(
   // ---------------------------------------------------------------------------
   {
     files: ['app/**/*.ts', 'app/**/*.tsx'],
-    ignores: ['app/db/**'],
+    // `app/jobs/boss.ts` is added for the JOB-RUNNER GUARD folded in below, not
+    // for this one: it is the single module allowed to import pg-boss.
+    ignores: ['app/db/**', 'app/jobs/boss.ts'],
     rules: {
       'no-restricted-imports': [
         'error',
         {
+          // 🔴 THE JOB-RUNNER GUARD LIVES HERE rather than in its own block,
+          // because flat config REPLACES `no-restricted-imports` when two
+          // blocks match one file instead of merging them. A separate block
+          // above was overridden by this one and never fired.
+          paths: [
+            {
+              name: 'pg-boss',
+              message:
+                'Only app/jobs/boss.ts may import pg-boss. Use startJobRunner / JobRunner from "~/jobs/boss" — Gate 8 §2558 requires 100% of its surface behind our own types.',
+            },
+          ],
           patterns: [
             {
               group: [

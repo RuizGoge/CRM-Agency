@@ -7,6 +7,19 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 🔒 PUERTA 8 CERRADA — pg-boss tiene UN solo importador (2026-08-10)
+`app/jobs/boss.ts` · `eslint.config.js` · `tests/integration/gate-8-jobs.test.ts`. **621 → 623 tests.** `verify` verde. **La última aserción de G8 queda cerrada y la puerta con ella.**
+
+**`app/jobs/boss.ts` es el único módulo del repositorio que importa pg-boss.** El worker habla `JobRunner` — `onQueue`, `everyTick`, `stop` — y nunca `instance.work`, `instance.schedule` ni `{ graceful: false }`. §2558 pide *"100% de su superficie envuelta detrás de nuestros propios tipos"*, y **G8 es la puerta del estrés de VERSIÓN**: con las llamadas desparramadas, un cambio de firma en un minor es un diff en tantos lugares como se nos ocurrió llamarla; detrás de un módulo es uno solo, y el error de tipo apunta ahí.
+
+- **Lo que la envoltura NO expone, a propósito: `send`, `fetch`, `complete`, `cancel`.** Los jobs se encolan con un INSERT crudo adentro de la transacción del que emite (§4.2, un solo round trip), así que un `send` acá sería una segunda puerta que se saltea justo la transacción que la primera existe para compartir. Hay un test que lo assertea leyendo el archivo.
+
+🔴 **Y LA MUTACIÓN ENCONTRÓ QUE MI PROPIO GUARD NO DISPARABA.** Puse `no-restricted-imports` en su propio bloque de ESLint cubriendo `app/**` — y **el flat config REEMPLAZA esa regla en vez de mergearla** cuando dos bloques matchean el mismo archivo. El guard de acceso a datos, que viene después y cubre los mismos archivos, lo descartaba entero. Importar y **usar** `PgBoss` dentro de `worker.ts` linteaba limpio. Movida la mitad de `app/**` adentro de ese bloque; el mío queda para `scripts/` y `tests/`, que nadie más restringe. 🎯 Verificado con la mutación puesta: ahora falla nombrando el archivo y la razón.
+
+- **Dos capas, y no son redundantes.** ESLint rompe el build; el test **fija la lista de importadores** leyendo el árbol estáticamente, así que ensanchar la excepción es una edición que alguien hace a propósito. La mutación pone rojas a las dos.
+
+📌 **Y el test de la DLQ encontró algo que vale más que el test: `dead_letter` es columna de la FILA DEL JOB, no sólo de la cola.** `send()` la copia al encolar; mi primer insert crudo la dejó NULL y el job quedó sin adónde ir — reportando *"nunca llegó al dead letter"* con la cola perfectamente configurada. **La producción nunca estuvo afectada**: la 0047 ya copia las siete columnas de la cola, con su razón escrita (*"dejar los defaults de la columna le daría a esta cola los defaults de la TABLA en vez de los suyos"*). El que estaba mal era el probe, que es el lado correcto para equivocarse. Ahora el probe espeja exactamente el enqueue de producción.
+
 ### 📮 PUERTA 8 CORRIDA: LA DLQ NO EXISTÍA, Y TRES RETRIES OCURRÍAN EN EL MISMO MILISEGUNDO (2026-08-10)
 `app/jobs/queues.ts` · `scripts/jobs-schema.ts` · `tests/integration/gate-8-jobs.test.ts` · `docs/vendor/`. **609 → 621 tests · 61 → 62 archivos.** `verify` verde.
 
