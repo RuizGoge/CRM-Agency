@@ -18,6 +18,7 @@ import * as myDay from '~/routes/api/my-day'
 import * as quickAdd from '~/routes/api/quick-add'
 import * as search from '~/routes/api/search'
 import * as signOut from '~/routes/api/sign-out'
+import * as timeline from '~/routes/api/timeline'
 import * as webhooksAloware from '~/routes/api/webhooks-aloware'
 
 /**
@@ -59,6 +60,7 @@ const ROUTE_MODULES: readonly (readonly [string, Record<string, unknown>])[] = [
   ['routes/api/quick-add.ts', quickAdd],
   ['routes/api/search.ts', search],
   ['routes/api/sign-out.ts', signOut],
+  ['routes/api/timeline.ts', timeline],
   ['routes/api/webhooks-aloware.ts', webhooksAloware],
 ]
 

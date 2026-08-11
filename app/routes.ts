@@ -38,6 +38,7 @@ export default [
   route('api/home-setup', 'routes/api/home-setup.ts'),
   route('api/search', 'routes/api/search.ts'),
   route('api/contacts/:contactId', 'routes/api/contact.ts'),
+  route('api/contacts/:contactId/timeline', 'routes/api/timeline.ts'),
   route('api/quick-add', 'routes/api/quick-add.ts'),
   route('api/calls', 'routes/api/calls.ts'),
   // The ingest edge. NOT under `api/`, and versioned, because ruling P8.2 fixes

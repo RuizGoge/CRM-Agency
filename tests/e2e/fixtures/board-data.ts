@@ -97,7 +97,57 @@ export async function backdateArrival(card: FixtureCard, seconds: number): Promi
 }
 
 /**
- * Removes the card and its contact.
+ * Waits until nothing is still in flight for this contact.
+ *
+ * 🔴 THE TIMELINE MADE THIS NECESSARY, and the failure it prevents is worth
+ * stating because it caught six specs at once. `app.stage_move` emits inside
+ * the move transaction and the relay picks the delivery up on its next
+ * one-second tick; `removeCard` used to run in between. The projector then
+ * called `timeline_upsert` for a contact that no longer existed, the FK refused
+ * it, and the delivery retried its full eight attempts before dead-lettering —
+ * on every affected run, forever, for work whose subject was already gone.
+ *
+ * Waiting rather than deleting the outbox rows is deliberate. A fixture that
+ * reaches into the transport to clear its own mess would hide exactly the class
+ * of relay defect this suite exists to catch; waiting asserts the transport
+ * really did the work before the fixture takes the row away.
+ *
+ * `crm_app` HAS NO DELETE ON `app.contact` — the privilege is revoked, so no
+ * production path can reach this state at all. Only the migrator can, which is
+ * what this fixture connects as.
+ */
+async function settleOutboxFor(sql: postgres.Sql, contactId: string): Promise<void> {
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    const [row] = await sql<{ n: number }[]>`
+      SELECT count(*)::int AS n
+        FROM app.event_outbox o
+        JOIN app.event_log e
+          ON e.tenant_id = o.tenant_id AND e.event_id = o.event_id
+       -- 🔴 'claimed' COUNTS, and leaving it out is what made the first version
+       -- of this wait useless. A row the relay has claimed is precisely the one
+       -- in flight: the handler is running against it right now. Polling only
+       -- for 'pending' returns zero at the exact moment it is least safe to
+       -- delete the contact, which is how a delivery still got poisoned after
+       -- the wait was added. 'delivered' and 'dead' are the terminal two.
+       WHERE o.tenant_id = ${TENANT}
+         AND o.status IN ('pending', 'claimed')
+         AND e.payload ->> 'contact_id' = ${contactId}`
+
+    if ((row?.n ?? 0) === 0) return
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  }
+
+  // LOUD, not silent. Giving up quietly is what leaves a delivery retrying for
+  // a contact that is about to vanish; the backoff runs {1,5,25,125,…} seconds,
+  // so anything still moving after fifteen is stuck rather than slow, and the
+  // suite should say so instead of cleaning up on top of it.
+  throw new Error(
+    `outbox never settled for contact ${contactId}: a delivery is stuck, and deleting the contact now would poison it`,
+  )
+}
+
+/**
+ * Removes the card, its projected history and its contact.
  *
  * The LEDGER and the TRANSITIONS stay, and that is not an oversight: both are
  * append-only by statement trigger — to the owner and to a superuser, not only
@@ -105,6 +155,13 @@ export async function backdateArrival(card: FixtureCard, seconds: number): Promi
  * design exists to close. Attempting it raises IM001, which is the trigger
  * doing its job. What a test wrote there is history, exactly as a real sale
  * would be.
+ *
+ * `timeline_entry` is different and goes, because it is a DERIVED PROJECTION
+ * rather than a record: 05b's rule is that a corrupt projection is repaired by
+ * rebuilding, and it carries no append-only trigger. A projection of a contact
+ * that no longer exists is not history, it is a dangling row — which is also
+ * why its foreign key stays strict instead of gaining an `ON DELETE CASCADE`
+ * nothing in the product would ever fire.
  *
  * The opportunity itself is deletable because nothing append-only references
  * it: `stage_transition` and `earnings_ledger` carry `opportunity_id` with no
@@ -114,6 +171,10 @@ export async function backdateArrival(card: FixtureCard, seconds: number): Promi
 export async function removeCard(card: FixtureCard): Promise<void> {
   const sql = client()
   try {
+    await settleOutboxFor(sql, card.contactId)
+
+    await sql`DELETE FROM app.timeline_entry
+              WHERE tenant_id = ${TENANT} AND contact_id = ${card.contactId}`
     await sql`DELETE FROM app.opportunity
               WHERE tenant_id = ${TENANT} AND id = ${card.opportunityId}`
     await sql`DELETE FROM app.contact

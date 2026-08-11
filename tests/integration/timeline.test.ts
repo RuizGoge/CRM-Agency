@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { withTenant } from '~/db'
 import { relayOnce } from '~/modules/events/relay'
+import { readTimelineFor } from '~/routes/api/timeline'
 
 import { TEST_URL } from './setup/urls'
 
@@ -25,6 +26,8 @@ const ANA = '00000000-0000-7000-8000-0000000e90a1'
 const BEN = '00000000-0000-7000-8000-0000000e90b1'
 const CONTACT = '00000000-0000-7000-8000-0000000e90c1'
 const BENS_CONTACT = '00000000-0000-7000-8000-0000000e90c2'
+/** Its own contact, so the paging fixture cannot perturb the counts above. */
+const DEEP_CONTACT = '00000000-0000-7000-8000-0000000e90c3'
 const OPP = '00000000-0000-7000-8000-0000000e90d1'
 const OPEN_STAGE = '00000000-0000-7000-8000-0000000e9001'
 const WON_STAGE = '00000000-0000-7000-8000-0000000e9002'
@@ -70,7 +73,8 @@ beforeAll(async () => {
   await sql`
     INSERT INTO app.contact (tenant_id, id, owner_user_id, full_name, created_via) VALUES
       (${TENANT}, ${CONTACT}, ${ANA}, 'Ruth Timeline', 'manual'),
-      (${TENANT}, ${BENS_CONTACT}, ${BEN}, 'Bens Lead', 'manual')`
+      (${TENANT}, ${BENS_CONTACT}, ${BEN}, 'Bens Lead', 'manual'),
+      (${TENANT}, ${DEEP_CONTACT}, ${ANA}, 'Deep History', 'manual')`
   await sql`
     INSERT INTO app.pipeline (tenant_id, owner_user_id, name)
     VALUES (${TENANT}, ${ANA}, 'Board')`
@@ -274,6 +278,55 @@ describe('the 60-second window applies to send_blocked and nothing else', () => 
     expect(row?.n).toBe(1)
   })
 
+  it('gives every blocked verdict its own sentence on the wire', async () => {
+    // 🎯 THE FIFTH VERDICT IS THE POINT. `summaryKeyFor` began as a four-case
+    // switch with a `default` — so `blocked_recording_unverified`, which the
+    // gate really does return for an all-party state, would have rendered
+    // "Not sent" with no reason at all. §11 requires the reason in plain
+    // English, and a default branch is how a missing one goes green.
+    //
+    // The window keys on (contact, verdict, bucket), so five verdicts in the
+    // same minute are five rows rather than one — which is what makes this
+    // assertable in a single bucket.
+    const at = new Date()
+    const verdicts = [
+      'blocked_suppressed',
+      'blocked_calling_window',
+      'blocked_timezone_unknown',
+      'blocked_recording_unverified',
+      'blocked_sms_disabled',
+    ] as const
+
+    for (const verdict of verdicts) {
+      await withTenant({ tenantId: TENANT, userId: ANA }, async (tx) => {
+        await tx.execute(raw`
+          SELECT app.timeline_upsert(
+            ${DEEP_CONTACT}::uuid, ${ANA}::uuid, ${at.toISOString()}::timestamptz,
+            'send_blocked'::app.timeline_kind, 'contact_phone', gen_random_uuid(),
+            '{}'::jsonb, gen_random_uuid(), ${ANA}::uuid,
+            ${verdict}::app.gate_verdict)`)
+      })
+    }
+
+    const page = await readTimelineFor({ tenantId: TENANT, userId: ANA }, DEEP_CONTACT, null)
+    const keys = page.entries.map((e) => e.summaryKey)
+
+    expect(new Set(keys).size).toBe(verdicts.length)
+    expect(keys).toEqual(
+      expect.arrayContaining([
+        'gate.block.opted_out.timeline',
+        'gate.block.outside_window.timeline',
+        'gate.block.tz_unknown.timeline',
+        'gate.block.recording_paused.timeline',
+        'gate.block.channel_off.timeline',
+      ]),
+    )
+
+    // Not one of them falls back to the bare kind key, which is the shape the
+    // defect took: present, plausible, and missing the reason.
+    expect(keys).not.toContain('timeline.kind.send_blocked')
+  })
+
   it('refuses a send_blocked entry with no verdict', async () => {
     // 🔴 NULLS ARE DISTINCT IN A UNIQUE INDEX. A `send_blocked` row with a NULL
     // verdict conflicts with nothing, the window silently stops deduplicating,
@@ -289,5 +342,121 @@ describe('the 60-second window applies to send_blocked and nothing else', () => 
             '{}'::jsonb, gen_random_uuid(), ${ANA}::uuid, NULL)`)
       }),
     ).rejects.toThrow()
+  })
+})
+
+describe('the read surface pages by keyset, with no gap and no repeat', () => {
+  const DEPTH = 55
+  const PAGE = 50
+
+  /**
+   * 55 entries a MICROSECOND apart, and the spacing is the whole test.
+   *
+   * 🔴 THE CURSOR IS A STRING, so its precision is the projection's precision.
+   * The first version formatted `occurred_at` with `MS` and handed that back as
+   * `p_before_at`: an anchor at 12:00:00.123456 becomes 12:00:00.123, and the
+   * keyset predicate `(occurred_at, id) < (before_at, before_id)` then excludes
+   * every row between .123000 and .123456. Page two silently starts late.
+   *
+   * Nothing about that is visible on a happy path — the rows are all there,
+   * ordered correctly, and only the count is wrong. Which is why the fixture is
+   * built at sub-millisecond spacing rather than one row per second: at one per
+   * second the truncated cursor works perfectly and the gate proves nothing.
+   */
+  beforeAll(async () => {
+    const base = new Date('2026-07-01T12:00:00.000Z').getTime()
+
+    for (let i = 0; i < DEPTH; i += 1) {
+      // `i` microseconds past a fixed instant, written as text so JavaScript's
+      // millisecond-only Date cannot round it away before Postgres sees it.
+      const micros = String(i).padStart(6, '0')
+      const at = `${new Date(base).toISOString().replace(/\.\d+Z$/, '')}.${micros}Z`
+
+      await withTenant({ tenantId: TENANT, userId: ANA }, async (tx) => {
+        await tx.execute(raw`
+          SELECT app.timeline_upsert(
+            ${DEEP_CONTACT}::uuid, ${ANA}::uuid, ${at}::timestamptz,
+            'note'::app.timeline_kind, 'note', gen_random_uuid(),
+            ${JSON.stringify({ n: i })}::jsonb, gen_random_uuid(), ${ANA}::uuid, NULL)`)
+      })
+    }
+  })
+
+  it('walks the whole history without losing or repeating a single entry', async () => {
+    const identity = { tenantId: TENANT, userId: ANA }
+    const seen: string[] = []
+
+    let cursor: string | null = null
+    let pages = 0
+    do {
+      const page = await readTimelineFor(identity, DEEP_CONTACT, cursor)
+      seen.push(...page.entries.map((e) => e.id))
+      cursor = page.nextCursor
+      pages += 1
+      // A cursor that never advances is the other failure mode, and an
+      // unbounded `while` on a paging bug is a hung suite rather than a red one.
+      expect(pages).toBeLessThan(10)
+    } while (cursor !== null)
+
+    // Every note, plus the five blocked rows the previous block left on this
+    // contact. The count is the assertion: a truncated cursor loses rows here
+    // and changes nothing else about the output.
+    const [row] = await sql<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM app.timeline_entry
+       WHERE tenant_id = ${TENANT} AND contact_id = ${DEEP_CONTACT}`
+
+    expect(seen.length).toBe(row?.n)
+    expect(new Set(seen).size).toBe(seen.length)
+    expect(pages).toBeGreaterThan(1)
+  })
+
+  it('answers the first page with exactly one page and a cursor', async () => {
+    const page = await readTimelineFor({ tenantId: TENANT, userId: ANA }, DEEP_CONTACT, null)
+
+    // Fifty, not fifty-one: the read fetches PAGE + 1 to learn whether another
+    // page exists and must not put the extra row on the wire.
+    expect(page.entries.length).toBe(PAGE)
+    expect(page.nextCursor).not.toBeNull()
+
+    // Newest first, and strictly — the sort is what a history IS.
+    const times = page.entries.map((e) => e.occurredAt)
+    expect([...times].sort().reverse()).toEqual(times)
+  })
+
+  it('puts no actor id and no name on the wire, only one of three keys', async () => {
+    const page = await readTimelineFor({ tenantId: TENANT, userId: ANA }, DEEP_CONTACT, null)
+
+    for (const entry of page.entries) {
+      expect(entry.actorLabelKey).toBe('timeline.actor.you')
+      expect(Object.keys(entry.payload)).not.toContain('actor_user_id')
+    }
+
+    // The JSON a browser actually receives, checked as text rather than as an
+    // object: a uuid smuggled in a nested payload would pass a key check.
+    expect(JSON.stringify(page)).not.toContain(ANA)
+  })
+
+  it('answers another seller’s contact with an empty page, never a refusal', async () => {
+    // The silo, at the ROUTE layer this time. `readTimelineFor` has no branch
+    // for "not yours" — `timeline_read` returns nothing and the page is empty,
+    // which is the only shape that cannot become a 403 by a later edit.
+    const foreign = await readTimelineFor({ tenantId: TENANT, userId: BEN }, DEEP_CONTACT, null)
+
+    expect(foreign.entries).toEqual([])
+    expect(foreign.nextCursor).toBeNull()
+  })
+
+  it('answers an id that never existed exactly the same way', async () => {
+    const nobody = await readTimelineFor(
+      { tenantId: TENANT, userId: ANA },
+      '00000000-0000-7000-8000-00000000dead',
+      null,
+    )
+    const foreign = await readTimelineFor({ tenantId: TENANT, userId: BEN }, DEEP_CONTACT, null)
+
+    // Byte for byte. "Does not exist" and "not yours" are one answer, and
+    // comparing the serialised pages is the version of that assertion a later
+    // edit cannot weaken by adding a field to one branch.
+    expect(JSON.stringify(nobody)).toBe(JSON.stringify(foreign))
   })
 })

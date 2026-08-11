@@ -302,13 +302,26 @@ function Timeline({
                   fontSize: 'var(--type-xs)',
                 }}
               >
+                {/* 🔴 `div`, NOT `span`. HTML allows only dt, dd, div, script
+                    and template as children of a `dl`, and axe enforces it as
+                    `definition-list` + `dlitem` — both SERIOUS. `display:
+                    contents` hides the wrapper from the grid but not from the
+                    accessibility tree, so the whole list stopped being a
+                    definition list for a screen reader while looking identical.
+
+                    Found by `timeline.spec.ts`, which is the first test ever to
+                    run axe on this URL: the a11y suite only visited the
+                    NOT-FOUND shape of `/contacts/:id`, so every element of the
+                    record itself — this panel included — had never been
+                    scanned. 64 violations were sitting on a screen a seller
+                    opens all day. */}
                 {d.notable.map((n) => (
-                  <span key={n.field} style={{ display: 'contents' }}>
+                  <div key={n.field} style={{ display: 'contents' }}>
                     <dt style={{ color: 'var(--color-text-tertiary)' }}>
                       <code>{n.field}</code>
                     </dt>
                     <dd style={{ margin: 0 }}>{n.value}</dd>
-                  </span>
+                  </div>
                 ))}
               </dl>
 

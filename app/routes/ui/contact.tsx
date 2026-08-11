@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
+
+import { Timeline } from '~/components/contacts/timeline'
 import { useParams } from 'react-router'
 
 import { AlowareCapturePanel } from '~/components/communications/aloware-capture-panel'
@@ -123,6 +125,18 @@ function Record({ contact }: { contact: ContactRecord }): React.JSX.Element {
           }
         />
       </dl>
+
+      {/* 🔴 THE TIMELINE FETCHES ITS OWN DATA, and it is not a style choice.
+          `ui.loader_whitelist` sanctions ONE SSR loader and three exist, so
+          `AP005` refuses a fourth — the ratchet forced the architecture §1.1
+          wanted anyway. It also buys the error state this surface needs: the
+          history can fail without taking the header and the action bar with
+          it, so a seller can still dial. */}
+      {/* Keyed, so a second contact is a second INSTANCE. Without it the stream
+          would keep the previous lead's rows on screen while the new one loads,
+          which on this surface is not a flicker but somebody else's history
+          under this person's name. */}
+      <Timeline key={contact.id} contactId={contact.id} />
 
       <h2
         style={{
