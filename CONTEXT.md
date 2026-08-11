@@ -7,6 +7,37 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 🌩️ PUERTA 6 CORRIDA: 20.000 WEBHOOKS, CERO PERDIDOS — Y NO SE PUEDE CERRAR (2026-08-10)
+`scripts/gate-6-storm.ts`. **La tormenta se midió; la puerta NO queda cerrada, y la razón es la mitad que le falta al producto, no al arnés.**
+
+**LO MEDIDO, pata plegada, 20.000 entregas a 333/s durante 60,1 s:**
+
+| | |
+|---|---|
+| respondidas | **20.000 / 20.000 · CERO PERDIDAS** |
+| aceptadas / duplicadas | 10.000 / 10.000 |
+| p95 de ingesta | **12,41 ms** (p50 7,58 · p99 18,91) |
+| piso de polling **durante** la tormenta | **p95 12,25 ms** · p99 16,53 · 4.354 muestras · 0 fallos |
+| `cpu_ms_per_webhook` | **1,492** |
+
+✅ **VERIFICADO CONTRA LA BASE, no contra los contadores del script:** 10.000 `inbound_webhook_event`, 10.000 cuerpos en el vault, 10.000 jobs `call-merge`, 10.000 ids distintos, **0 dead letters, 0 alertas**. O sea que la afirmación de §2268 —el dedupe de transporte deja aterrizar una tormenta de reenvíos *sin tocar el dominio*— **es cierta en este árbol y ahora está medida**: la mitad reenviada produjo cero filas extra y cero jobs extra.
+
+✅ **Y el piso de polling NO se degradó compartiendo event loop con la tormenta**, que es la pregunta del bulkhead en la topología plegada (§882). p95 de 12,25 ms contra una línea roja de 80. ⚠️ Es la **lectura completa**, no un 304, y §340 (N19) dice que P1–P6 y P11 se asertean **sólo en split** — la pata plegada publica sus propios números honestos.
+
+🔴 **CUATRO ASERCIONES DE G6 NO TIENEN SUJETO. No se saltearon por tiempo: no hay a qué apuntarlas.**
+- **conteo de 429** — no hay semáforo ni camino de shed en la superficie de ingesta. §885 lo describe como mecanismo; `grep` sobre el borde no encuentra ningún 429.
+- **"la alerta de event-loop dispara"** — no hay monitor de event loop.
+- **"la fila `folded_topology_saturated` dispara"** — **no es un valor legal**: `admin_alert.kind` es un CHECK sobre cinco literales y ése no está. La fila no se puede escribir ni a mano.
+- **G6/P24, la aserción PROTEGIDA** (05c:1588, :2405) — inyectar un STOP durante la tormenta, afirmar `suppression_list` en 5 s y un discado a T+5 s devolviendo `blocked_suppressed`. **No hay sniff de STOP en el ingreso** (§10.9 lo ubica en `stopSniff`, que no existe) y `message.received` es inalcanzable, así que ninguna entrega puede producir un STOP.
+
+📌 **ESAS CUATRO SON EXACTAMENTE LA MITAD DE "LA DEGRADACIÓN NO PUEDE SER SILENCIOSA".** §2550 fija el criterio de fallo: en plegado *"la degradación está PERMITIDA; la degradación SILENCIOSA no"*. Hoy **todos** los mecanismos que la volverían no-silenciosa faltan. **Por eso la corrida establece los números y no puede cerrar la puerta** — y decir lo contrario sería la clase de verde que este proyecto existe para rechazar.
+
+🔴 **Y UN HALLAZGO DEL PROPIO ARNÉS: `app.webhook_endpoint` no tiene escritor de producción, así que la puerta tuvo que sembrarse a mano COMO DUEÑO.** `crm_app` no tiene ningún privilegio sobre esa tabla (`definer_only`) — el primer intento murió con permission denied, que es la clasificación funcionando. La consecuencia para producción es la que el registro ya anotó: **hoy no hay fila de endpoint, toda entrega real recibe 401, y Aloware no reintenta.**
+
+⚠️ **DOS ADVERTENCIAS SOBRE EL NÚMERO DE CPU.** (1) Medido **en esta máquina**, no en una Starter de 0,5 vCPU — es el **cuarto** presupuesto dependiente de máquina, después de P6, P20 y N13. (2) **Incluye el CPU del piso de polling**, porque `process.cpuUsage()` es por proceso y plegado el proceso hace las dos cosas: es el número correcto para decidir fold/split y el equivocado para "cuánto cuesta un webhook". Por eso **`system_constant['fold_split_webhooks_per_day_max']` NO se escribió** — §2551 lo quiere derivado de una medición en el hierro real.
+
+📐 **Un error mío del arnés que vale como método: la primera corrida dio 600 aceptadas y CERO duplicadas.** El dedupe es sobre `sha256(body)` —la respuesta honesta a que G2 midió que Aloware no manda id de entrega ni de evento— y yo metía un `seq` en el cuerpo, así que las 20.000 eran distintas. **Un reenvío real es byte-idéntico.** El arnés reportaba 100% aceptado sin probar nada del mecanismo que decía estar probando.
+
 ### 🏭 LA ENDPOINT FACTORY EXISTE, Y LA MARCA ES INFALSIFICABLE (2026-08-10)
 `app/lib/endpoint/define.ts` · las 13 rutas de recurso · `tests/integration/route-registry.test.ts`. **589 → 597 tests · 59 → 60 archivos.** `verify` verde.
 
