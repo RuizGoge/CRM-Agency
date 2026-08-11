@@ -37,6 +37,16 @@ export interface Delivery {
   readonly subjectType: string
   readonly subjectId: string
   readonly correlationId: string
+  /**
+   * When the thing HAPPENED, not when the relay ran.
+   *
+   * 🔴 ADDED FOR THE TIMELINE, and it is load-bearing there rather than
+   * informational: `timeline_entry.occurred_at` is what the seller's history is
+   * ordered by, so a projector that stamped `clock_timestamp()` would rebuild a
+   * replayed timeline in the order we happened to replay it. The event carries
+   * the real instant; nothing else does.
+   */
+  readonly occurredAt: string
   readonly payload: Record<string, unknown>
 }
 
@@ -94,6 +104,96 @@ const auditHandler: ConsumerHandler = async (d) => {
 }
 
 /**
+ * How each event becomes a timeline entry.
+ *
+ * `kind` is the enum the seller's screen groups on. `ref` decides what MERGES:
+ * two events sharing a ref land in ONE entry, which is the whole reason
+ * `timeline_ref_uidx` exists.
+ *
+ * 🔴 `opportunity.stage_changed` AND `opportunity.won` SHARE A REF ON PURPOSE,
+ * and the ref is the CORRELATION id. Migration 0054 gives both emissions the
+ * same correlation — it exists so a consumer can tie "the card moved" to "the
+ * sale happened" without inferring it from timestamps — so the projector lands
+ * one entry that says the card reached Closed Won AND carries the premium,
+ * rather than two rows a second apart saying half of it each.
+ *
+ * ⚠️ THE REF IS THE CORRELATION AND NOT THE OPPORTUNITY. Using the opportunity
+ * would merge EVERY stage move that card ever made into a single row, and the
+ * timeline would show one line for a lead that moved five times.
+ */
+const PROJECTED: ReadonlyMap<string, { kind: string; ref: 'correlation' | 'subject' }> = new Map([
+  ['opportunity.stage_changed', { kind: 'stage_move', ref: 'correlation' }],
+  ['opportunity.won', { kind: 'stage_move', ref: 'correlation' }],
+  ['opportunity.created', { kind: 'lead_created', ref: 'subject' }],
+  ['lead.created', { kind: 'lead_created', ref: 'subject' }],
+  ['lead.reposted', { kind: 'repost', ref: 'subject' }],
+  ['call.completed', { kind: 'call', ref: 'subject' }],
+  ['call.enriched', { kind: 'call', ref: 'subject' }],
+  ['message.received', { kind: 'message', ref: 'subject' }],
+  ['message.sent', { kind: 'message', ref: 'subject' }],
+  ['appointment.scheduled', { kind: 'meeting', ref: 'subject' }],
+  ['appointment.completed', { kind: 'meeting', ref: 'subject' }],
+  ['appointment.no_showed', { kind: 'meeting', ref: 'subject' }],
+  ['activity.completed', { kind: 'note', ref: 'subject' }],
+  ['consent.updated', { kind: 'consent', ref: 'subject' }],
+])
+
+/** Keys §10.8 forbids inside `render_payload`, enforced by a CHECK as well. */
+const IDENTITY_KEYS = [
+  'actor_name',
+  'actor_display_name',
+  'actor_initials',
+  'actor_avatar_url',
+  'actor_user_id',
+]
+
+/**
+ * 🔴 THE PROJECTOR. MVP item 20, and the root of the daily loop.
+ *
+ * The timeline is a DERIVED PROJECTION and this is the only thing that derives
+ * it: `crm_app` holds no privilege on `app.timeline_entry` at all, so
+ * "nobody writes timeline rows directly" is a fact about permissions rather
+ * than a rule in a document.
+ *
+ * It is also rebuildable. 05b: "fully rebuildable from event_log by the replay
+ * job; a corrupt projection is repaired by rebuilding, never by patching" — and
+ * what makes that safe is that the upsert is idempotent on the natural key, so
+ * replaying the whole log twice produces zero new rows.
+ */
+const timelineHandler: ConsumerHandler = async (d) => {
+  const mapping = PROJECTED.get(d.eventName)
+  if (mapping === undefined) return
+
+  // The timeline is per CONTACT. An event with no contact in its payload has
+  // nowhere to land — and guessing one would put a stranger's history on
+  // somebody's card.
+  const contactId = d.payload['contact_id']
+  if (typeof contactId !== 'string') return
+
+  // Identity never travels in the payload. The CHECK refuses it too; stripping
+  // here means the refusal is never reached rather than reached and survived.
+  const render: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(d.payload)) {
+    if (!IDENTITY_KEYS.includes(key)) render[key] = value
+  }
+
+  const refId = mapping.ref === 'correlation' ? d.correlationId : d.subjectId
+
+  await d.tx.execute(sql`
+    SELECT app.timeline_upsert(
+      ${contactId}::uuid,
+      ${d.ownerUserId}::uuid,
+      ${d.occurredAt}::timestamptz,
+      ${mapping.kind}::app.timeline_kind,
+      ${mapping.ref === 'correlation' ? 'stage_move' : d.subjectType},
+      ${refId}::uuid,
+      ${JSON.stringify(render)}::jsonb,
+      ${d.eventId}::uuid,
+      ${d.ownerUserId}::uuid,
+      NULL)`)
+}
+
+/**
  * The handler registry.
  *
  * 🔴 THE PAIRING WITH `event_consumer.handler_built` IS A GATE, NOT A HABIT.
@@ -104,7 +204,10 @@ const auditHandler: ConsumerHandler = async (d) => {
  * without the gate, and both are the shape of defect this project keeps
  * finding — a mechanism whose two halves each look correct alone.
  */
-export const CONSUMERS: ReadonlyMap<string, ConsumerHandler> = new Map([['audit', auditHandler]])
+export const CONSUMERS: ReadonlyMap<string, ConsumerHandler> = new Map([
+  ['audit', auditHandler],
+  ['contacts', timelineHandler],
+])
 
 export interface RelayOutcome {
   readonly claimed: number
@@ -122,8 +225,15 @@ async function body(tx: Tx, eventId: string): Promise<Omit<Delivery, 'tx'> | nul
     subject_id: string
     payload: Record<string, unknown>
     correlation_id: string
+    occurred_at: string
   }>(sql`SELECT event_name::text AS event_name, owner_user_id, subject_type,
-                subject_id, payload, correlation_id
+                subject_id, payload, correlation_id,
+                -- Explicit UTC ISO-8601 rather than left to ::text, whose output
+                -- is a local-format string the Date constructor parses by engine
+                -- goodwill rather than by specification. The job dispatcher
+                -- already paid for that once.
+                to_char(occurred_at AT TIME ZONE 'UTC',
+                        'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS occurred_at
            FROM app.outbox_payload(${eventId}::uuid)`)
 
   const row = rows[0]
@@ -136,6 +246,7 @@ async function body(tx: Tx, eventId: string): Promise<Omit<Delivery, 'tx'> | nul
     subjectType: row.subject_type,
     subjectId: row.subject_id,
     correlationId: row.correlation_id,
+    occurredAt: row.occurred_at,
     payload: row.payload,
   }
 }

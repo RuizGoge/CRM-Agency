@@ -7,6 +7,29 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 🧵 EL TIMELINE EXISTE — ÍTEM 20, LA RAÍZ DEL BUCLE DIARIO (2026-08-11)
+Migración **0059** · `app/db/schema/timeline.ts` · el proyector en `app/modules/events/relay.ts` · `tests/integration/timeline.test.ts`. **642 → 653 tests · 64 → 65 archivos.** `verify` verde.
+
+**Estaba bloqueado hasta que cerró el transporte, y dejó de estarlo ayer.** `built_from_event_id` es NOT NULL y su único escritor es un proyector sobre `event_log`: construirlo antes habría obligado a aflojar un NOT NULL de proveniencia para poner un id de evento que nunca existió.
+
+**LA FRASE QUE DECIDE TODO EL DISEÑO:** *"el timeline es para la vendedora, el audit log para el abogado"*. Una entrada por veredicto por contacto por ventana de 60 s acá; una fila por **cada intento** allá. Los dos se construyen de los mismos eventos y ninguno es una vista del otro.
+
+🎯 **UN MOVIMIENTO DE ETAPA ES UNA SOLA LÍNEA, ENRIQUECIDA POR LA VENTA.** `app.stage_move` emite `opportunity.stage_changed` **y** `opportunity.won` por el mismo arrastre, y la 0054 les da **la misma correlación** — existe justamente para que un consumidor pueda atar *"la tarjeta se movió"* con *"la venta ocurrió"*. El proyector refiere sobre esa correlación, así que la vendedora lee **una** línea con la prima adentro en vez de dos a un milisegundo de distancia con la mitad cada una. 🎯 **Mutación: referir sobre la oportunidad en vez de la correlación → los dos movimientos colapsan en una sola línea, y una tarjeta que se movió cinco veces se leería como una.**
+
+🔴 **LA CLASE DE POLÍTICA NO ES LA OBVIA, Y LA RAZÓN ES MECÁNICA.** `05b` dice `owner_scoped`; §10.8 lo supersede. `harden()` otorga **SELECT a nivel de TABLA** a toda clase salvo `definer_only`, y un SELECT de tabla confiere privilegio sobre **todas** las columnas — incluida `actor_user_id`, que es exactamente lo que §10.8 prohíbe. `harden()` sabe restringir columnas sólo en UPDATE. **La única clase que cumple la promesa es la que no otorga SELECT.** Verificado contra el motor: `crm_app` tiene **cero** privilegios sobre la tabla y **cero** sobre esa columna.
+- El timeline dice **quién** sin filtrar quién: la vendedora ve `you`, `system` o `previous_owner`, nunca el nombre de una colega. Y la retención pasa por la **lectura**, no por el componente, así que también es cierto de la API.
+- **Y la identidad tampoco puede esconderse en el JSON:** un CHECK nombra las cinco claves. Sin él, mover un nombre a `render_payload` pasaba todos los chequeos de privilegio y filtraba justo lo que compran.
+
+🔴 **NULLS SON DISTINTOS EN UN ÍNDICE ÚNICO, Y ESO HABRÍA MATADO LA VENTANA DE 60 s EN SILENCIO.** La clave de dedupe es `(tenant, contact, verdict, dedupe_bucket) WHERE kind='send_blocked'`. Una fila con `verdict` NULL **no choca con nada**: la ventana deja de deduplicar y el timeline se llena de una entrada por intento — pareciendo correcto hasta que alguien cuenta. Un CHECK lo vuelve imposible en vez de recordado, y la función levanta `TL002` con la razón escrita.
+
+**Otras cuatro decisiones que el corpus no da y hubo que derivar:**
+- **`app.timeline_upsert` no tiene firma en el corpus.** Se la nombra cuatro veces afirmando que es definer y única escritora, sin un parámetro. La forma sale de las columnas y de los **dos índices únicos que tiene que arbitrar**: `ON CONFLICT` acepta un solo árbitro, así que `send_blocked` descarta la segunda del bucket y todo lo demás mergea en el lugar. Son promesas distintas, así que son sentencias distintas.
+- **Sin FK sobre `built_from_event_id`.** `event_log` va particionado con PK de tres columnas, y Postgres se niega a hacer DETACH de una partición referenciada mientras haya filas apuntando — la FK convertiría el archivado a trece meses en un error. El precedente ya construido es `earnings_ledger.source_event_id`: **proveniencia declarada, no referencial**.
+- **El nombre del consumidor es `contacts`, no `contacts.timeline`.** La arquitectura usa el segundo en siete lugares; `event_outbox` lleva FK a `event_consumer`, así que **el nombre de la base es el único que puede recibir una fila**.
+- **`occurred_at` tuvo que agregarse al `Delivery` del relay.** Es el instante del **hecho**, no el del proyector: uno que estampara `clock_timestamp()` reconstruiría un timeline replayado en el orden en que se nos ocurrió replayarlo.
+
+⚠️ **LO QUE FALTA, dicho y no insinuado.** (1) **No hay pantalla todavía** — `app.timeline_read` es el camino de lectura y está probado, pero el panel del ítem 21 es trabajo aparte. (2) De los 23 eventos que `contacts` consume, **hoy sólo dos tienen emisor real**, así que el timeline arranca mostrando movimientos de etapa y ventas. (3) **La mitad de compliance del ítem 11 sigue abierta**: `compliance.send_blocked` no tiene emisor, así que el `kind = 'send_blocked'` es inalcanzable por el proyector — la ventana de 60 s se prueba llamando al escritor directo, y eso está dicho en el test en vez de escondido.
+
 ### 🟢 FALLO DE JORGE: LA CUENTA DE ALOWARE NO VENCE — ESTÁ PAGADA (2026-08-11)
 Sin código. **Una corrección al registro que invalida un reloj externo, y hay que leerla antes que cualquier entrada anterior sobre el tema.**
 

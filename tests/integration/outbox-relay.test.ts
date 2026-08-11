@@ -21,6 +21,16 @@ const ANA = '00000000-0000-7000-8000-0000000e71a1'
 
 let sql: postgres.Sql
 
+/** How many consumers actually receive a fan-out row for an event. */
+async function fanoutWidth(eventName: string): Promise<number> {
+  const [row] = await sql<{ n: number }[]>`
+    SELECT count(*)::int AS n FROM app.event_consumer
+     WHERE event_name = ${eventName}::app.event_name
+       AND delivery IN ('outbox', 'pgboss')
+       AND handler_built`
+  return row?.n ?? 0
+}
+
 const EVENT_OK = '01999999-0000-7000-8000-0000000071a1'
 const EVENT_TWO = '01999999-0000-7000-8000-0000000071a2'
 
@@ -77,10 +87,18 @@ describe('a delivery lands once and is acknowledged', () => {
   it('writes the audit row and marks the delivery delivered', async () => {
     await emit(EVENT_OK, 'opportunity.won', EVENT_OK)
 
+    // ⚠️ THE FAN-OUT GREW WHEN THE TIMELINE ARRIVED, and this used to assert a
+    // literal `['pending']`. `contacts` became a built handler in 0059, so an
+    // event now fans out to two consumers rather than one. Derived from the
+    // engine instead of counted here, so the next consumer moves this number
+    // rather than turning the file red for being right.
+    const width = await fanoutWidth('opportunity.won')
+
     const before = await sql<{ status: string }[]>`
       SELECT status::text AS status FROM app.event_outbox
        WHERE tenant_id = ${TENANT} AND event_id = ${EVENT_OK}`
-    expect(before.map((r) => r.status)).toEqual(['pending'])
+    expect(before).toHaveLength(width)
+    expect(before.every((r) => r.status === 'pending')).toBe(true)
 
     const outcome = await relayOnce()
     expect(outcome.delivered).toBeGreaterThanOrEqual(1)
@@ -89,8 +107,9 @@ describe('a delivery lands once and is acknowledged', () => {
     const after = await sql<{ status: string; delivered_at: Date | null }[]>`
       SELECT status::text AS status, delivered_at FROM app.event_outbox
        WHERE tenant_id = ${TENANT} AND event_id = ${EVENT_OK}`
-    expect(after[0]?.status).toBe('delivered')
-    expect(after[0]?.delivered_at).not.toBeNull()
+    expect(after).toHaveLength(width)
+    expect(after.every((r) => r.status === 'delivered')).toBe(true)
+    expect(after.every((r) => r.delivered_at !== null)).toBe(true)
 
     // THE POINT OF THE WHOLE EXERCISE: `audit_log` stops being a table with no
     // writer. An event that names a write US-9.13 requires auditing now leaves
