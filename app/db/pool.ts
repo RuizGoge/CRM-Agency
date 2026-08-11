@@ -2,7 +2,7 @@ import postgres from 'postgres'
 
 import { installCapabilities } from '~/modules/communications/capability'
 
-import { assertSafeConnection } from './boot-assert'
+import { assertGateIsRecording, assertSafeConnection } from './boot-assert'
 import { assertRequiredCapabilities, readCapabilities } from './capability-registry'
 
 /**
@@ -61,6 +61,19 @@ export const pool = postgres(url, {
  * this must not have.
  */
 void assertSafeConnection(pool).catch((err: unknown) => {
+  console.error(err instanceof Error ? err.message : err)
+  process.exit(1)
+})
+
+/**
+ * Migration 0060's revoke, re-asserted at every boot.
+ *
+ * Same shape and the same reasons as the check above — not awaited, and
+ * `process.exit` rather than a thrown promise. It is here rather than beside
+ * the production-only capability gate because the failure it catches is a
+ * `GRANT` in an unread migration diff, and that arrives in development first.
+ */
+void assertGateIsRecording(pool).catch((err: unknown) => {
   console.error(err instanceof Error ? err.message : err)
   process.exit(1)
 })

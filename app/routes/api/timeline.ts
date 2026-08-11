@@ -53,7 +53,22 @@ const KIND_SUMMARY_KEY = {
   repost: 'timeline.kind.repost',
 } as const satisfies Record<TimelineKind, string>
 
-const BLOCKED_SUMMARY_KEY = {
+/**
+ * The blocked sentence, per verdict, PER CHANNEL.
+ *
+ * 🔴 THE CHANNEL SPLIT IS A DEFECT THIS CHANGE CREATED, fixed in the same
+ * commit. Before 0060 nothing emitted `compliance.send_blocked`, so the only
+ * blocked row a seller could ever see came from a dial and one flat map was
+ * honest. The reminder path now emits with `channel = 'sms'` — and a seller
+ * whose TEXT was refused outside the calling window would have read "Call not
+ * placed". That is a wrong sentence on a seller's screen, which is the one
+ * thing this project treats as non-negotiable.
+ *
+ * Only three verdicts are channel-ambiguous. `blocked_sms_disabled` can only
+ * happen on `sms` and `blocked_recording_unverified` only on `call`, so both
+ * keep one sentence and it already names the right act.
+ */
+const BLOCKED_SUMMARY_KEY_CALL = {
   blocked_suppressed: 'gate.block.opted_out.timeline',
   blocked_calling_window: 'gate.block.outside_window.timeline',
   blocked_timezone_unknown: 'gate.block.tz_unknown.timeline',
@@ -61,8 +76,21 @@ const BLOCKED_SUMMARY_KEY = {
   blocked_sms_disabled: 'gate.block.channel_off.timeline',
 } as const satisfies Record<GateVerdict, string>
 
+const BLOCKED_SUMMARY_KEY_SMS = {
+  blocked_suppressed: 'gate.block.opted_out.timeline_sms',
+  blocked_calling_window: 'gate.block.outside_window.timeline_sms',
+  blocked_timezone_unknown: 'gate.block.tz_unknown.timeline_sms',
+  // Unreachable on this channel — the gate requires `call` for it — but the
+  // record must be total, and a `satisfies` that skipped a label would be a
+  // hole rather than a shortcut.
+  blocked_recording_unverified: 'gate.block.recording_paused.timeline',
+  blocked_sms_disabled: 'gate.block.channel_off.timeline',
+} as const satisfies Record<GateVerdict, string>
+
 export type TimelineSummaryKey =
-  (typeof KIND_SUMMARY_KEY)[TimelineKind] | (typeof BLOCKED_SUMMARY_KEY)[GateVerdict]
+  | (typeof KIND_SUMMARY_KEY)[TimelineKind]
+  | (typeof BLOCKED_SUMMARY_KEY_CALL)[GateVerdict]
+  | (typeof BLOCKED_SUMMARY_KEY_SMS)[GateVerdict]
 
 /** What the definer answers instead of a colleague's name. */
 export type TimelineActorKey =
@@ -107,13 +135,24 @@ const PAGE = 50
 const KIND_LOOKUP: ReadonlyMap<string, TimelineSummaryKey> = new Map(
   Object.entries(KIND_SUMMARY_KEY),
 )
-const BLOCKED_LOOKUP: ReadonlyMap<string, TimelineSummaryKey> = new Map(
-  Object.entries(BLOCKED_SUMMARY_KEY),
+const BLOCKED_CALL_LOOKUP: ReadonlyMap<string, TimelineSummaryKey> = new Map(
+  Object.entries(BLOCKED_SUMMARY_KEY_CALL),
+)
+const BLOCKED_SMS_LOOKUP: ReadonlyMap<string, TimelineSummaryKey> = new Map(
+  Object.entries(BLOCKED_SUMMARY_KEY_SMS),
 )
 
-function summaryKeyFor(kind: string, verdict: string | null): TimelineSummaryKey {
+function summaryKeyFor(
+  kind: string,
+  verdict: string | null,
+  payload: Record<string, unknown>,
+): TimelineSummaryKey {
   if (kind === 'send_blocked') {
-    const blocked = verdict === null ? undefined : BLOCKED_LOOKUP.get(verdict)
+    // The channel comes from the projected payload. A row written before 0060 —
+    // or by the writer directly, which the window tests do — carries none, and
+    // falls through to the call wording, which is what it always said.
+    const lookup = payload['channel'] === 'sms' ? BLOCKED_SMS_LOOKUP : BLOCKED_CALL_LOOKUP
+    const blocked = verdict === null ? undefined : lookup.get(verdict)
     return blocked ?? 'timeline.kind.send_blocked'
   }
   return KIND_LOOKUP.get(kind) ?? 'timeline.kind.note'
@@ -176,7 +215,7 @@ export async function readTimelineFor(
       id: row.id,
       occurredAt: row.occurred_at,
       kind: row.kind,
-      summaryKey: summaryKeyFor(row.kind, row.verdict),
+      summaryKey: summaryKeyFor(row.kind, row.verdict, row.render_payload),
       actorLabelKey: actorKeyFor(row.actor_label_key),
       payload: row.render_payload,
     })),

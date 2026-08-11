@@ -72,6 +72,20 @@ type Row = {
   zones: string[]
 }
 
+/**
+ * Every assertion below now runs through the PRODUCTION DOOR.
+ *
+ * 🔴 REPOINTED FROM `app.compliance_check` IN 0060, and the repoint is not
+ * cosmetic: `crm_app` no longer holds EXECUTE on the raw gate, so this helper
+ * calling it would fail with `permission denied for function compliance_check`
+ * — all twenty-one assertions at once. That refusal is asserted deliberately in
+ * `compliance-emit.test.ts`; here the value is that the whole precedence suite
+ * exercises the door a seller actually reaches rather than the function behind
+ * it.
+ *
+ * The four columns and their names are unchanged, so every assertion in this
+ * file is unchanged in substance.
+ */
 async function gate(
   userId: string,
   contactId: string,
@@ -82,12 +96,12 @@ async function gate(
   const rows = await withTenant({ tenantId, userId }, async (tx) =>
     tx.execute<Row>(
       raw`SELECT verdict, event_verdict, override_id, zones
-            FROM app.compliance_check(${contactId}::uuid, ${channel}::app.channel,
-                                      ${at}::timestamptz)`,
+            FROM app.compliance_attempt(${contactId}::uuid, ${channel}::app.channel,
+                                        'api'::app.attempt_origin, ${at}::timestamptz)`,
     ),
   )
   const first = rows[0]
-  if (first === undefined) throw new Error('compliance_check returned no row')
+  if (first === undefined) throw new Error('compliance_attempt returned no row')
   return first
 }
 

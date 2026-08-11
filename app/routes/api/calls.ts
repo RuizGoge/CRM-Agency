@@ -132,10 +132,19 @@ export async function dialFor(
   // is the wrong sentence: it tells them to fix a setting so they can make a
   // call they must never make. The legally binding refusal wins.
   //
-  // THE VERDICT AND THE AUDIT ROW COMMIT TOGETHER. US-9.13 requires one audit
-  // row per ATTEMPT, unbucketed — N dials under break-glass are N rows. Two
-  // statements in one transaction means a crash cannot leave a dial that
-  // happened with no record of the verdict that let it through.
+  // 🔴 `compliance_attempt`, NOT `compliance_check` — AND THAT IS A PRIVILEGE,
+  // NOT A PREFERENCE. Migration 0060 revoked EXECUTE on the raw gate from
+  // `crm_app`. This route could not ask the bare question if it wanted to; the
+  // only reachable door writes the audit row and emits
+  // `compliance.send_blocked` before it returns the verdict.
+  //
+  // That is what replaced the inline `app.audit_write` that used to live here.
+  // US-9.13's one-row-per-ATTEMPT is unchanged — the row moved into the gate,
+  // where it cannot be forgotten, rather than sitting in a caller where the
+  // next refusal path would have had to remember it.
+  //
+  // The origin is hardcoded at the call site and never read from the request:
+  // a client that could name where the attempt came from could lie about it.
   const gate = await withTenant(identity, async (tx) => {
     const rows = await tx.execute<{
       verdict: 'allow' | GateVerdict
@@ -144,29 +153,10 @@ export async function dialFor(
       zones: string[] | null
     }>(sql`
       SELECT verdict::text AS verdict, event_verdict, override_id, zones
-        FROM app.compliance_check(${input.contactId}::uuid, 'call'::app.channel)`)
+        FROM app.compliance_attempt(${input.contactId}::uuid, 'call'::app.channel,
+                                    'dial_button'::app.attempt_origin)`)
 
-    const row = rows[0]
-    if (row === undefined) return undefined
-
-    // The snapshot is what makes the row a defence rather than an assertion:
-    // "the gate said no" is not an answer eighteen months later, and "the gate
-    // said no, and these were the zones it resolved and the override it saw"
-    // is. Written for ALLOW as well as for refusals — a permitted dial under
-    // break-glass is exactly the row somebody will ask about.
-    await tx.execute(sql`
-      SELECT app.audit_write(
-        'compliance.gate_checked', 'contact', ${input.contactId}::uuid,
-        NULL, NULL, NULL,
-        ${row.verdict}::app.gate_verdict,
-        ${JSON.stringify({
-          channel: 'call',
-          event_verdict: row.event_verdict,
-          zones: row.zones ?? [],
-        })}::jsonb,
-        ${row.override_id}::uuid, NULL, 'human'::app.actor_type, 0)`)
-
-    return row
+    return rows[0]
   })
 
   // Fails CLOSED. A gate that returned nothing is a gate that did not answer,

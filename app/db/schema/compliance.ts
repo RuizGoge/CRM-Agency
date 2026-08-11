@@ -31,6 +31,21 @@ export const gateVerdict = app.enum('gate_verdict', [
 ])
 
 /**
+ * Where an outbound attempt came from, for `compliance.send_blocked`.
+ *
+ * Three labels, one per producer that exists: the dial surface, the scheduler,
+ * and a direct call. A fourth surface is a migration rather than a string
+ * literal, which is the point of an enum here.
+ *
+ * ⚠️ DELIBERATELY NOT `opportunity.gate_blocked`'s `attempted_via`, which is
+ * `kanban_drag|command_palette|mobile|automation|api`. That is the pipeline
+ * CLOSE gate — a different act — and it has no label for a scheduler, which is
+ * one of exactly two producers here. The catalog types this event's field as
+ * plain text, so the divergence needs no amendment.
+ */
+export const attemptOrigin = app.enum('attempt_origin', ['dial_button', 'reminder_dispatch', 'api'])
+
+/**
  * A SINGLE-VALUE ENUM, and that single value is the whole safety argument.
  *
  * The schema literally cannot express an override of suppression, of STOP, of

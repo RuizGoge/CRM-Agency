@@ -34,6 +34,17 @@ export interface Delivery {
   readonly eventName: string
   readonly eventId: string
   readonly ownerUserId: string
+  /**
+   * WHO DID IT, or null when a machine did.
+   *
+   * 🔴 ADDED IN 0060, AND IT CORRECTS AN EXISTING DEFECT rather than only
+   * enabling a new one. `app.outbox_payload` did not return this column, so the
+   * projector passed `ownerUserId` as the timeline's actor — which is right for
+   * a seller's own drag and wrong for everything an admin or a scheduler does to
+   * her lead. `app.timeline_read` answers `timeline.actor.you` when the actor is
+   * the reader, so her own history said "You" about a text nobody attempted.
+   */
+  readonly actorUserId: string | null
   readonly subjectType: string
   readonly subjectId: string
   readonly correlationId: string
@@ -81,7 +92,21 @@ const AUDITED: ReadonlyMap<string, string> = new Map([
   // a positive registry sees an unknown name, not a rejected one.
   ['contact.owner_changed', 'ownership.transferred'],
   ['consent.updated', 'consent.ledger_appended'],
-  ['compliance.send_blocked', 'compliance.gate_checked'],
+  // 🔴 `compliance.send_blocked` WAS HERE AND HAD TO GO IN 0060. The gate now
+  // writes its own `compliance.gate_checked` row synchronously, at the point of
+  // refusal, with the verdict, the override and the input snapshot on it. Left
+  // in this map the relay would write a SECOND row per refusal on delivery —
+  // same action, NULL verdict, NULL override, `actor_type = 'system'` — and
+  // "one row per ATTEMPT" would quietly become two, the second one worse.
+  //
+  // ⚠️ IT WOULD HAVE GONE GREEN: `dial-gate.test.ts` counted with
+  // `toBeGreaterThanOrEqual(3)`, and the allow path emits nothing so its
+  // `toHaveLength(1)` was untouched. The doubling is caught by one test and
+  // only one — see `compliance-emit.test.ts`.
+  //
+  // The delivery still ARRIVES here (the `audit` consumer subscribes to all 49
+  // and is marked built); `auditHandler` returns above and the row is acked as
+  // a delivered no-op.
   ['user.deactivated', 'user.access_revoked'],
 ])
 
@@ -120,23 +145,35 @@ const auditHandler: ConsumerHandler = async (d) => {
  * ⚠️ THE REF IS THE CORRELATION AND NOT THE OPPORTUNITY. Using the opportunity
  * would merge EVERY stage move that card ever made into a single row, and the
  * timeline would show one line for a lead that moved five times.
+ *
+ * 🔴 `compliance.send_blocked` NEEDS A THIRD MODE, and neither existing one
+ * works. `subject` writes `('contact', contactId)` — which collides with that
+ * contact's own `lead_created` entry on the FIRST refusal, because
+ * `timeline_ref_uidx` is `UNIQUE (tenant_id, ref_type, ref_id)` with no `WHERE`
+ * while the `send_blocked` branch of `timeline_upsert` arbitrates only the
+ * blocked index. `correlation` would stamp the literal `'stage_move'` on a
+ * compliance row. So the ref is the EVENT: every refusal is its own row, and
+ * the 60-second collapse is done by the blocked arbiter, which is where it
+ * belongs.
  */
-const PROJECTED: ReadonlyMap<string, { kind: string; ref: 'correlation' | 'subject' }> = new Map([
-  ['opportunity.stage_changed', { kind: 'stage_move', ref: 'correlation' }],
-  ['opportunity.won', { kind: 'stage_move', ref: 'correlation' }],
-  ['opportunity.created', { kind: 'lead_created', ref: 'subject' }],
-  ['lead.created', { kind: 'lead_created', ref: 'subject' }],
-  ['lead.reposted', { kind: 'repost', ref: 'subject' }],
-  ['call.completed', { kind: 'call', ref: 'subject' }],
-  ['call.enriched', { kind: 'call', ref: 'subject' }],
-  ['message.received', { kind: 'message', ref: 'subject' }],
-  ['message.sent', { kind: 'message', ref: 'subject' }],
-  ['appointment.scheduled', { kind: 'meeting', ref: 'subject' }],
-  ['appointment.completed', { kind: 'meeting', ref: 'subject' }],
-  ['appointment.no_showed', { kind: 'meeting', ref: 'subject' }],
-  ['activity.completed', { kind: 'note', ref: 'subject' }],
-  ['consent.updated', { kind: 'consent', ref: 'subject' }],
-])
+const PROJECTED: ReadonlyMap<string, { kind: string; ref: 'correlation' | 'subject' | 'event' }> =
+  new Map([
+    ['opportunity.stage_changed', { kind: 'stage_move', ref: 'correlation' }],
+    ['opportunity.won', { kind: 'stage_move', ref: 'correlation' }],
+    ['opportunity.created', { kind: 'lead_created', ref: 'subject' }],
+    ['lead.created', { kind: 'lead_created', ref: 'subject' }],
+    ['lead.reposted', { kind: 'repost', ref: 'subject' }],
+    ['call.completed', { kind: 'call', ref: 'subject' }],
+    ['call.enriched', { kind: 'call', ref: 'subject' }],
+    ['message.received', { kind: 'message', ref: 'subject' }],
+    ['message.sent', { kind: 'message', ref: 'subject' }],
+    ['appointment.scheduled', { kind: 'meeting', ref: 'subject' }],
+    ['appointment.completed', { kind: 'meeting', ref: 'subject' }],
+    ['appointment.no_showed', { kind: 'meeting', ref: 'subject' }],
+    ['activity.completed', { kind: 'note', ref: 'subject' }],
+    ['consent.updated', { kind: 'consent', ref: 'subject' }],
+    ['compliance.send_blocked', { kind: 'send_blocked', ref: 'event' }],
+  ])
 
 /** Keys §10.8 forbids inside `render_payload`, enforced by a CHECK as well. */
 const IDENTITY_KEYS = [
@@ -151,9 +188,13 @@ const IDENTITY_KEYS = [
  * 🔴 THE PROJECTOR. MVP item 20, and the root of the daily loop.
  *
  * The timeline is a DERIVED PROJECTION and this is the only thing that derives
- * it: `crm_app` holds no privilege on `app.timeline_entry` at all, so
- * "nobody writes timeline rows directly" is a fact about permissions rather
- * than a rule in a document.
+ * it in production. `crm_app` holds no privilege on `app.timeline_entry` AT ALL,
+ * so no query can write a row — that part is a fact about permissions.
+ *
+ * ⚠️ THE CLAIM STOPS AT THE TABLE. `app.timeline_upsert` is granted to
+ * `crm_app`, so a request path could call the function; the tests do exactly
+ * that. Narrowed here on purpose rather than repeated, because a guarantee
+ * restated one notch wider than it holds is how the next person stops checking.
  *
  * It is also rebuildable. 05b: "fully rebuildable from event_log by the replay
  * job; a corrupt projection is repaired by rebuilding, never by patching" — and
@@ -177,7 +218,37 @@ const timelineHandler: ConsumerHandler = async (d) => {
     if (!IDENTITY_KEYS.includes(key)) render[key] = value
   }
 
-  const refId = mapping.ref === 'correlation' ? d.correlationId : d.subjectId
+  const refId =
+    mapping.ref === 'correlation'
+      ? d.correlationId
+      : mapping.ref === 'event'
+        ? d.eventId
+        : d.subjectId
+
+  const refType =
+    mapping.ref === 'correlation'
+      ? 'stage_move'
+      : mapping.ref === 'event'
+        ? 'compliance_block'
+        : d.subjectType
+
+  // 🔴 THE VERDICT REACHES THE ROW, and this argument used to be a hard-coded
+  // NULL — which is why `send_blocked` was unreachable from the projector even
+  // after the kind existed. `timeline_upsert` refuses a blocked row with no
+  // verdict (TL002), because NULLs are distinct in a unique index and the
+  // 60-second window would silently stop deduplicating.
+  //
+  // The event carries the CATALOG's vocabulary (`stop`, `outside_window`, …)
+  // and the column takes the DATABASE's enum (`blocked_suppressed`, …). The
+  // inversion happens in `app.gate_verdict_of`, in SQL, once — a second map in
+  // TypeScript is exactly the drift this project keeps paying for.
+  const rawVerdict = d.payload['verdict']
+  if (mapping.kind === 'send_blocked' && typeof rawVerdict !== 'string') {
+    // LOUD, not the silent `return` two guards above. TL002 would refuse this
+    // anyway; throwing here names the cause instead of the symptom, and the
+    // delivery climbs the ladder into a dead letter with a readable reason.
+    throw new Error(`compliance.send_blocked ${d.eventId} carries no verdict`)
+  }
 
   await d.tx.execute(sql`
     SELECT app.timeline_upsert(
@@ -185,12 +256,18 @@ const timelineHandler: ConsumerHandler = async (d) => {
       ${d.ownerUserId}::uuid,
       ${d.occurredAt}::timestamptz,
       ${mapping.kind}::app.timeline_kind,
-      ${mapping.ref === 'correlation' ? 'stage_move' : d.subjectType},
+      ${refType},
       ${refId}::uuid,
       ${JSON.stringify(render)}::jsonb,
       ${d.eventId}::uuid,
-      ${d.ownerUserId}::uuid,
-      NULL)`)
+      -- The ACTOR, not the owner. See Delivery.actorUserId: passing the owner
+      -- made every machine decision read as "You" on the seller's own history.
+      ${d.actorUserId}::uuid,
+      ${
+        mapping.kind === 'send_blocked'
+          ? sql`app.gate_verdict_of(${rawVerdict as string})`
+          : sql`NULL`
+      })`)
 }
 
 /**
@@ -221,19 +298,26 @@ async function body(tx: Tx, eventId: string): Promise<Omit<Delivery, 'tx'> | nul
   const rows = await tx.execute<{
     event_name: string
     owner_user_id: string
+    actor_user_id: string | null
     subject_type: string
     subject_id: string
     payload: Record<string, unknown>
     correlation_id: string
     occurred_at: string
-  }>(sql`SELECT event_name::text AS event_name, owner_user_id, subject_type,
-                subject_id, payload, correlation_id,
+  }>(sql`SELECT event_name::text AS event_name, owner_user_id, actor_user_id,
+                subject_type, subject_id, payload, correlation_id,
                 -- Explicit UTC ISO-8601 rather than left to ::text, whose output
                 -- is a local-format string the Date constructor parses by engine
                 -- goodwill rather than by specification. The job dispatcher
                 -- already paid for that once.
+                --
+                -- MICROSECONDS, not milliseconds: this value becomes
+                -- timeline_entry.occurred_at, which is what the seller's
+                -- history is ordered by and what the keyset cursor pages over.
+                -- Truncating here would discard precision the projection can
+                -- never get back.
                 to_char(occurred_at AT TIME ZONE 'UTC',
-                        'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS occurred_at
+                        'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS occurred_at
            FROM app.outbox_payload(${eventId}::uuid)`)
 
   const row = rows[0]
@@ -243,6 +327,7 @@ async function body(tx: Tx, eventId: string): Promise<Omit<Delivery, 'tx'> | nul
     eventName: row.event_name,
     eventId,
     ownerUserId: row.owner_user_id,
+    actorUserId: row.actor_user_id,
     subjectType: row.subject_type,
     subjectId: row.subject_id,
     correlationId: row.correlation_id,

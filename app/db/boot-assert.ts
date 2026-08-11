@@ -86,3 +86,57 @@ export async function assertSafeConnection(sql: postgres.Sql): Promise<void> {
       `migrations only.`,
   )
 }
+
+/**
+ * Throws when the compliance gate can be asked without recording the answer.
+ *
+ * 🔴 RE-ASSERTION AT BOOT, and it is here because of what CLAUDE.md says about
+ * the actor who writes migrations nobody reads. Migration 0060's whole
+ * mechanism is one absence: `crm_app` has no EXECUTE on
+ * `app.compliance_check`, so the only reachable door is
+ * `app.compliance_attempt`, which has already written the audit row and emitted
+ * `compliance.send_blocked` before it returns a verdict.
+ *
+ * A later migration containing one `GRANT EXECUTE` would undo that in a diff
+ * nobody reads, and NOTHING WOULD LOOK WRONG: every dial still refuses
+ * correctly, every seller sentence is unchanged, and the refusals simply stop
+ * being counted. Of the three properties that survive that actor — a symptom on
+ * screen, a gate anchored outside the tree, re-assertion at deploy and at boot
+ * — this is the third. The deploy does not come up.
+ *
+ * It also refuses the opposite direction: a gate that is missing entirely means
+ * the migration was never applied to this database.
+ *
+ * Not production-only, deliberately. `assertRequiredCapabilities` is, and its
+ * own comment calls that its weakness — development and CI never exercise the
+ * refusal. This one follows `assertSafeConnection` instead and runs everywhere.
+ */
+export async function assertGateIsRecording(sql: postgres.Sql): Promise<void> {
+  const rows = await sql<{ present: boolean; granted: boolean | null }[]>`
+    SELECT to_regprocedure('app.compliance_check(uuid,app.channel,timestamptz)') IS NOT NULL
+             AS present,
+           CASE WHEN to_regprocedure('app.compliance_check(uuid,app.channel,timestamptz)') IS NULL
+                THEN NULL
+                ELSE has_function_privilege(
+                       'crm_app',
+                       to_regprocedure('app.compliance_check(uuid,app.channel,timestamptz)'),
+                       'EXECUTE') END AS granted`
+
+  const row = rows[0]
+  if (row === undefined || !row.present) {
+    throw new Error(
+      'BOOT003: refusing to start. app.compliance_check does not exist in this database.\n\n' +
+        'Every dial, text and reminder passes through it. Run the migrations.',
+    )
+  }
+
+  if (row.granted === true) {
+    throw new Error(
+      'BOOT004: refusing to start. crm_app can execute app.compliance_check directly.\n\n' +
+        'That is a path to a compliance verdict that writes no audit row and emits no ' +
+        'compliance.send_blocked — so refusals stop being counted while every screen ' +
+        'still looks correct. Migration 0060 revoked it; something granted it back.\n\n' +
+        'The only sanctioned doors are app.compliance_attempt and app.reminder_gate.',
+    )
+  }
+}

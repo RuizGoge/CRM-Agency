@@ -71,12 +71,27 @@ const COPY: Readonly<Record<TimelineSummaryKey | TimelineActorKey, string>> = {
 
   // The blocked copy. These are the strings §11 requires written to the
   // timeline, and they are the reason the row never truncates.
+  //
+  // 🔴 TWO SETS, BECAUSE THE ACT IS PART OF THE REASON. A seller reading "Call
+  // not placed" about a text she scheduled learns the wrong thing about her own
+  // history. Three verdicts can happen on either channel and get both wordings;
+  // the other two can only happen on one and keep the single sentence.
+  //
+  // None of them blames the seller or names a setting to change — the same rule
+  // the drawer's refusal copy follows. A suppressed number is not a
+  // configuration problem, and copy that reads like one teaches sellers to go
+  // looking for a way around it.
   'gate.block.opted_out.timeline': 'Call not placed — this number opted out.',
   'gate.block.outside_window.timeline': 'Call not placed — outside the lead’s calling window.',
   'gate.block.tz_unknown.timeline': 'Call not placed — we couldn’t confirm this lead’s time zone.',
   'gate.block.recording_paused.timeline':
     'Call not placed — this state needs everyone’s consent and recording isn’t verified here.',
   'gate.block.channel_off.timeline': 'Text not sent — texting is pending carrier registration.',
+
+  'gate.block.opted_out.timeline_sms': 'Text not sent — this number opted out.',
+  'gate.block.outside_window.timeline_sms': 'Text not sent — outside the lead’s calling window.',
+  'gate.block.tz_unknown.timeline_sms':
+    'Text not sent — we couldn’t confirm this lead’s time zone.',
 
   'timeline.actor.you': 'You',
   'timeline.actor.system': 'System',
