@@ -7,6 +7,31 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 📮 PUERTA 8 CORRIDA: LA DLQ NO EXISTÍA, Y TRES RETRIES OCURRÍAN EN EL MISMO MILISEGUNDO (2026-08-10)
+`app/jobs/queues.ts` · `scripts/jobs-schema.ts` · `tests/integration/gate-8-jobs.test.ts` · `docs/vendor/`. **609 → 621 tests · 61 → 62 archivos.** `verify` verde.
+
+🔴 **EL DEFECTO QUE LA PUERTA EXISTE PARA ENCONTRAR ESTABA AHÍ, Y ES EXACTAMENTE EL QUE §2559 NOMBRA.** Leído de `pgboss.queue` antes de tocar nada:
+
+```
+retry_limit    2        retry_delay 0     retry_backoff false
+dead_letter    NULL     en las tres colas
+```
+
+- **`dead_letter` NULL** — *"una DLQ que nunca recibe nada"*, literal. Un `call-merge` que reventaba tres veces quedaba `failed` en `pgboss.job` hasta la ventana de borrado, y **`app.dead_letter` no se enteraba jamás**: el cuerpo crudo quedaba inalcanzable y el contador del admin no subía nunca.
+- **`retry_delay = 0` con `retry_backoff = false`** — tres intentos en el mismo milisegundo. Eso no es una política de reintentos, **es un fallo reportado tres veces**. Un merge falla por un lock transitorio o un pool agotado, y los dos necesitan **tiempo**, no inmediatez.
+
+✅ **LO CONSTRUIDO.** Una cola `dead-letter`, `retryLimit: 3` con `retryDelay: 5` y **backoff** en las dos colas de merge, y un handler en el worker que escribe `app.dead_letter` con origen `job` — el tenant sale del **payload del job**, que es la forma que ADR-077 ya fija. La retención pasa a ser **declarada y no heredada**: cada cola nombra sus siete valores, y el dead letter se guarda **30 días** contra los 14 del job que describe, porque es la fila que un operador lee semanas después cuando alguien pregunta qué pasó con una llamada.
+
+✅ **Y EL PASO DE DEPLOY AHORA RECONCILIA LOS OCHO CAMPOS, NO SÓLO `policy`.** Ésa era la causa de que el defecto fuera invisible: `create_queue` va guardado por `NOT EXISTS`, así que una cola que ya existe con la configuración equivocada **se saltea en silencio** — y el chequeo que había miraba `policy` y nada más, reportando *"queue ready"* mientras `dead_letter` seguía NULL. Ahora un drift se **corrige con UPDATE y se nombra en el log** (`reconciled — retry_limit, retry_delay, retry_backoff, expire_seconds, dead_letter`), salvo `policy`, que sigue siendo una **negativa** porque re-keyea los índices únicos parciales de pg-boss.
+
+🎯 **LAS DOS ASERCIONES CONDUCTUALES, que son el punto de la puerta:**
+- **Un job que agota sus reintentos aterriza en la DLQ con el cuerpo intacto** — probado con un pg-boss real, una cola desechable y un handler que revienta de verdad. **Mutación: sacarle el `deadLetter` a la cola de prueba → rojo tras 15 s de poll, con el mensaje exacto.**
+- **`singleton_key` serializa dos entregas de la misma llamada a 50 ms** — las **dos filas existen**, que es toda la diferencia con `exclusive`, donde la segunda se descarta y una entrega se pierde en silencio.
+
+✅ **Versión pineada exacta (`12.26.4`, era `^12.26.4`) y README vendorizado por versión** en `docs/vendor/pg-boss-12.26.4-README.md`. El caret es justo lo que deja que un `npm install` traiga un minor con DDL propio a una base donde `harden()` falla cerrado — **G8 es la puerta del "estrés de versión", y el rango ERA el estrés**. El vendorizado va por versión, así que actualizar pg-boss es un cambio que tiene que traer su propio manual.
+
+⚠️ **UNA ASERCIÓN DE G8 QUEDA A MEDIAS, y la digo en vez de darla por cerrada: *"100% de su superficie envuelta detrás de nuestros propios tipos"*.** `worker.ts` importa `PgBoss` directo y llama `instance.work`, `instance.schedule`, `instance.start` y `instance.stop` sin capa intermedia. Las colas, sus políticas y su configuración **sí** están detrás de `QUEUE_SPECS`; el ciclo de vida del cliente no. Envolverlo es un refactor aparte y de valor discutible — **la puerta no está cerrada mientras eso siga así.**
+
 ### 🧯 TRES DE LAS CUATRO ASERCIONES QUE LE FALTABAN A G6 YA TIENEN SUJETO (2026-08-10)
 Migración **0055** · `app/lib/ingest/semaphore.ts` · `app/jobs/saturation.ts` · `tests/integration/saturation.test.ts`. **597 → 609 tests · 60 → 61 archivos.** `verify` verde.
 

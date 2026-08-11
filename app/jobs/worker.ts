@@ -1,6 +1,6 @@
 import { PgBoss } from 'pg-boss'
 
-import { ensurePartitions } from '~/db'
+import { ensurePartitions, recordJobDeadLetter } from '~/db'
 import { dispatchDueJobs } from '~/modules/calendar/dispatch'
 import { relayOnce } from '~/modules/events/relay'
 
@@ -8,7 +8,20 @@ import { startSaturationMonitor, stopSaturationMonitor } from './saturation'
 import { mergeCallFromEvent, type CallMergeJob } from '~/modules/communications/call-merge'
 import { mergeMessageFromEvent, type MessageMergeJob } from '~/modules/communications/message-merge'
 
-import { CALL_MERGE_QUEUE, DISPATCH_CRON, DISPATCH_QUEUE, MESSAGE_MERGE_QUEUE } from './queues'
+import {
+  CALL_MERGE_QUEUE,
+  DEAD_LETTER_QUEUE,
+  DISPATCH_CRON,
+  DISPATCH_QUEUE,
+  MESSAGE_MERGE_QUEUE,
+} from './queues'
+
+/** Whatever the original job carried. Every field is optional by construction. */
+interface DeadLetterJob {
+  readonly tenantId?: string
+  readonly alowareCallId?: string
+  readonly canonical?: string
+}
 
 /**
  * The worker role.
@@ -177,6 +190,41 @@ export async function startWorker(): Promise<PgBoss | null> {
           ('reason' in result ? ` (${result.reason})` : ''),
       )
     }
+  })
+
+  // 🔴 THE DEAD-LETTER HANDLER, AND WITHOUT IT THE QUEUE IS A DRAWER NOBODY
+  // OPENS. pg-boss moves an exhausted job here on its own; that only turns into
+  // something an operator can see because this reads it and writes
+  // `app.dead_letter`. §2559 names both halves of the absence — "a webhook
+  // retried zero times and discarded, OR a DLQ that never receives anything".
+  //
+  // The original job's payload rides along in `job.data`, which is what makes
+  // the row replayable rather than merely a count: the tenant, the ingest event
+  // and the provider's own call id are all still there.
+  await instance.work<DeadLetterJob>(DEAD_LETTER_QUEUE, { batchSize: 1 }, async ([job]) => {
+    if (job === undefined) return
+
+    const payload = job.data
+    const tenantId = typeof payload?.tenantId === 'string' ? payload.tenantId : null
+    const subjectId =
+      typeof payload?.alowareCallId === 'string' ? payload.alowareCallId : (job.id ?? 'unknown')
+
+    if (tenantId === null) {
+      // A dead letter we cannot attribute is still worth saying out loud. It
+      // cannot be written — `app.dead_letter` is tenant-scoped and inventing
+      // one would file another agency's failure under this one.
+      console.error(`[dead-letter] job ${job.id} carries no tenant; not recorded`)
+      return
+    }
+
+    await recordJobDeadLetter(
+      tenantId,
+      'job',
+      subjectId,
+      `${String(payload?.canonical ?? 'job')} exhausted its retries: ` +
+        `${JSON.stringify(payload).slice(0, 500)}`,
+    )
+    console.error(`[dead-letter] recorded ${subjectId} for tenant ${tenantId}`)
   })
 
   // Re-asserted on every boot rather than seeded once. A schedule that exists

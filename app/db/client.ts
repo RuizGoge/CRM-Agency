@@ -245,6 +245,33 @@ export async function raiseProcessAlert(kind: string, detail: string): Promise<n
   })
 }
 
+/**
+ * Records a job that exhausted its retries, as a dead letter an operator reads.
+ *
+ * 🔴 GATE 8 EXISTS BECAUSE THIS WAS MISSING. `pgboss.queue.dead_letter` was NULL
+ * on every queue, so a call-merge that threw three times was marked `failed`,
+ * sat in `pgboss.job` until the deletion window, and nothing in the product
+ * ever heard about it — §2559's failure "by ABSENCE", exactly.
+ *
+ * The tenant comes from the JOB PAYLOAD rather than a session, because there is
+ * no session: this runs in the worker after pg-boss moved the job. That is the
+ * same shape as every other handler here — ADR-077 has payloads carry the
+ * tenant and the handler re-derive its scope from it.
+ */
+export async function recordJobDeadLetter(
+  tenantId: string,
+  subjectType: string,
+  subjectId: string,
+  reason: string,
+): Promise<void> {
+  await withSystemWork(tenantId, (tx) =>
+    tx.execute(
+      sql`SELECT app.dead_letter_record('job', ${subjectType}, ${subjectId}, NULL,
+                                        ${reason.slice(0, 2000)})`,
+    ),
+  )
+}
+
 export async function withSystemWork<T>(tenantId: string, fn: (tx: Tx) => Promise<T>): Promise<T> {
   return db.transaction(async (tx) => {
     await tx.execute(sql`SELECT app.begin_system_work(${tenantId}::uuid)`)

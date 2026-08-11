@@ -73,3 +73,105 @@ export const MESSAGE_MERGE_QUEUE = 'message-merge'
 
 /** Same policy, same reason: serialize per subject, never discard the second. */
 export const MESSAGE_MERGE_POLICY = 'key_strict_fifo'
+
+/**
+ * Where a job goes after it has exhausted its retries.
+ *
+ * 🔴 GATE 8 EXISTS FOR THIS EXACT ABSENCE. §2559: "the failure is by ABSENCE —
+ * a webhook retried zero times and discarded, or a DLQ that never receives
+ * anything — and nobody notices for a long time."
+ *
+ * Measured before this existed: `pgboss.queue.dead_letter` was NULL on all
+ * three queues. A call-merge that threw three times was marked `failed`, sat in
+ * `pgboss.job` until the deletion window, and `app.dead_letter` never heard
+ * about it — so the raw body was unreachable and the admin counter never rose.
+ * Every part of that is silent.
+ */
+export const DEAD_LETTER_QUEUE = 'dead-letter'
+
+/**
+ * Everything `pgboss.create_queue` accepts that this product has an opinion
+ * about, named the way pg-boss names it.
+ *
+ * DECLARED RATHER THAN DEFAULTED, and that is §2558's "job-table
+ * retention/archival explicitly configured". Every one of these had a default
+ * that happened to be survivable; a default that happens to be survivable is
+ * not a decision, and the day it changes in a minor version nobody finds out.
+ */
+export interface QueueSpec {
+  readonly name: string
+  readonly policy: 'standard' | 'key_strict_fifo'
+  readonly retryLimit: number
+  readonly retryDelay: number
+  readonly retryBackoff: boolean
+  readonly expireInSeconds: number
+  readonly retentionSeconds: number
+  readonly deleteAfterSeconds: number
+  readonly deadLetter: string | null
+}
+
+const DAYS = 24 * 60 * 60
+
+export const QUEUE_SPECS: readonly QueueSpec[] = [
+  {
+    name: DISPATCH_QUEUE,
+    policy: 'standard',
+    // A cron tick. Retrying it is nearly pointless — the next tick is a minute
+    // away and does the same work — so it gets ONE retry for a transient blip
+    // and no dead letter: a tick that failed carries no payload anybody could
+    // replay, and dead-lettering it would fill the operator's screen with rows
+    // whose remedy is "wait sixty seconds".
+    retryLimit: 1,
+    retryDelay: 5,
+    retryBackoff: false,
+    expireInSeconds: 120,
+    retentionSeconds: 2 * DAYS,
+    deleteAfterSeconds: 1 * DAYS,
+    deadLetter: null,
+  },
+  {
+    name: CALL_MERGE_QUEUE,
+    policy: CALL_MERGE_POLICY,
+    // 🔴 THREE RETRIES WITH BACKOFF, AND THE BACKOFF IS THE POINT. The measured
+    // default was `retry_delay = 0` with `retry_backoff = false`: three attempts
+    // in the same millisecond, which is not a retry policy, it is one failure
+    // reported three times. A merge fails on a transient lock or a pool
+    // exhaustion, and both need TIME rather than immediacy.
+    retryLimit: 3,
+    retryDelay: 5,
+    retryBackoff: true,
+    expireInSeconds: 300,
+    retentionSeconds: 14 * DAYS,
+    deleteAfterSeconds: 7 * DAYS,
+    deadLetter: DEAD_LETTER_QUEUE,
+  },
+  {
+    name: MESSAGE_MERGE_QUEUE,
+    policy: MESSAGE_MERGE_POLICY,
+    retryLimit: 3,
+    retryDelay: 5,
+    retryBackoff: true,
+    expireInSeconds: 300,
+    retentionSeconds: 14 * DAYS,
+    deleteAfterSeconds: 7 * DAYS,
+    deadLetter: DEAD_LETTER_QUEUE,
+  },
+  {
+    name: DEAD_LETTER_QUEUE,
+    policy: 'standard',
+    // NO DEAD LETTER OF ITS OWN, and no retries either. A dead letter for the
+    // dead-letter queue is a loop, and a handler whose whole job is to record a
+    // failure has nothing useful to do on its second attempt.
+    //
+    // Held THIRTY DAYS rather than fourteen: this is the row an operator reads
+    // weeks later when somebody asks what happened to a call, and it outlives
+    // the job it describes on purpose.
+    retryLimit: 0,
+    retryDelay: 0,
+    retryBackoff: false,
+    expireInSeconds: 120,
+    retentionSeconds: 30 * DAYS,
+    deleteAfterSeconds: 30 * DAYS,
+    deadLetter: null,
+  },
+]

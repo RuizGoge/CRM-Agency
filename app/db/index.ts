@@ -10,6 +10,7 @@ export {
   ensurePartitions,
   ingestWebhook,
   raiseProcessAlert,
+  recordJobDeadLetter,
   withSystemWork,
   withTenant,
 } from './client'
