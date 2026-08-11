@@ -7,6 +7,21 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 🟢 FALLO DE JORGE: LA CUENTA DE ALOWARE NO VENCE — ESTÁ PAGADA (2026-08-11)
+Sin código. **Una corrección al registro que invalida un reloj externo, y hay que leerla antes que cualquier entrada anterior sobre el tema.**
+
+**Jorge, 2026-08-11: *"lo de aloware no va a vencer, ya lo pagamos"*.**
+
+⚠️ **ESTE ARCHIVO AFIRMA LO CONTRARIO EN CUATRO LUGARES**, todos derivados de una sola observación: el banner del panel leído el 2026-08-05 anunciando suspensión el 15/08. **El banner era real y el pago lo resolvió.** Quedan como texto histórico, no como pendiente:
+
+- `🚨 LA CUENTA DE ALOWARE SE SUSPENDE EL 15/08/2026 (2026-08-05)` — **la fecha está VENCIDA como amenaza.**
+- El punto 3 de la lista de la Puerta 2 (*"la cuenta se suspende el 15/08"*).
+- Las entradas de G6 y de la sesión del 10-08 que tratan la ventana como un reloj de cinco días.
+
+**CONSECUENCIA DE PLANIFICACIÓN, y es la razón de escribir esto:** durante toda la sesión del 10-08 la urgencia de Aloware fue el argumento para postergar otras cosas y para tratar cinco preguntas de la Puerta 2 como *"incontestables si se cierra la ventana"*. **Ese argumento ya no existe.** Las cinco siguen abiertas y siguen necesitando la cuenta viva — el vocabulario de disposiciones, si `Call-Disposed` siempre acompaña, el anuncio saliente (D9), `call_list`, y la latencia desde la región real — pero **son trabajo programable, no una carrera.**
+
+📌 **Lo que NO cambia:** `call_list` sigue siendo `mvp_required` en `unknown` y sigue **impidiendo arrancar en producción** (CAP200). Eso nunca fue una consecuencia de la suspensión; es una decisión de Jorge sobre la capacidad, y sigue abierta.
+
 ### ⚖️ ÍTEM 11 COMPLETO — EL RECORDATORIO PASA POR LA PUERTA ÚNICA (2026-08-11)
 Migración **0058** · `app/modules/calendar/dispatch.ts` · `tests/integration/job-dispatch.test.ts`. **641 → 642 tests.** `verify` verde. **El ítem 11 del MVP queda cerrado salvo la razón escrita al timeline, que espera al timeline.**
 
