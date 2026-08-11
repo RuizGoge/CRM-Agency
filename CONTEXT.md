@@ -7,6 +7,29 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 🔒 EL EVENT STORE NO TIENE ESCRITOR DE ROL DE APLICACIÓN (2026-08-11)
+Migración **0061** · `assertEventEmitIsDefinerOnly` (BOOT005/BOOT006) · cuatro tests nuevos en `event-store.test.ts`. **679 → 683 tests.** E2E 120 verdes. `verify` verde.
+
+`crm_app` pierde EXECUTE sobre `app.event_emit`. Los únicos caminos hacia `app.event_log` quedan `app.stage_move` y `app.compliance_record`, los dos SECURITY DEFINER, los dos llegando como **dueños de la función**. Hasta ahora cualquier ruta con una transacción `withTenant` podía escribir cualquiera de los 49 nombres canónicos con el payload que quisiera.
+
+✅ **VERIFICADO, NO RAZONADO.** Tres pasadas adversariales intentaron refutar *"no hay caller de producción"*; el censo aguantó las tres. Una **aplicó el revoke contra la base viva dentro de una transacción revertida** y manejó la puerta de cierre real como `crm_app`: `stage_move` devolvió normal y escribió `opportunity.stage_changed` y `opportunity.won`, mientras que la llamada directa levantó `permission denied for function event_emit` (42501).
+
+**CUATRO PUERTAS, DOS MUTACIONES CORRIDAS:**
+- devolver el grant → **3 rojos**: catálogo, comportamiento y arranque
+- agregar un tercer definer → **1 rojo, y sólo lo ve el scan de `prosrc`**. Un definer nuevo que emita **no necesita GRANT** y no dispara ningún chequeo de privilegio.
+
+🔴 **LA ASERCIÓN DE ARRANQUE PESA MÁS ACÁ QUE EN LA BOOT004.** Este revoke **no tiene síntoma en ninguna pantalla** —no había caller de producción antes ni lo hay después—, así que un `GRANT` en un diff que nadie lee reabre todo mientras cada test, cada tablero y cada frase para la vendedora quedan idénticos. Que el deploy no levante es el único aviso disponible. BOOT006 pregunta por `has_function_privilege` y no compara `proacl`, porque ese mismo predicado atrapa además el reset de `DROP`+`CREATE` a `EXECUTE TO PUBLIC` — que es **más ancho** que antes del revoke, y es un patrón vivo en este árbol.
+
+⚠️ **DOS HELPERS DE TEST QUEDARON RE-APUNTADOS, NO ARREGLADOS.** `event-store` y `outbox-relay` emitían por `withTenant`, o sea como `crm_app`. Eso ya no es expresable, **por diseño**, y lo que esos wrappers demostraban ahora se afirma como **falso**. El `describe` en el que viven se llama *"the store is append-only and the application role is not its writer"* — un título que el archivo venía contradiciendo en silencio desde la 0043. El lado de escritura no pierde nada: los INSERT siempre fueron del dueño, adentro del definer.
+
+🔴 **LO QUE ESTO NO CIERRA**, y la migración lo dice largo porque el valor del cambio depende enteramente de decirlo:
+- **`app.stage_move` sigue otorgada y NO arma su payload sola.** `p_moved_via`, `p_actor_type` y `p_premium_cents` vienen del caller, y la prima anualizada llega al ledger **y al tablero público**. Eso es una falsificación **más grande** que una fila de evento pelada. Acotada por SM404 a la oportunidad del propio caller — pero acotada no es cerrada.
+- **`app.timeline_upsert` sigue otorgada, y el timeline es lo que la vendedora LEE.** Dueño, actor y proveniencia son todos parámetros del caller, el cuerpo no tiene predicado de propiedad, `built_from_event_id` no tiene FK, y la tabla está registrada `immutable = false` así que `harden()` no le instala trigger de rechazo. `timeline.test.ts` lo demuestra en verde hoy. **DESPUÉS DE ESTA MIGRACIÓN EL TIMELINE ES MÁS FALSIFICABLE QUE EL EVENT LOG.**
+- **`app.ledger_append` sigue otorgada con cero callers `crm_app`** — vestigial por el mismo argumento que justifica este cambio, y **estrictamente más peligrosa**: valida sólo el tenant, su `source_event_id` no tiene FK, y escribe el tablero público directo.
+- **`EVENT_EMITTERS` sigue siendo una constante que nadie chequea.** `'banana'` pasa igual.
+- **Emitir es ahora una capacidad SÓLO-SQL.** 4 de 49 eventos tienen emisor; el quinto cuesta un definer y una migración en vez de una línea de TypeScript, y **nada se pone rojo cuando una emisión necesaria simplemente se omite**.
+- ⚠️ **Y la premisa debajo de todo esto no la chequea nadie:** `crm_migrator` es NOLOGIN y no es dueño de nada, las migraciones corren como `crm` que es **SUPERUSER**, así que todo cuerpo definer corre como un rol que no coincide **ni con `p_app` ni con `p_sys`** sobre una tabla con FORCE RLS — funciona sólo porque el dueño hace bypass de RLS. Preexistente y sin cambios por este commit, pero **éste es el cambio que hace que el event store dependa de eso en exclusiva**. Ítem propio, más grande que éste.
+
 ### 🚪 ÍTEM 11 CIERRA: LA PUERTA YA NO SE PUEDE CONSULTAR SIN DEJAR CONSTANCIA (2026-08-11)
 Migración **0060** · `app.compliance_attempt` / `app.compliance_record` / `app.gate_verdict_of` · `tests/integration/compliance-emit.test.ts`. **659 → 679 tests · 65 → 66 archivos · E2E 120 verdes.** `verify` verde.
 
