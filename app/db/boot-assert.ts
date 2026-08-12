@@ -208,3 +208,70 @@ export async function assertEventEmitIsDefinerOnly(sql: postgres.Sql): Promise<v
     )
   }
 }
+
+/**
+ * Throws when the definer owner is not the role the policies name.
+ *
+ * 🔴 THE PREMISE EVERY SECURITY DEFINER IN THIS TREE RESTS ON. Before migration
+ * 0062 it was: `crm_migrator` was NOLOGIN and owned nothing, migrations ran as a
+ * SUPERUSER, and all ~41 definer bodies executed as a role matching NEITHER
+ * `p_app` (TO crm_app) NOR `p_sys` (TO crm_migrator) on tables with FORCE ROW
+ * LEVEL SECURITY. They worked only because the owner bypassed RLS, and the 66
+ * `p_sys` policies had never executed once.
+ *
+ * That was invisible in development, where the owner IS a superuser, and fatal
+ * on a managed provider whose owner role is not — `app.stage_move` would raise
+ * `new row violates row-level security policy` at the FIRST CLOSE, after a
+ * green deploy, inside the money path.
+ *
+ * WHAT THIS CHECKS, and it is deliberately narrow:
+ *   - every managed relation with RLS is owned by `crm_migrator`, so a table
+ *     added by a migration that skipped `harden()` refuses the boot by name
+ *     rather than failing at runtime inside a definer;
+ *   - `crm_app` is not a member of `crm_migrator`. That grant is INERT today
+ *     and was inert before 0062; afterwards it is one `SET ROLE` from every row
+ *     in every tenant. `crm_app` is NOINHERIT, so the leak is not automatic —
+ *     which is worse rather than better, because `pg_has_role(…, 'USAGE')`
+ *     stays false while `'MEMBER'` is true. Both questions are asked.
+ *
+ * ⚠️ IT DOES NOT CHECK THAT THE OWNER IS BOUNDED. `p_sys` is `USING (true)`,
+ * and as `crm_migrator` you can drop it, disable FORCE, or grant `crm_app`
+ * anything. What 0062 bought is determinism and a non-superuser definer, not
+ * scoping — do not read this assertion as more than that.
+ */
+export async function assertDefinerOwnerIsPolicyBound(sql: postgres.Sql): Promise<void> {
+  const rows = await sql<{ foreign_rls: number; app_is_member: boolean }[]>`
+    SELECT (SELECT count(*)::int
+              FROM pg_class c
+             WHERE c.relkind IN ('r', 'p')
+               AND c.relrowsecurity
+               AND pg_get_userbyid(c.relowner) <> 'crm_migrator') AS foreign_rls,
+           pg_has_role('crm_app', 'crm_migrator', 'MEMBER') AS app_is_member`
+
+  const row = rows[0]
+  if (row === undefined) {
+    throw new Error('BOOT007: refusing to start. The definer-owner check returned nothing.')
+  }
+
+  if (row.app_is_member) {
+    throw new Error(
+      'BOOT007: refusing to start. crm_app is a member of crm_migrator.\n\n' +
+        'One SET ROLE reaches every p_sys policy, and p_sys is USING (true) on every ' +
+        'managed relation — so the application role would be one statement away from ' +
+        'every row in every tenant. crm_app is NOINHERIT, so nothing would look wrong ' +
+        'until somebody used it.\n\nREVOKE crm_migrator FROM crm_app.',
+    )
+  }
+
+  if (row.foreign_rls > 0) {
+    throw new Error(
+      `BOOT008: refusing to start. ${row.foreign_rls} relation(s) with row level ` +
+        'security are not owned by crm_migrator.\n\n' +
+        'Every SECURITY DEFINER in this tree runs as that role, and p_sys is the only ' +
+        'policy that admits it. A relation owned by anyone else is one a definer cannot ' +
+        'write — which surfaces as a failed close inside the money path, not here.\n\n' +
+        'Migration 0062 handed ownership over and security.managed_relations() re-takes ' +
+        'it on every harden(). Something created a relation outside that path.',
+    )
+  }
+}

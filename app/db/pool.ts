@@ -3,6 +3,7 @@ import postgres from 'postgres'
 import { installCapabilities } from '~/modules/communications/capability'
 
 import {
+  assertDefinerOwnerIsPolicyBound,
   assertEventEmitIsDefinerOnly,
   assertGateIsRecording,
   assertSafeConnection,
@@ -92,6 +93,19 @@ void assertGateIsRecording(pool).catch((err: unknown) => {
  * events, so a deploy that refuses to start is the only notice available.
  */
 void assertEventEmitIsDefinerOnly(pool).catch((err: unknown) => {
+  console.error(err instanceof Error ? err.message : err)
+  process.exit(1)
+})
+
+/**
+ * Migration 0062's handover, re-asserted at every boot.
+ *
+ * The one of these four whose failure is NOT a security regression but an
+ * outage: a managed relation owned by anyone but `crm_migrator` is a relation
+ * no SECURITY DEFINER can write, and the symptom is a close that fails inside
+ * the money path rather than anything visible here.
+ */
+void assertDefinerOwnerIsPolicyBound(pool).catch((err: unknown) => {
   console.error(err instanceof Error ? err.message : err)
   process.exit(1)
 })

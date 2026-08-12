@@ -435,6 +435,13 @@
       "when": 1786427461588,
       "tag": "0061_event_emit_definer_only",
       "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1786431061588,
+      "tag": "0062_definer_owner_is_policy_bound",
+      "breakpoints": true
     }
   ]
 }

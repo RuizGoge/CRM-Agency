@@ -77,6 +77,26 @@ export async function installJobSchema(
       GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO crm_app;
   `)
 
+  // 🔴 AND THE SAME FOR crm_migrator, WHICH 0062 MADE NECESSARY. `pgboss` is
+  // classified `exempt`, so the ownership handover deliberately does not reach
+  // it — but `app.webhook_ingest` is a SECURITY DEFINER that inserts into
+  // `pgboss.job`, and after 0062 it runs as `crm_migrator` rather than as a
+  // superuser. Without these grants every inbound Aloware webhook raises
+  // `permission denied for table job` and calls stop reaching sellers.
+  //
+  // 0062 carries the same block for the case where pgboss ALREADY exists. This
+  // one is the other half rather than a duplicate: on a fresh database
+  // `db:jobs` runs AFTER the migrations, so when 0062 executes there is no
+  // pgboss schema to grant on and its own block is skipped.
+  await client.unsafe(`
+    GRANT USAGE ON SCHEMA ${SCHEMA} TO crm_migrator;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ${SCHEMA} TO crm_migrator;
+    GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA ${SCHEMA} TO crm_migrator;
+    GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA ${SCHEMA} TO crm_migrator;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA ${SCHEMA}
+      GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO crm_migrator;
+  `)
+
   // The queues are created HERE, not by the worker. `boss.createQueue` is an
   // ordinary function rather than a definer, so a worker that had to create its
   // own queue would need privileges on the schema it is supposed to only read
