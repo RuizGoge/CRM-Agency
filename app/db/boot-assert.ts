@@ -275,3 +275,87 @@ export async function assertDefinerOwnerIsPolicyBound(sql: postgres.Sql): Promis
     )
   }
 }
+
+/**
+ * Throws when the application role can write the public money board.
+ *
+ * 🔴 WHAT 0063 FOUND. `crm_app` held EXECUTE on `app.ledger_append`, a SECURITY
+ * DEFINER whose body validates TENANCY AND NOTHING ELSE — no ownership check on
+ * `p_owner_user_id`, no bound on `p_delta_cents`, and `p_source_event_id` has no
+ * foreign key to anything. Reproduced as an ordinary seller session: one call
+ * appended 99,999,999,999.99 TO ANOTHER SELLER'S NAME, citing an event that
+ * does not exist and a deal that does not exist. A direct INSERT in the same
+ * session was refused. The table door held; the function door was open.
+ *
+ * The ledger is append-only with NO recompute job by design, so a forged row
+ * has no remediation path. That is why this is prevention rather than
+ * detection.
+ *
+ * THREE QUESTIONS, AND THE THIRD IS THE ONE THAT IS EASY TO MISS:
+ *   - is the function still ungranted;
+ *   - is there still exactly ONE overload (a later
+ *     `ledger_append(…, p_note text DEFAULT NULL)` granted to `crm_app` leaves
+ *     a signature-pinned check perfectly green);
+ *   - are both money CHECKs still present AND VALIDATED. `ADD CONSTRAINT …
+ *     NOT VALID` still enforces on new rows, so only `convalidated` catches a
+ *     constraint that was re-added without scanning what is already there.
+ */
+export async function assertLedgerAppendIsDefinerOnly(sql: postgres.Sql): Promise<void> {
+  const rows = await sql<
+    { overloads: number; granted: boolean | null; bounds: number; validated: number }[]
+  >`
+    SELECT (SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+             WHERE n.nspname = 'app' AND p.proname = 'ledger_append') AS overloads,
+           (SELECT bool_or(has_function_privilege('crm_app', p.oid, 'EXECUTE'))
+              FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+             WHERE n.nspname = 'app' AND p.proname = 'ledger_append') AS granted,
+           (SELECT count(*)::int FROM pg_constraint
+             WHERE conname IN ('earnings_delta_in_range',
+                               'leaderboard_total_within_ledger_reach')) AS bounds,
+           (SELECT count(*)::int FROM pg_constraint
+             WHERE conname IN ('earnings_delta_in_range',
+                               'leaderboard_total_within_ledger_reach')
+               AND convalidated) AS validated`
+
+  const row = rows[0]
+  if (row === undefined || row.overloads === 0) {
+    throw new Error(
+      'BOOT009: refusing to start. app.ledger_append does not exist.\n\n' +
+        'It is the only write path to earnings_ledger and to the public leaderboard. ' +
+        'Run the migrations.',
+    )
+  }
+
+  if (row.overloads > 1) {
+    throw new Error(
+      `BOOT010: refusing to start. app.ledger_append has ${row.overloads} overloads.\n\n` +
+        'A second signature is a second door, and a privilege check pinned to the first ' +
+        'one stays green while the new one is granted to crm_app. If the overload is ' +
+        'deliberate, this assertion has to be widened on purpose.',
+    )
+  }
+
+  if (row.granted === true) {
+    throw new Error(
+      'BOOT011: refusing to start. crm_app can execute app.ledger_append directly.\n\n' +
+        'Its body checks tenancy and nothing else: one statement writes arbitrary money ' +
+        "to any seller's name on the public Earnings board, sourced from an event that " +
+        'need not exist. The ledger is append-only with no recompute job, so there is no ' +
+        'way back.\n\nMigration 0063 revoked it; something granted it back, or a ' +
+        'DROP/CREATE reset the ACL to EXECUTE TO PUBLIC.',
+    )
+  }
+
+  if (row.bounds < 2 || row.validated < 2) {
+    throw new Error(
+      `BOOT012: refusing to start. ${row.bounds}/2 money bounds present, ` +
+        `${row.validated}/2 validated.\n\n` +
+        'earnings_delta_in_range caps one ledger entry; ' +
+        'leaderboard_total_within_ledger_reach ties the public number to arithmetic the ' +
+        'ledger could actually have produced. They bind the owner and the provider SQL ' +
+        'console, which a revoked grant cannot reach.\n\n' +
+        'A constraint re-added NOT VALID still enforces on new rows, which is why this ' +
+        'reads convalidated rather than existence.',
+    )
+  }
+}

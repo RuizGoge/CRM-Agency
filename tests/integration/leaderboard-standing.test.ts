@@ -1,8 +1,6 @@
-import { sql as raw } from 'drizzle-orm'
 import postgres from 'postgres'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { withTenant } from '~/db'
 import { readBoardFor, type BoardPayload } from '~/routes/api/leaderboard'
 
 import { TEST_URL } from './setup/urls'
@@ -48,18 +46,25 @@ const MIDFIELD_CENTS = 300_000n
 
 let sql: postgres.Sql
 
+/**
+ * The OWNER connection. Migration 0063 revoked EXECUTE on `app.ledger_append`
+ * from `crm_app`, so a fixture that seeds the board cannot run under the
+ * application role any more — see the longer note in `money-path.test.ts`.
+ * Nothing this file asserts depends on who called: the standing, the rank and
+ * the gap are properties of the projection.
+ */
 async function append(owner: string, sourceEventId: string, deltaCents: bigint): Promise<void> {
-  await withTenant({ tenantId: TENANT, userId: owner }, (tx) =>
-    tx.execute(
-      raw`SELECT * FROM app.ledger_append(
-            ${owner}::uuid, ${sourceEventId}::uuid, 'opportunity.won',
-            'sale'::app.ledger_entry_type, ${deltaCents.toString()}::bigint,
-            '2026-03-15T18:30:00Z'::timestamptz,
-            '00000000-0000-7000-8000-00000000aad1'::uuid,
-            '00000000-0000-7000-8000-00000000bbd1'::uuid,
-            NULL, 'Closed Won', 1::bigint, NULL, NULL, NULL, NULL)`,
-    ),
-  )
+  await sql.begin(async (tx) => {
+    await tx`SELECT app.begin_request(${TENANT}::uuid, ${owner}::uuid)`
+    await tx`
+      SELECT * FROM app.ledger_append(
+        ${owner}::uuid, ${sourceEventId}::uuid, 'opportunity.won',
+        'sale'::app.ledger_entry_type, ${deltaCents.toString()}::bigint,
+        '2026-03-15T18:30:00Z'::timestamptz,
+        '00000000-0000-7000-8000-00000000aad1'::uuid,
+        '00000000-0000-7000-8000-00000000bbd1'::uuid,
+        NULL, 'Closed Won', 1::bigint, NULL, NULL, NULL, NULL)`
+  })
 }
 
 const board = (userId: string): Promise<BoardPayload> =>

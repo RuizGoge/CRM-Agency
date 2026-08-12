@@ -5,6 +5,7 @@ import { installCapabilities } from '~/modules/communications/capability'
 import {
   assertDefinerOwnerIsPolicyBound,
   assertEventEmitIsDefinerOnly,
+  assertLedgerAppendIsDefinerOnly,
   assertGateIsRecording,
   assertSafeConnection,
 } from './boot-assert'
@@ -106,6 +107,18 @@ void assertEventEmitIsDefinerOnly(pool).catch((err: unknown) => {
  * the money path rather than anything visible here.
  */
 void assertDefinerOwnerIsPolicyBound(pool).catch((err: unknown) => {
+  console.error(err instanceof Error ? err.message : err)
+  process.exit(1)
+})
+
+/**
+ * Migration 0063's revoke and its two money bounds, re-asserted at every boot.
+ *
+ * Like 0061's, this guards something with NO symptom on any screen — nothing
+ * about the board, the tests or a seller's day changes if the grant comes back.
+ * Unlike 0061's, what it guards is the public money number.
+ */
+void assertLedgerAppendIsDefinerOnly(pool).catch((err: unknown) => {
   console.error(err instanceof Error ? err.message : err)
   process.exit(1)
 })

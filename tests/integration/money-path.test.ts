@@ -36,22 +36,38 @@ const ANNUAL_CENTS = 299_988n
 
 let sql: postgres.Sql
 
+/**
+ * ⚠️ THE OWNER CONNECTION, AND THAT IS A LOSS RATHER THAN A FIX.
+ *
+ * These two helpers ran through `withTenant` — as `crm_app`, under the
+ * production privilege set — until migration 0063 revoked EXECUTE on
+ * `app.ledger_append` from that role. The call is no longer expressible there,
+ * BY DESIGN: the body validates tenancy and nothing else, so one statement from
+ * any route wrote arbitrary money to any seller's name on the public board.
+ *
+ * So these tests are RE-AIMED, not repaired. What the old wrapper demonstrated
+ * is now false, and it is asserted as false below in
+ * 'rejects the application role calling the writer'. Everything else this file
+ * proves — the append-only trigger, the four period buckets, the reveal delay,
+ * the reversal rules — is a property of the ledger and not of who called, and
+ * the INSERTs were always the owner's inside the definer regardless.
+ */
 async function seedEntry(
   owner: string,
   sourceEventId: string,
   deltaCents: bigint,
   occurredAt = '2026-03-15T18:30:00Z',
 ): Promise<{ entryId: string; wasDuplicate: boolean }> {
-  return withTenant({ tenantId: TENANT, userId: owner }, async (tx) => {
-    const rows = await tx.execute<{ entry_id: string; was_duplicate: boolean }>(
-      raw`SELECT * FROM app.ledger_append(
-            ${owner}::uuid, ${sourceEventId}::uuid, 'opportunity.won',
-            'sale'::app.ledger_entry_type, ${deltaCents.toString()}::bigint,
-            ${occurredAt}::timestamptz,
-            '00000000-0000-7000-8000-00000000aaa1'::uuid,
-            '00000000-0000-7000-8000-00000000bbb1'::uuid,
-            NULL, 'Closed Won', 1::bigint, NULL, NULL, NULL, NULL)`,
-    )
+  return sql.begin(async (tx) => {
+    await tx`SELECT app.begin_request(${TENANT}::uuid, ${owner}::uuid)`
+    const rows = await tx<{ entry_id: string; was_duplicate: boolean }[]>`
+      SELECT * FROM app.ledger_append(
+        ${owner}::uuid, ${sourceEventId}::uuid, 'opportunity.won',
+        'sale'::app.ledger_entry_type, ${deltaCents.toString()}::bigint,
+        ${occurredAt}::timestamptz,
+        '00000000-0000-7000-8000-00000000aaa1'::uuid,
+        '00000000-0000-7000-8000-00000000bbb1'::uuid,
+        NULL, 'Closed Won', 1::bigint, NULL, NULL, NULL, NULL)`
     const row = rows[0]
     if (!row) throw new Error('ledger_append returned nothing')
     return { entryId: row.entry_id, wasDuplicate: row.was_duplicate }
@@ -65,18 +81,18 @@ async function seedReversal(
   deltaCents: bigint,
   reversesEntryId: string,
 ): Promise<void> {
-  await withTenant({ tenantId: TENANT, userId: owner }, (tx) =>
-    tx.execute(
-      raw`SELECT * FROM app.ledger_append(
-            ${owner}::uuid, ${sourceEventId}::uuid, 'opportunity.reopened',
-            'reversal'::app.ledger_entry_type, ${deltaCents.toString()}::bigint,
-            '2026-03-15T18:30:00Z'::timestamptz,
-            '00000000-0000-7000-8000-00000000aaa1'::uuid,
-            '00000000-0000-7000-8000-00000000bbb1'::uuid,
-            NULL, 'Closed Won', 1::bigint, NULL, NULL, NULL,
-            ${reversesEntryId}::uuid)`,
-    ),
-  )
+  await sql.begin(async (tx) => {
+    await tx`SELECT app.begin_request(${TENANT}::uuid, ${owner}::uuid)`
+    await tx`
+      SELECT * FROM app.ledger_append(
+        ${owner}::uuid, ${sourceEventId}::uuid, 'opportunity.reopened',
+        'reversal'::app.ledger_entry_type, ${deltaCents.toString()}::bigint,
+        '2026-03-15T18:30:00Z'::timestamptz,
+        '00000000-0000-7000-8000-00000000aaa1'::uuid,
+        '00000000-0000-7000-8000-00000000bbb1'::uuid,
+        NULL, 'Closed Won', 1::bigint, NULL, NULL, NULL,
+        ${reversesEntryId}::uuid)`
+  })
 }
 
 beforeAll(async () => {
@@ -457,5 +473,108 @@ describe('the public board hides a win that can still be undone', () => {
            DATE '2026-03-15', DATE '2026-03-09', DATE '2026-03-01',
            'America/New_York', now())`,
     ).rejects.toThrow(/earnings_reversal_names_its_target/)
+  })
+})
+
+describe('the public money board has no application-role writer', () => {
+  it('refuses crm_app EXECUTE on ledger_append, and keeps stage_move open', async () => {
+    // 🎯 THE TEST OF MIGRATION 0063. Before it, one statement from any route
+    // wrote arbitrary money to any seller's name on the public Earnings board,
+    // sourced from an event that need not exist — reproduced live, 99,999,999,
+    // 999.99 to a colleague. The table door held; the function door was open.
+    //
+    // MUTATION: `GRANT EXECUTE ON FUNCTION app.ledger_append(…) TO crm_app` in
+    // a later migration. Every other test in this file stays green, the board
+    // is identical, nothing on any screen changes.
+    const rows = await sql<{ proname: string; granted: boolean }[]>`
+      SELECT p.proname, has_function_privilege('crm_app', p.oid, 'EXECUTE') AS granted
+        FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname = 'app' AND p.proname IN ('ledger_append', 'stage_move')`
+    const granted = Object.fromEntries(rows.map((r) => [r.proname, r.granted]))
+
+    expect(granted['ledger_append']).toBe(false)
+    // THE POSITIVE CONTROL. Without it this passes over a database where
+    // neither function exists and `granted` is an empty object.
+    expect(granted['stage_move']).toBe(true)
+  })
+
+  it('rejects the application role calling the writer', async () => {
+    const error = await withTenant({ tenantId: TENANT, userId: SELLER }, async (tx) =>
+      tx.execute(raw`
+        SELECT app.ledger_append(${RIVAL}::uuid, gen_random_uuid(), 'opportunity.won',
+                                 'sale'::app.ledger_entry_type, 999999999::bigint,
+                                 clock_timestamp())`),
+    ).catch((e: unknown) => e)
+
+    // Drizzle rewraps the driver error one level down; the text is in `.cause`.
+    const parts: string[] = []
+    let cursor: unknown = error
+    while (cursor instanceof Error) {
+      parts.push(cursor.message)
+      cursor = cursor.cause
+    }
+    expect(parts.join(' | ')).toMatch(/permission denied/i)
+  })
+
+  it('has exactly one function in the database that appends to the ledger', async () => {
+    // 🔴 STRONGER THAN THE PRIVILEGE CHECK. Every SECURITY DEFINER the owner
+    // owns reaches `ledger_append` with no grant at all, so a third one added
+    // later — crediting a caller-supplied premium with no close gate in front
+    // of it — trips nothing above. Comments are stripped first: the same
+    // precedent as `definer-tenancy.test.ts`, which once went red on the prose
+    // explaining its own rule.
+    const rows = await sql<{ proname: string }[]>`
+      SELECT p.proname
+        FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname IN ('app', 'ref')
+         AND regexp_replace(p.prosrc, '--[^\n]*', '', 'g') LIKE '%ledger_append(%'
+       ORDER BY p.proname`
+    expect(rows.map((r) => r.proname)).toEqual(['stage_move'])
+  })
+
+  it('bounds one ledger entry, and bounds the public number to the ledger', async () => {
+    // 🔴 THE REVOKE DOES NOT REACH THESE, WHICH IS WHY THEY EXIST. A CHECK on
+    // the table binds a FUTURE definer — which needs no grant — and binds the
+    // owner in the provider's SQL console, where a revoked grant means nothing.
+    //
+    // The board bound is DERIVED rather than chosen: the projection is
+    // maintained by ledger_append, `entry_count` counts the rows that produced
+    // `total_cents`, and each of those is capped at 1e9. So a hand-written
+    // UPDATE can still move the board — it cannot move it anywhere the record
+    // could not have put it.
+    //
+    // MUTATION: re-add either constraint with `NOT VALID`. It still enforces on
+    // new rows, so every behavioural test stays green; only `convalidated`
+    // notices, and only here and at boot.
+    const rows = await sql<{ conname: string; def: string; validated: boolean }[]>`
+      SELECT conname, pg_get_constraintdef(oid) AS def, convalidated AS validated
+        FROM pg_constraint
+       WHERE conname IN ('earnings_delta_in_range', 'leaderboard_total_within_ledger_reach')
+       ORDER BY conname`
+
+    expect(rows.map((r) => r.conname)).toEqual([
+      'earnings_delta_in_range',
+      'leaderboard_total_within_ledger_reach',
+    ])
+    for (const row of rows) expect(row.validated).toBe(true)
+    // Read out of the catalog, never asserted against a literal typed here — a
+    // hardcoded expectation shaped like a query is how a bound gets quietly
+    // widened and the test edited to match.
+    expect(rows[0]?.def).toContain('1000000000')
+    expect(rows[1]?.def).toContain('entry_count')
+  })
+
+  it('refuses a ledger entry past the per-entry ceiling, even as the owner', async () => {
+    // 🎯 THE POINT OF PUTTING THE BOUND ON THE TABLE. This runs on the OWNER
+    // connection, through the sanctioned writer — the exact posture a future
+    // definer has, and the exact posture the provider's SQL console has. A
+    // revoked grant reaches neither. Reproduced before the constraint existed:
+    // 99,999,999,999.99 landed, to another seller's name.
+    //
+    // MUTATION: drop `earnings_delta_in_range`. Nothing else in the suite
+    // notices — the fixtures all sit four orders of magnitude below it.
+    await expect(
+      seedEntry(SELLER, '00000000-0000-7000-8000-00000000e0ff', 99_999_999_999_999n),
+    ).rejects.toThrow(/earnings_delta_in_range/)
   })
 })
