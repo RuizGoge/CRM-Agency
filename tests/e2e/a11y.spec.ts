@@ -2,7 +2,7 @@ import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Page } from '@playwright/test'
 
 import { expectCount, expectUrl } from './fixtures/clock'
-import { signIn } from './fixtures/seller'
+import { signIn, signInAsAdmin } from './fixtures/seller'
 
 /**
  * WCAG 2.1 AA with zero serious or critical findings is declared a gate, and
@@ -114,6 +114,25 @@ test.describe('every surface passes axe with no serious or critical finding', ()
 
     await dialog.getByRole('combobox').fill('Doris')
     await expect(dialog.getByRole('option').first()).toBeVisible()
+
+    expect(await seriousOrCritical(page)).toEqual([])
+  })
+
+  test('integration health, including the credential form', async ({ page }) => {
+    // ⚠️ THIS SCREEN WAS NEVER UNDER THE GATE. It has existed since the
+    // dead-letter work and no axe case ever visited it — a surface outside the
+    // scan is not gated, whatever the constitution says. It is added here
+    // because 0068 gave it a FORM: a labelled text input, a create button and a
+    // two-step revoke, which is the first genuinely interactive control on an
+    // admin screen and exactly the class of thing axe exists to check.
+    await signInAsAdmin(page)
+    await page.goto('/admin/integration-health')
+    await expect(page.getByRole('heading', { name: 'Integration health' })).toBeVisible()
+
+    // The section fetches its own data, so the heading is on the page before
+    // the credential list is — the same half-rendered trap My Day set above.
+    await expect(page.getByRole('heading', { name: 'Aloware connection' })).toBeVisible()
+    await expect(page.getByLabel('Add an endpoint')).toBeVisible()
 
     expect(await seriousOrCritical(page)).toEqual([])
   })

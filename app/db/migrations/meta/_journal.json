@@ -477,6 +477,13 @@
       "when": 1786449061588,
       "tag": "0067_identity_is_sealed",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1786452661588,
+      "tag": "0068_webhook_endpoint_writer",
+      "breakpoints": true
     }
   ]
 }

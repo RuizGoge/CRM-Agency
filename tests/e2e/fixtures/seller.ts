@@ -18,10 +18,29 @@ export const DEMO_SELLER = {
   displayName: 'Renata',
 } as const
 
+/**
+ * The demo tenant's admin. Seeded on 2026-08-12, because until then every
+ * seeded user was a `seller` and `/admin/integration-health` had no possible
+ * viewer — the surface existed, was tested, and nobody could open it.
+ */
+export const DEMO_ADMIN = {
+  email: 'valeria@demo.test',
+  password: 'demo-password-1234',
+  displayName: 'Valeria',
+} as const
+
 export async function signIn(page: Page): Promise<void> {
+  await signInAs(page, DEMO_SELLER)
+}
+
+export async function signInAsAdmin(page: Page): Promise<void> {
+  await signInAs(page, DEMO_ADMIN)
+}
+
+async function signInAs(page: Page, who: { email: string; password: string }): Promise<void> {
   await page.goto('/sign-in')
-  await page.getByLabel('Email').fill(DEMO_SELLER.email)
-  await page.getByLabel('Password').fill(DEMO_SELLER.password)
+  await page.getByLabel('Email').fill(who.email)
+  await page.getByLabel('Password').fill(who.password)
   await page.getByRole('button', { name: 'Sign in' }).click()
 
   // The shell only exists once a session does, so this doubles as the

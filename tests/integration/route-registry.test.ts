@@ -18,6 +18,7 @@ import * as quickAdd from '~/routes/api/quick-add'
 import * as search from '~/routes/api/search'
 import * as signOut from '~/routes/api/sign-out'
 import * as timeline from '~/routes/api/timeline'
+import * as webhookEndpoints from '~/routes/api/webhook-endpoints'
 import * as webhooksAloware from '~/routes/api/webhooks-aloware'
 
 /**
@@ -102,6 +103,7 @@ const MODULE_ENTRIES: readonly (readonly [string, Record<string, unknown>])[] = 
   ['routes/api/search.ts', search],
   ['routes/api/sign-out.ts', signOut],
   ['routes/api/timeline.ts', timeline],
+  ['routes/api/webhook-endpoints.ts', webhookEndpoints],
   ['routes/api/webhooks-aloware.ts', webhooksAloware],
 ]
 
@@ -205,14 +207,22 @@ describe('what the registry lets the suites ask', () => {
       ).toBeGreaterThan(80)
     }
 
-    // Pinned. Six today, and each one is argued in its own module. A seventh is
-    // a decision somebody makes on purpose.
+    // Pinned. SEVEN today, and each one is argued in its own module. An eighth
+    // is a decision somebody makes on purpose.
+    //
+    // `webhook-endpoints.ts` joined on 2026-08-12 and its reason is the
+    // strongest of the seven rather than the weakest: `app.webhook_endpoint` is
+    // `definer_only`, so there is no foreign id a probe could present that
+    // produces a distinguishable answer — `webhook_endpoint_revoke` returns the
+    // same `false` for an unknown id and for another tenant's, which is the
+    // not-found rule holding in the function rather than in the route.
     expect(optedOut.map(({ mount }) => mount.modulePath).sort()).toEqual([
       'routes/api/home-setup.ts',
       'routes/api/integration-health.ts',
       'routes/api/leaderboard.ts',
       'routes/api/quick-add.ts',
       'routes/api/sign-out.ts',
+      'routes/api/webhook-endpoints.ts',
       'routes/api/webhooks-aloware.ts',
     ])
   })

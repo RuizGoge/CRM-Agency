@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm'
 import { withTenant } from '~/db'
 import { requireIdentity } from '~/lib/auth/identity'
 import { defineEndpoint } from '~/lib/endpoint/define'
+import type { WebhookEndpointRow } from '~/routes/api/webhook-endpoints'
 
 /**
  * `GET /api/integration-health` — §4.6's counter, as data.
@@ -42,6 +43,12 @@ export interface HealthPayload {
     /** False once the vault has purged the body — the DLQ inherits its clock. */
     readonly bodyRetained: boolean
   }[]
+  /**
+   * The ingest credentials, live first. An EMPTY list is the loudest thing this
+   * payload can say: nothing can reach the edge, every delivery is being
+   * answered 401, and Aloware does not retry.
+   */
+  readonly endpoints: readonly WebhookEndpointRow[]
   /**
    * 🔴 A PERMANENT LINE, NOT AN OMISSION. §4.2 ruling 3: when we cannot verify
    * a provider's deliveries, the fact that we cannot is rendered rather than
@@ -100,6 +107,23 @@ export async function readIntegrationHealth(request: Request): Promise<HealthRes
        WHERE tenant_id = app.current_tenant() AND resolved_at IS NULL
        ORDER BY last_seen_at DESC`)
 
+    // 🔴 THE CREDENTIAL BELONGS ON THIS SCREEN, not on a settings page nobody
+    // opens. An endpoint list that is EMPTY is the single most important thing
+    // an admin can be told here: it means every call and text Aloware sends is
+    // being answered 401 and thrown away, and the provider never retries. The
+    // counters above would all read zero while that happened.
+    const endpoints = await tx.execute<{
+      endpoint_id: string
+      provider: string
+      label: string
+      created_at: string
+      revoked_at: string | null
+    }>(sql`
+      SELECT endpoint_id, provider, label,
+             to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
+             to_char(revoked_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS revoked_at
+        FROM app.webhook_endpoint_list()`)
+
     const [counts] = await tx.execute<{ unparsed: string; quarantined: string }>(sql`
       SELECT
         (SELECT count(*) FROM app.inbound_webhook_event
@@ -125,6 +149,13 @@ export async function readIntegrationHealth(request: Request): Promise<HealthRes
           attemptCount: d.attempt_count,
           lastSeenAt: d.last_seen_at,
           bodyRetained: d.body_retained,
+        })),
+        endpoints: [...endpoints].map((e) => ({
+          endpointId: e.endpoint_id,
+          provider: e.provider,
+          label: e.label,
+          createdAt: e.created_at,
+          revokedAt: e.revoked_at,
         })),
         signatureVerification: 'unavailable',
         // `Number.parseInt`, never `Number(` — the money guard bans the latter

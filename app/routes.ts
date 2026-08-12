@@ -50,6 +50,10 @@ export default [
   route('webhooks/aloware/v1/:endpointToken', 'routes/api/webhooks-aloware.ts'),
   route('api/celebrate', 'routes/api/celebrate.ts'),
   route('api/integration-health', 'routes/api/integration-health.ts'),
+  // The writer the ingest edge never had. Admin-only, and the check lives inside
+  // the definer rather than here — `webhook_endpoint` is `definer_only`, so
+  // `crm_app` holds no privilege on the table at all.
+  route('api/webhook-endpoints', 'routes/api/webhook-endpoints.ts'),
   // better-auth mounts its whole surface under one splat. See the note in the
   // module for why this is the one resource route outside the endpoint factory.
   route('api/auth/*', 'routes/api/auth.ts'),

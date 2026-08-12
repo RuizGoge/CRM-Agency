@@ -74,6 +74,13 @@ export default function IntegrationHealth(_: Route.ComponentProps): React.JSX.El
     }
   }, [read])
 
+  // Re-read after issuing or revoking. The credential list is the one part of
+  // this screen the admin CHANGES, so it cannot be left showing what was true
+  // before their click.
+  const refresh = useCallback(() => {
+    void read().then(setState, () => setState({ status: 'error' }))
+  }, [read])
+
   // LOADING STATE — a skeleton, never a spinner.
   if (state.status === 'loading') {
     return (
@@ -171,6 +178,8 @@ export default function IntegrationHealth(_: Route.ComponentProps): React.JSX.El
         </p>
       </section>
 
+      <Endpoints endpoints={health.endpoints} onChanged={refresh} />
+
       {quiet ? (
         // EMPTY STATE, and it says what "empty" MEANS rather than reporting
         // absence twice. §4.10: "a state that only reports absence is a defect."
@@ -213,6 +222,263 @@ function Shell({ children }: { children: React.ReactNode }): React.JSX.Element {
       </h1>
       {children}
     </main>
+  )
+}
+
+/**
+ * The ingest credential — issue, list, revoke.
+ *
+ * 🔴 THE EMPTY STATE IS THE REASON THIS SECTION EXISTS. With no live endpoint,
+ * `app.webhook_ingest` resolves no tenant for any token, the edge answers 401 to
+ * every delivery, and G2 measured that Aloware never retries. Every counter
+ * above reads zero while that happens, because nothing was ever stored to count.
+ * So "no connection" has to be the loudest thing on the screen, not a blank
+ * list.
+ */
+function Endpoints({
+  endpoints,
+  onChanged,
+}: {
+  endpoints: HealthPayload['endpoints']
+  onChanged: () => void
+}): React.JSX.Element {
+  const [label, setLabel] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [issued, setIssued] = useState<{ token: string } | null>(null)
+  const [problem, setProblem] = useState<string | null>(null)
+  const [confirming, setConfirming] = useState<string | null>(null)
+
+  const live = endpoints.filter((e) => e.revokedAt === null)
+
+  const post = useCallback(
+    async (body: Record<string, string>): Promise<Response> =>
+      fetch('/api/webhook-endpoints', {
+        method: 'POST',
+        headers: { accept: 'application/json' },
+        body: new URLSearchParams(body),
+      }),
+    [],
+  )
+
+  const issue = useCallback(async (): Promise<void> => {
+    setBusy(true)
+    setProblem(null)
+    try {
+      const response = await post({ intent: 'issue', provider: 'aloware', label })
+      const result = (await response.json()) as
+        | { status: 'issued'; token: string }
+        | { status: 'invalid'; reason: string }
+        | { status: 'forbidden' }
+
+      if (result.status === 'issued') {
+        setIssued({ token: result.token })
+        setLabel('')
+        onChanged()
+      } else if (result.status === 'invalid') {
+        setProblem(result.reason)
+      } else {
+        setProblem('Only admins can change this.')
+      }
+    } catch {
+      // 🔴 THE SERVER DISAGREEING MUST BE VISIBLE. A silent failure here reads
+      // as "nothing happened" while the operator believes they have a token.
+      setProblem('We couldn’t reach the server. Nothing was created.')
+    } finally {
+      setBusy(false)
+    }
+  }, [label, onChanged, post])
+
+  const revoke = useCallback(
+    async (endpointId: string): Promise<void> => {
+      setBusy(true)
+      setProblem(null)
+      try {
+        const response = await post({ intent: 'revoke', endpointId })
+        if (!response.ok) setProblem('That endpoint is already gone.')
+        setConfirming(null)
+        onChanged()
+      } catch {
+        setProblem('We couldn’t reach the server. Nothing changed.')
+      } finally {
+        setBusy(false)
+      }
+    },
+    [onChanged, post],
+  )
+
+  return (
+    <section aria-labelledby="endpoints-heading" style={{ marginBottom: 'var(--space-6)' }}>
+      <h2
+        id="endpoints-heading"
+        style={{ fontSize: 'var(--type-lg)', fontWeight: 'var(--font-weight-semibold)' }}
+      >
+        Aloware connection
+      </h2>
+
+      {live.length === 0 && (
+        <p
+          role="alert"
+          style={{
+            ...CARD,
+            marginTop: 'var(--space-3)',
+            borderColor: 'var(--color-danger-stroke)',
+            background: 'var(--color-danger-fill)',
+            color: 'var(--color-danger-text)',
+          }}
+        >
+          <strong>Nothing is connected.</strong> Aloware can&rsquo;t reach us, so every call and
+          text it sends is being turned away and is not kept. Create an endpoint below, then paste
+          its URL into Aloware.
+        </p>
+      )}
+
+      {/* THE TOKEN, ONCE. Only its digest is stored, so there is no second read
+          and no recovery — an admin who loses it issues another and revokes
+          this one. Saying so beside the value is the whole affordance. */}
+      {issued !== null && (
+        <div
+          role="status"
+          style={{
+            ...CARD,
+            marginTop: 'var(--space-3)',
+            borderColor: 'var(--color-success-stroke)',
+            background: 'var(--color-success-fill)',
+          }}
+        >
+          <p style={{ fontWeight: 'var(--font-weight-semibold)' }}>
+            Paste this URL into Aloware now — you won&rsquo;t be able to see it again.
+          </p>
+          <code
+            style={{
+              display: 'block',
+              marginTop: 'var(--space-2)',
+              padding: 'var(--space-3)',
+              background: 'var(--color-surface-2)',
+              borderRadius: 'var(--radius-sm)',
+              fontSize: 'var(--type-sm)',
+              overflowWrap: 'anywhere',
+            }}
+          >
+            {`${globalThis.location?.origin ?? ''}/webhooks/aloware/v1/${issued.token}`}
+          </code>
+          <button
+            type="button"
+            onClick={() => setIssued(null)}
+            style={{ marginTop: 'var(--space-3)' }}
+          >
+            I&rsquo;ve saved it
+          </button>
+        </div>
+      )}
+
+      {problem !== null && (
+        <p role="alert" style={{ marginTop: 'var(--space-3)', color: 'var(--color-danger-text)' }}>
+          {problem}
+        </p>
+      )}
+
+      <ul style={{ listStyle: 'none', padding: 0, marginTop: 'var(--space-3)' }}>
+        {endpoints.map((e) => (
+          <li key={e.endpointId} style={{ ...CARD, marginTop: 'var(--space-3)' }}>
+            <div style={{ fontWeight: 'var(--font-weight-semibold)' }}>{e.label}</div>
+            <p
+              style={{
+                marginTop: 'var(--space-1)',
+                fontSize: 'var(--type-sm)',
+                color: 'var(--color-text-tertiary)',
+              }}
+            >
+              {e.provider} · added {e.createdAt.slice(0, 10)}
+              {e.revokedAt === null ? '' : ` · turned off ${e.revokedAt.slice(0, 10)}`}
+            </p>
+
+            {e.revokedAt === null &&
+              // ⚠️ A CONFIRM STEP, NOT OPTIMISTIC-WITH-UNDO, and the exception is
+              // argued rather than assumed. The house rule prefers a 5 s undo
+              // "where it is safe"; here it is not. From the instant a revoke
+              // commits the edge answers 401, and Aloware does not retry — so
+              // everything sent during an undo window is lost for good rather
+              // than replayed. Two clicks beat five seconds of silent loss.
+              (confirming === e.endpointId ? (
+                <div style={{ marginTop: 'var(--space-3)' }}>
+                  <button type="button" disabled={busy} onClick={() => void revoke(e.endpointId)}>
+                    Yes, turn it off
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setConfirming(null)}
+                    style={{ marginLeft: 'var(--space-2)' }}
+                  >
+                    Keep it
+                  </button>
+                  <p
+                    style={{
+                      marginTop: 'var(--space-2)',
+                      fontSize: 'var(--type-sm)',
+                      color: 'var(--color-text-tertiary)',
+                    }}
+                  >
+                    Calls and texts sent after this are turned away and can&rsquo;t be recovered.
+                    Add the replacement in Aloware first.
+                  </p>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setConfirming(e.endpointId)}
+                  style={{ marginTop: 'var(--space-3)' }}
+                >
+                  Turn off
+                </button>
+              ))}
+          </li>
+        ))}
+      </ul>
+
+      <div style={{ ...CARD, marginTop: 'var(--space-3)' }}>
+        <label htmlFor="endpoint-label" style={{ fontWeight: 'var(--font-weight-semibold)' }}>
+          Add an endpoint
+        </label>
+        <p
+          style={{
+            marginTop: 'var(--space-1)',
+            fontSize: 'var(--type-sm)',
+            color: 'var(--color-text-tertiary)',
+          }}
+        >
+          Name it after where you&rsquo;ll paste it, so you know which one to turn off later.
+        </p>
+        <input
+          id="endpoint-label"
+          value={label}
+          maxLength={80}
+          disabled={busy}
+          onChange={(event) => setLabel(event.target.value)}
+          placeholder="Aloware production"
+          style={{
+            display: 'block',
+            marginTop: 'var(--space-2)',
+            padding: 'var(--space-2)',
+            width: '100%',
+            maxWidth: '24rem',
+            border: '1px solid var(--color-border-subtle)',
+            borderRadius: 'var(--radius-sm)',
+            background: 'var(--color-surface-1)',
+            color: 'var(--color-text-primary)',
+          }}
+        />
+        <button
+          type="button"
+          disabled={busy || label.trim() === ''}
+          onClick={() => void issue()}
+          style={{ marginTop: 'var(--space-3)' }}
+        >
+          {busy ? 'Working…' : 'Create endpoint'}
+        </button>
+      </div>
+    </section>
   )
 }
 
