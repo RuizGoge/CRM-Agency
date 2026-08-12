@@ -288,12 +288,19 @@ describe('the store is append-only and the application role is not its writer', 
     // `definer-tenancy.test.ts`, which once went red on the prose explaining its
     // own rule.
     //
-    // ✅ AND IT HAS DONE ITS JOB TWICE. `app.opportunity_create` (0065) and
-    // `app.activity_log_note` (0066) each turned this red the moment they
-    // landed. That is the gate working rather than being in the way: after 0061
-    // emission is a SQL-only capability, so every new emitter is a definer —
-    // and the point of this list is that adding one is a DELIBERATE ACT visible
-    // in a diff. Growing it is fine; growing it unnoticed is what this refuses.
+    // ✅ AND IT HAS DONE ITS JOB THREE TIMES. `app.opportunity_create` (0065),
+    // `app.activity_log_note` (0066) and `app.message_merge` (0069) each turned
+    // this red the moment they landed. That is the gate working rather than
+    // being in the way: after 0061 emission is a SQL-only capability, so every
+    // new emitter is a definer — and the point of this list is that adding one
+    // is a DELIBERATE ACT visible in a diff. Growing it is fine; growing it
+    // unnoticed is what this refuses.
+    //
+    // 🔴 `message_merge` IS THE ONE THAT MATTERS MOST HERE, because it is the
+    // first emitter that fires from a JOB rather than from a seller's click,
+    // and the event it emits — `message.received` — is the one the STOP chain
+    // hangs off. It carries no GRANT and no privilege check would have seen it;
+    // this `prosrc` scan is the only thing in the tree that does.
     const rows = await sql<{ proname: string }[]>`
       SELECT p.proname
         FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -304,6 +311,7 @@ describe('the store is append-only and the application role is not its writer', 
     expect(rows.map((r) => r.proname)).toEqual([
       'activity_log_note',
       'compliance_record',
+      'message_merge',
       'opportunity_create',
       'stage_move',
     ])
