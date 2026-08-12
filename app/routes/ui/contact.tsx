@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 
+import { StartDeal } from '~/components/contacts/start-deal'
 import { Timeline } from '~/components/contacts/timeline'
 import { useParams } from 'react-router'
 
@@ -37,6 +38,10 @@ export function meta() {
 export default function Contact(): React.JSX.Element {
   const { contactId } = useParams()
   const [state, setState] = useState<State>({ status: 'loading' })
+  // Bumping this re-runs the fetch below, so a newly started deal appears
+  // through the SAME read path that drew the list — no second source of truth
+  // for what deals this contact has, and no client-side splice to drift.
+  const [attempt, setAttempt] = useState(0)
 
   const read = useCallback(async (id: string, signal: AbortSignal): Promise<State> => {
     const response = await fetch(`/api/contacts/${id}`, {
@@ -57,7 +62,7 @@ export default function Contact(): React.JSX.Element {
 
     void read(contactId, controller.signal).then(apply, () => apply({ status: 'error' }))
     return () => controller.abort()
-  }, [contactId, read])
+  }, [contactId, read, attempt])
 
   return (
     <main
@@ -82,12 +87,20 @@ export default function Contact(): React.JSX.Element {
         />
       ) : null}
 
-      {state.status === 'ready' ? <Record contact={state.contact} /> : null}
+      {state.status === 'ready' ? (
+        <Record contact={state.contact} onChanged={() => setAttempt((n) => n + 1)} />
+      ) : null}
     </main>
   )
 }
 
-function Record({ contact }: { contact: ContactRecord }): React.JSX.Element {
+function Record({
+  contact,
+  onChanged,
+}: {
+  contact: ContactRecord
+  onChanged: () => void
+}): React.JSX.Element {
   return (
     <>
       <h1
@@ -156,10 +169,11 @@ function Record({ contact }: { contact: ContactRecord }): React.JSX.Element {
             color: 'var(--color-text-secondary)',
           }}
         >
-          {/* Teaches the first action, like every other empty state here. One
-              contact legitimately buys twice, so "no open deal" is a starting
-              point rather than a closed door. */}
-          No open deal. Start one from your board.
+          {/* ⚠️ THIS USED TO SAY "Start one from your board", WHICH WAS A DEAD
+              END: `app.opportunity` had no writer anywhere in the product, so
+              the board could not start one either. The button below is that
+              sentence, made true. */}
+          No open deal yet.
         </p>
       ) : (
         <ul
@@ -208,6 +222,11 @@ function Record({ contact }: { contact: ContactRecord }): React.JSX.Element {
           ))}
         </ul>
       )}
+
+      {/* Under the list rather than inside the empty state: one contact
+          legitimately buys twice, so starting a second deal is an ordinary
+          action rather than something that disappears once the first exists. */}
+      <StartDeal contactId={contact.id} hasDeals={contact.deals.length > 0} onStarted={onChanged} />
 
       {/* The Aloware inspection surface. It sits on the FULL contact view and
           deliberately not in the drawer: the drawer is a seller's first glance

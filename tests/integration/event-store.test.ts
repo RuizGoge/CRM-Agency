@@ -277,7 +277,7 @@ describe('the store is append-only and the application role is not its writer', 
     expect(parts.join(' | ')).toMatch(/permission denied/i)
   })
 
-  it('has exactly two functions in the whole database that write the store', async () => {
+  it('has exactly three functions in the whole database that write the store', async () => {
     // 🔴 STRONGER THAN THE PRIVILEGE CHECK, and it catches what that one cannot.
     // `app.event_emit` is reachable by every SECURITY DEFINER the owner owns, so
     // a THIRD definer added later — one that emits `opportunity.won` with a
@@ -287,6 +287,13 @@ describe('the store is append-only and the application role is not its writer', 
     // Comments are stripped first: the same precedent as
     // `definer-tenancy.test.ts`, which once went red on the prose explaining its
     // own rule.
+    //
+    // ✅ AND IT DID ITS JOB. `app.opportunity_create` (0065) turned this red the
+    // moment it landed. That is the gate working rather than being in the way:
+    // after 0061 emission is a SQL-only capability, so every new emitter is a
+    // definer — and the point of this list is that adding one is a DELIBERATE
+    // ACT visible in a diff. Growing it is fine; growing it unnoticed is what
+    // this refuses.
     const rows = await sql<{ proname: string }[]>`
       SELECT p.proname
         FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -294,7 +301,11 @@ describe('the store is append-only and the application role is not its writer', 
          AND regexp_replace(p.prosrc, '--[^\n]*', '', 'g') LIKE '%event_emit(%'
        ORDER BY p.proname`
 
-    expect(rows.map((r) => r.proname)).toEqual(['compliance_record', 'stage_move'])
+    expect(rows.map((r) => r.proname)).toEqual([
+      'compliance_record',
+      'opportunity_create',
+      'stage_move',
+    ])
   })
 
   it('refuses to boot when the writer is reachable', async () => {
