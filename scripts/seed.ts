@@ -28,6 +28,28 @@ const APP_ROLE_PASSWORD = 'crm_app_dev_only'
 const TENANT = '00000000-0000-7000-8000-00000000de01'
 const PASSWORD = 'demo-password-1234'
 
+/**
+ * The tenant admin, and until now the demo had none.
+ *
+ * 🔴 EVERY SEEDED USER WAS A `seller`, so `/admin/integration-health` was
+ * unreachable by anybody. `app.dead_letter` and `app.admin_alert` are
+ * `tenant_admin_only`, so their policies read `app.scope_is_admin()` — which
+ * `begin_request` derives from `app_user.role` — and a database with no admin
+ * row is a screen with no possible viewer. The surface has existed and been
+ * tested since the alert work; nobody could open it.
+ *
+ * There is still NO WRITER for `app_user` anywhere in `app/`, so the product
+ * cannot onboard or promote anyone. This closes the demo's half of that; the
+ * other half is user management and is its own story.
+ */
+const ADMIN = {
+  id: '00000000-0000-7000-8000-00000000ad01',
+  // ⚠️ NOT 'Dana': `emailLocalPart` takes the first name, and Dana Reyes
+  // already holds dana@demo.test. Caught by app_user_email_uidx on the first
+  // run — the constraint doing its job on the seed itself.
+  name: 'Valeria Sosa',
+} as const
+
 /** Monthly premiums in cents. Annualised by the money path, never here. */
 const SELLERS = [
   {
@@ -140,6 +162,35 @@ const client = postgres(URL_, { max: 1, onnotice: () => {} })
  * and one that did would be the hole the append-only record exists to close.
  * The only reset for a ledger is a new database, and that is what this says.
  */
+/**
+ * The one non-seller in the demo tenant.
+ *
+ * No pipeline and no wins: an admin is not a competitor, and giving them a
+ * board would put a zero on the public leaderboard next to five people who
+ * actually sell. Their reason to sign in is the admin surface.
+ */
+async function seedAdmin(): Promise<void> {
+  const { auth } = await import('../app/lib/auth/server')
+  const email = 'valeria@demo.test'
+
+  let authUserId: string | null = null
+  try {
+    const created = await auth.api.signUpEmail({
+      body: { email, password: PASSWORD, name: ADMIN.name },
+    })
+    authUserId = created.user.id
+  } catch {
+    // Already seeded. The tenant row is what matters, not a second login.
+  }
+
+  await client`
+    INSERT INTO app.app_user
+      (tenant_id, id, auth_user_id, email, full_name, display_name, role)
+    VALUES (${TENANT}, ${ADMIN.id}, ${authUserId}, ${email}, ${ADMIN.name},
+            ${publicName(ADMIN.name)}, 'admin')
+    ON CONFLICT (tenant_id, id) DO NOTHING`
+}
+
 async function refuseToSeedTwice(): Promise<void> {
   const [row] = await client<{ n: string }[]>`
     SELECT count(*)::text AS n FROM app.earnings_ledger WHERE tenant_id = ${TENANT}`
@@ -217,6 +268,14 @@ async function main(): Promise<void> {
     INSERT INTO app.tenant (id, name, business_tz, is_demo)
     VALUES (${TENANT}, 'Demo Agency', 'America/New_York', true)
     ON CONFLICT (id) DO UPDATE SET is_demo = true`
+
+  // 🔴 BEFORE THE REFUSAL, DELIBERATELY, and the placement is the argument.
+  // `refuseToSeedTwice` exists for the LEDGER — re-running would double-credit
+  // an append-only record with no recompute job. A user row is idempotent
+  // (`ON CONFLICT DO NOTHING`, and the sign-up is already wrapped), so seeding
+  // the admin ahead of the refusal is what lets an already-seeded database
+  // acquire one without a full reset — which the ledger makes expensive.
+  await seedAdmin()
 
   await refuseToSeedTwice()
 

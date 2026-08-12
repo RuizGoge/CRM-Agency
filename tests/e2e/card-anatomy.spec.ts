@@ -181,8 +181,30 @@ test.describe('every card is exactly one height', () => {
       .first()
       .locator('span[title]')
 
-    await expect(chip).toHaveText('Going cold · 9d')
-    await expect(chip).toHaveAttribute('aria-label', 'Going cold — 9 days since last touch')
+    // 🔴 THE DAY COUNT IS DERIVED, NOT TYPED, and that is a repair rather than a
+    // loosening. This asserted the literal `Going cold · 9d` against a card the
+    // seed backdates at seed time — so the build went red at midnight, twice,
+    // for being right: the lead really was 10 days old by then. A test that
+    // fails because the calendar advanced is a test that gets deleted.
+    //
+    // What §2.7 actually rules is that BOTH renderings exist and AGREE: the
+    // face abbreviates because the card is 264px wide, the accessible name
+    // spells it out, and neither carries the banned word. That is the
+    // invariant, and it does not decay.
+    const face = (await chip.textContent())?.trim() ?? ''
+    const days = /^Going cold · (\d+)d$/.exec(face)
+
+    expect(
+      days,
+      `the chip reads "${face}". If it is no longer "Going cold", the demo card ` +
+        `has aged out of the band and the seed needs re-running — the assertion ` +
+        `below is about the two renderings agreeing, not about which band it is in.`,
+    ).not.toBeNull()
+
+    await expect(chip).toHaveAttribute(
+      'aria-label',
+      `Going cold — ${days?.[1] ?? ''} days since last touch`,
+    )
     await expect(page.locator('main')).not.toContainText('Rotting')
   })
 })
