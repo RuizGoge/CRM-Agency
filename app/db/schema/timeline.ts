@@ -11,8 +11,9 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core'
 
-import { app } from './_shared'
+import { app, ref } from './_shared'
 import { gateVerdict } from './compliance'
+import { eventConsumer, eventName } from './events'
 import { contact } from './contacts'
 import { appUser } from './tenant'
 
@@ -105,6 +106,19 @@ export const timelineEntry = app.table(
      * is the precedent: provenance declared, not referential.
      */
     builtFromEventId: uuid('built_from_event_id').notNull(),
+
+    /**
+     * 🔴 WHEN THE EVENT BEHIND THIS ROW HAPPENED — the field that makes the
+     * merge a function of the SET of events rather than of their delivery
+     * order.
+     *
+     * Distinct from `occurredAt`, which is `least()` over every event that
+     * merged here and is what the seller's history is ordered by. This one is
+     * the instant of the event named by `builtFromEventId`, and the pair
+     * (this, that) is the total order the upsert compares on — which is what
+     * makes re-projecting an older event a no-op instead of a rewrite.
+     */
+    builtFromOccurredAt: timestamp('built_from_occurred_at', { withTimezone: true }).notNull(),
     builtAt: timestamp('built_at', { withTimezone: true })
       .notNull()
       .default(sql`clock_timestamp()`),
@@ -155,5 +169,50 @@ export const timelineEntry = app.table(
       'timeline_no_actor_in_payload',
       sql`NOT (${t.renderPayload} ?| ARRAY['actor_name','actor_display_name','actor_initials','actor_avatar_url','actor_user_id'])`,
     ),
+  ],
+)
+
+/**
+ * WHICH EVENTS BECOME A LINE IN A SELLER'S HISTORY, and of what kind.
+ *
+ * 🔴 THE MAP MOVED OUT OF TYPESCRIPT IN 0064, and not for tidiness: the
+ * projector is now a SECURITY DEFINER (`app.timeline_project`) that reads every
+ * field off the event row, so it has to know the map, and a second copy in
+ * `relay.ts` would be exactly the drift `app.gate_verdict_of` was created to
+ * avoid one migration earlier.
+ *
+ * 🔴 THE FOREIGN KEY IS THE POINT, NOT THE TABLE. `app.event_consumer` holds one
+ * row per (consumer, event) subscription and `event_emit` fans out only to rows
+ * that exist there — so a projection rule for an event `contacts` never receives
+ * is dead configuration, and with this key it is UNWRITABLE rather than merely
+ * wrong.
+ *
+ * ⚠️ IT CAUGHT ONE ON THE WAY IN. `consent.updated` was in the TypeScript map
+ * and `contacts` has never subscribed to it, so the `consent` timeline kind has
+ * been unreachable since 0059 and nothing said so. Its row is deliberately
+ * ABSENT rather than the subscription being added: adding a consumer is a change
+ * to the event catalog, and that belongs to whoever owns that decision.
+ *
+ * No tenant column, because every tenant projects identically. `reference`
+ * generates `USING (true) WITH CHECK (false)` — `crm_app` reads it and only the
+ * migrator writes it.
+ */
+export const timelineProjection = ref.table(
+  'timeline_projection',
+  {
+    consumerName: text('consumer_name').notNull().default('contacts'),
+    eventName: eventName('event_name').primaryKey(),
+    kind: timelineKind('kind').notNull(),
+    /** `correlation` merges a move with its sale; `event` gives a refusal its own row. */
+    refMode: text('ref_mode').notNull(),
+  },
+  (t) => [
+    check('timeline_projection_is_contacts', sql`${t.consumerName} = 'contacts'`),
+    check('timeline_projection_ref_mode', sql`${t.refMode} IN ('correlation', 'subject', 'event')`),
+    foreignKey({
+      columns: [t.consumerName, t.eventName],
+      foreignColumns: [eventConsumer.consumerName, eventConsumer.eventName],
+      name: 'timeline_projection_subscribed_fk',
+    }),
   ],
 )

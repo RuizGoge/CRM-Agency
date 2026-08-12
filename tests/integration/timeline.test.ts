@@ -135,10 +135,10 @@ describe('nobody can write the timeline directly', () => {
       sql`
         INSERT INTO app.timeline_entry
           (tenant_id, contact_id, owner_user_id, occurred_at, kind, ref_type, ref_id,
-           render_payload, built_from_event_id)
+           render_payload, built_from_event_id, built_from_occurred_at)
         VALUES (${TENANT}, ${CONTACT}, ${ANA}, clock_timestamp(), 'note', 'x',
                 gen_random_uuid(), '{"actor_display_name":"Ben T."}'::jsonb,
-                gen_random_uuid())`,
+                gen_random_uuid(), clock_timestamp())`,
     ).rejects.toThrow(/timeline_no_actor_in_payload/)
   })
 })
@@ -258,13 +258,14 @@ describe('the 60-second window applies to send_blocked and nothing else', () => 
     // until the gate emits.
     const at = new Date()
     const upsert = async (): Promise<void> => {
-      await withTenant({ tenantId: TENANT, userId: ANA }, async (tx) => {
-        await tx.execute(raw`
+      await sql.begin(async (tx) => {
+        await tx`SELECT app.begin_request(${TENANT}::uuid, ${ANA}::uuid)`
+        await tx`
           SELECT app.timeline_upsert(
             ${CONTACT}::uuid, ${ANA}::uuid, ${at.toISOString()}::timestamptz,
             'send_blocked'::app.timeline_kind, 'contact_phone', gen_random_uuid(),
-            '{}'::jsonb, gen_random_uuid(), ${ANA}::uuid,
-            'blocked_suppressed'::app.gate_verdict)`)
+            '{}'::jsonb, gen_random_uuid(), ${at.toISOString()}::timestamptz,
+            ${ANA}::uuid, 'blocked_suppressed'::app.gate_verdict)`
       })
     }
 
@@ -298,13 +299,14 @@ describe('the 60-second window applies to send_blocked and nothing else', () => 
     ] as const
 
     for (const verdict of verdicts) {
-      await withTenant({ tenantId: TENANT, userId: ANA }, async (tx) => {
-        await tx.execute(raw`
+      await sql.begin(async (tx) => {
+        await tx`SELECT app.begin_request(${TENANT}::uuid, ${ANA}::uuid)`
+        await tx`
           SELECT app.timeline_upsert(
             ${DEEP_CONTACT}::uuid, ${ANA}::uuid, ${at.toISOString()}::timestamptz,
             'send_blocked'::app.timeline_kind, 'contact_phone', gen_random_uuid(),
-            '{}'::jsonb, gen_random_uuid(), ${ANA}::uuid,
-            ${verdict}::app.gate_verdict)`)
+            '{}'::jsonb, gen_random_uuid(), ${at.toISOString()}::timestamptz,
+            ${ANA}::uuid, ${verdict}::app.gate_verdict)`
       })
     }
 
@@ -333,15 +335,21 @@ describe('the 60-second window applies to send_blocked and nothing else', () => 
     // and the timeline fills with one entry per attempt — looking correct right
     // up until somebody counts. The refusal is what makes the omission
     // impossible rather than remembered.
+    // ⚠️ AND THE MATCHER IS LOAD-BEARING NOW. Migration 0064 revoked
+    // `timeline_upsert` from `crm_app`, so a bare `.rejects.toThrow()` would be
+    // satisfied by `permission denied` and TL002 would quietly stop being
+    // exercised, for ever. The drive moved to the owner connection AND the
+    // assertion names the error it is actually about.
     await expect(
-      withTenant({ tenantId: TENANT, userId: ANA }, async (tx) => {
-        await tx.execute(raw`
+      sql.begin(async (tx) => {
+        await tx`SELECT app.begin_request(${TENANT}::uuid, ${ANA}::uuid)`
+        await tx`
           SELECT app.timeline_upsert(
             ${CONTACT}::uuid, ${ANA}::uuid, clock_timestamp(),
             'send_blocked'::app.timeline_kind, 'contact_phone', gen_random_uuid(),
-            '{}'::jsonb, gen_random_uuid(), ${ANA}::uuid, NULL)`)
+            '{}'::jsonb, gen_random_uuid(), clock_timestamp(), ${ANA}::uuid, NULL)`
       }),
-    ).rejects.toThrow()
+    ).rejects.toThrow(/TL002/)
   })
 })
 
@@ -372,12 +380,14 @@ describe('the read surface pages by keyset, with no gap and no repeat', () => {
       const micros = String(i).padStart(6, '0')
       const at = `${new Date(base).toISOString().replace(/\.\d+Z$/, '')}.${micros}Z`
 
-      await withTenant({ tenantId: TENANT, userId: ANA }, async (tx) => {
-        await tx.execute(raw`
+      await sql.begin(async (tx) => {
+        await tx`SELECT app.begin_request(${TENANT}::uuid, ${ANA}::uuid)`
+        await tx`
           SELECT app.timeline_upsert(
             ${DEEP_CONTACT}::uuid, ${ANA}::uuid, ${at}::timestamptz,
             'note'::app.timeline_kind, 'note', gen_random_uuid(),
-            ${JSON.stringify({ n: i })}::jsonb, gen_random_uuid(), ${ANA}::uuid, NULL)`)
+            ${JSON.stringify({ n: i })}::jsonb, gen_random_uuid(), ${at}::timestamptz,
+            ${ANA}::uuid, NULL)`
       })
     }
   })

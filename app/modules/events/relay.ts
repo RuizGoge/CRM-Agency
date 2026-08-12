@@ -33,31 +33,21 @@ export interface Delivery {
   readonly tx: Tx
   readonly eventName: string
   readonly eventId: string
-  readonly ownerUserId: string
-  /**
-   * WHO DID IT, or null when a machine did.
-   *
-   * 🔴 ADDED IN 0060, AND IT CORRECTS AN EXISTING DEFECT rather than only
-   * enabling a new one. `app.outbox_payload` did not return this column, so the
-   * projector passed `ownerUserId` as the timeline's actor — which is right for
-   * a seller's own drag and wrong for everything an admin or a scheduler does to
-   * her lead. `app.timeline_read` answers `timeline.actor.you` when the actor is
-   * the reader, so her own history said "You" about a text nobody attempted.
-   */
-  readonly actorUserId: string | null
   readonly subjectType: string
   readonly subjectId: string
   readonly correlationId: string
   /**
-   * When the thing HAPPENED, not when the relay ran.
+   * ⚠️ THERE IS NO `ownerUserId`, `actorUserId` OR `occurredAt` HERE ANY MORE.
+   * All three existed for one consumer — the projector — which now reads them
+   * inside `app.timeline_project`, off the event row, where no caller can
+   * substitute them.
    *
-   * 🔴 ADDED FOR THE TIMELINE, and it is load-bearing there rather than
-   * informational: `timeline_entry.occurred_at` is what the seller's history is
-   * ordered by, so a projector that stamped `clock_timestamp()` would rebuild a
-   * replayed timeline in the order we happened to replay it. The event carries
-   * the real instant; nothing else does.
+   * 🔴 AND THIS IS TIDYING, NOT A GATE. The excess-property check on `body()`'s
+   * returned literal is real, but a handler holds `d.tx` and
+   * `app.outbox_payload(uuid)` is granted to `crm_app` — any handler can fetch
+   * the owner and the actor in one line. What closes the door is the absent
+   * EXECUTE on `app.timeline_upsert`. Do not count this as a second mechanism.
    */
-  readonly occurredAt: string
   readonly payload: Record<string, unknown>
 }
 
@@ -129,145 +119,30 @@ const auditHandler: ConsumerHandler = async (d) => {
 }
 
 /**
- * How each event becomes a timeline entry.
+ * 🔴 THE PROJECTOR IS NOW ONE LINE, AND THE LINE IT IS NOT WRITING IS THE POINT.
  *
- * `kind` is the enum the seller's screen groups on. `ref` decides what MERGES:
- * two events sharing a ref land in ONE entry, which is the whole reason
- * `timeline_ref_uidx` exists.
+ * Until 0064 this handler chose the contact, the owner, the actor, the kind, the
+ * ref, the payload and the instant, and handed all seven to a function granted
+ * to `crm_app`. Nothing in the database checked any of them: `app.timeline_upsert`
+ * validated a tenant and, for blocked rows, a verdict. So a route holding a
+ * `withTenant` transaction could write onto a COLLEAGUE's Activity region — with
+ * `actor_user_id` set to that colleague, so `app.timeline_read` rendered
+ * `timeline.actor.you` and her own history said "You" about something she never
+ * did. 0061's honesty list predicted it by name.
  *
- * 🔴 `opportunity.stage_changed` AND `opportunity.won` SHARE A REF ON PURPOSE,
- * and the ref is the CORRELATION id. Migration 0054 gives both emissions the
- * same correlation — it exists so a consumer can tie "the card moved" to "the
- * sale happened" without inferring it from timestamps — so the projector lands
- * one entry that says the card reached Closed Won AND carries the premium,
- * rather than two rows a second apart saying half of it each.
+ * `app.timeline_project` takes the event id and reads the rest back off
+ * `app.event_log`. There is no argument left to forge, so there is no ownership
+ * predicate to write — which matters, because the only predicate available
+ * (`owner = app.current_user_id()`) is NULL for every delivery this handler ever
+ * makes, and would have refused 100% of production projections WHILE PASSING
+ * EVERY TEST IN THIS REPOSITORY. 0058 documents that same trap one gate earlier.
  *
- * ⚠️ THE REF IS THE CORRELATION AND NOT THE OPPORTUNITY. Using the opportunity
- * would merge EVERY stage move that card ever made into a single row, and the
- * timeline would show one line for a lead that moved five times.
- *
- * 🔴 `compliance.send_blocked` NEEDS A THIRD MODE, and neither existing one
- * works. `subject` writes `('contact', contactId)` — which collides with that
- * contact's own `lead_created` entry on the FIRST refusal, because
- * `timeline_ref_uidx` is `UNIQUE (tenant_id, ref_type, ref_id)` with no `WHERE`
- * while the `send_blocked` branch of `timeline_upsert` arbitrates only the
- * blocked index. `correlation` would stamp the literal `'stage_move'` on a
- * compliance row. So the ref is the EVENT: every refusal is its own row, and
- * the 60-second collapse is done by the blocked arbiter, which is where it
- * belongs.
- */
-const PROJECTED: ReadonlyMap<string, { kind: string; ref: 'correlation' | 'subject' | 'event' }> =
-  new Map([
-    ['opportunity.stage_changed', { kind: 'stage_move', ref: 'correlation' }],
-    ['opportunity.won', { kind: 'stage_move', ref: 'correlation' }],
-    ['opportunity.created', { kind: 'lead_created', ref: 'subject' }],
-    ['lead.created', { kind: 'lead_created', ref: 'subject' }],
-    ['lead.reposted', { kind: 'repost', ref: 'subject' }],
-    ['call.completed', { kind: 'call', ref: 'subject' }],
-    ['call.enriched', { kind: 'call', ref: 'subject' }],
-    ['message.received', { kind: 'message', ref: 'subject' }],
-    ['message.sent', { kind: 'message', ref: 'subject' }],
-    ['appointment.scheduled', { kind: 'meeting', ref: 'subject' }],
-    ['appointment.completed', { kind: 'meeting', ref: 'subject' }],
-    ['appointment.no_showed', { kind: 'meeting', ref: 'subject' }],
-    ['activity.completed', { kind: 'note', ref: 'subject' }],
-    ['consent.updated', { kind: 'consent', ref: 'subject' }],
-    ['compliance.send_blocked', { kind: 'send_blocked', ref: 'event' }],
-  ])
-
-/** Keys §10.8 forbids inside `render_payload`, enforced by a CHECK as well. */
-const IDENTITY_KEYS = [
-  'actor_name',
-  'actor_display_name',
-  'actor_initials',
-  'actor_avatar_url',
-  'actor_user_id',
-]
-
-/**
- * 🔴 THE PROJECTOR. MVP item 20, and the root of the daily loop.
- *
- * The timeline is a DERIVED PROJECTION and this is the only thing that derives
- * it in production. `crm_app` holds no privilege on `app.timeline_entry` AT ALL,
- * so no query can write a row — that part is a fact about permissions.
- *
- * ⚠️ THE CLAIM STOPS AT THE TABLE. `app.timeline_upsert` is granted to
- * `crm_app`, so a request path could call the function; the tests do exactly
- * that. Narrowed here on purpose rather than repeated, because a guarantee
- * restated one notch wider than it holds is how the next person stops checking.
- *
- * It is also rebuildable. 05b: "fully rebuildable from event_log by the replay
- * job; a corrupt projection is repaired by rebuilding, never by patching" — and
- * what makes that safe is that the upsert is idempotent on the natural key, so
- * replaying the whole log twice produces zero new rows.
+ * The map it used to carry lives in `ref.timeline_projection`, where a foreign
+ * key to `app.event_consumer` makes a rule for an event `contacts` does not
+ * receive unwritable rather than merely wrong. It caught one on the way in.
  */
 const timelineHandler: ConsumerHandler = async (d) => {
-  const mapping = PROJECTED.get(d.eventName)
-  if (mapping === undefined) return
-
-  // The timeline is per CONTACT. An event with no contact in its payload has
-  // nowhere to land — and guessing one would put a stranger's history on
-  // somebody's card.
-  const contactId = d.payload['contact_id']
-  if (typeof contactId !== 'string') return
-
-  // Identity never travels in the payload. The CHECK refuses it too; stripping
-  // here means the refusal is never reached rather than reached and survived.
-  const render: Record<string, unknown> = {}
-  for (const [key, value] of Object.entries(d.payload)) {
-    if (!IDENTITY_KEYS.includes(key)) render[key] = value
-  }
-
-  const refId =
-    mapping.ref === 'correlation'
-      ? d.correlationId
-      : mapping.ref === 'event'
-        ? d.eventId
-        : d.subjectId
-
-  const refType =
-    mapping.ref === 'correlation'
-      ? 'stage_move'
-      : mapping.ref === 'event'
-        ? 'compliance_block'
-        : d.subjectType
-
-  // 🔴 THE VERDICT REACHES THE ROW, and this argument used to be a hard-coded
-  // NULL — which is why `send_blocked` was unreachable from the projector even
-  // after the kind existed. `timeline_upsert` refuses a blocked row with no
-  // verdict (TL002), because NULLs are distinct in a unique index and the
-  // 60-second window would silently stop deduplicating.
-  //
-  // The event carries the CATALOG's vocabulary (`stop`, `outside_window`, …)
-  // and the column takes the DATABASE's enum (`blocked_suppressed`, …). The
-  // inversion happens in `app.gate_verdict_of`, in SQL, once — a second map in
-  // TypeScript is exactly the drift this project keeps paying for.
-  const rawVerdict = d.payload['verdict']
-  if (mapping.kind === 'send_blocked' && typeof rawVerdict !== 'string') {
-    // LOUD, not the silent `return` two guards above. TL002 would refuse this
-    // anyway; throwing here names the cause instead of the symptom, and the
-    // delivery climbs the ladder into a dead letter with a readable reason.
-    throw new Error(`compliance.send_blocked ${d.eventId} carries no verdict`)
-  }
-
-  await d.tx.execute(sql`
-    SELECT app.timeline_upsert(
-      ${contactId}::uuid,
-      ${d.ownerUserId}::uuid,
-      ${d.occurredAt}::timestamptz,
-      ${mapping.kind}::app.timeline_kind,
-      ${refType},
-      ${refId}::uuid,
-      ${JSON.stringify(render)}::jsonb,
-      ${d.eventId}::uuid,
-      -- The ACTOR, not the owner. See Delivery.actorUserId: passing the owner
-      -- made every machine decision read as "You" on the seller's own history.
-      ${d.actorUserId}::uuid,
-      ${
-        mapping.kind === 'send_blocked'
-          ? sql`app.gate_verdict_of(${rawVerdict as string})`
-          : sql`NULL`
-      })`)
+  await d.tx.execute(sql`SELECT app.timeline_project(${d.eventId}::uuid)`)
 }
 
 /**
@@ -297,27 +172,17 @@ export interface RelayOutcome {
 async function body(tx: Tx, eventId: string): Promise<Omit<Delivery, 'tx'> | null> {
   const rows = await tx.execute<{
     event_name: string
-    owner_user_id: string
-    actor_user_id: string | null
     subject_type: string
     subject_id: string
     payload: Record<string, unknown>
     correlation_id: string
-    occurred_at: string
-  }>(sql`SELECT event_name::text AS event_name, owner_user_id, actor_user_id,
-                subject_type, subject_id, payload, correlation_id,
-                -- Explicit UTC ISO-8601 rather than left to ::text, whose output
-                -- is a local-format string the Date constructor parses by engine
-                -- goodwill rather than by specification. The job dispatcher
-                -- already paid for that once.
-                --
-                -- MICROSECONDS, not milliseconds: this value becomes
-                -- timeline_entry.occurred_at, which is what the seller's
-                -- history is ordered by and what the keyset cursor pages over.
-                -- Truncating here would discard precision the projection can
-                -- never get back.
-                to_char(occurred_at AT TIME ZONE 'UTC',
-                        'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS occurred_at
+    // 🔴 NO `occurred_at` ANY MORE. It was here for the projector, which read
+    // it to stamp `timeline_entry.occurred_at`; `app.timeline_project` now
+    // reads the instant off the event row itself. Leaving it would have been a
+    // caller-supplied timestamp on a projection whose whole point is that
+    // nothing about it is caller-supplied.
+  }>(sql`SELECT event_name::text AS event_name, subject_type, subject_id,
+                payload, correlation_id
            FROM app.outbox_payload(${eventId}::uuid)`)
 
   const row = rows[0]
@@ -326,12 +191,9 @@ async function body(tx: Tx, eventId: string): Promise<Omit<Delivery, 'tx'> | nul
   return {
     eventName: row.event_name,
     eventId,
-    ownerUserId: row.owner_user_id,
-    actorUserId: row.actor_user_id,
     subjectType: row.subject_type,
     subjectId: row.subject_id,
     correlationId: row.correlation_id,
-    occurredAt: row.occurred_at,
     payload: row.payload,
   }
 }

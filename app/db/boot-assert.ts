@@ -359,3 +359,75 @@ export async function assertLedgerAppendIsDefinerOnly(sql: postgres.Sql): Promis
     )
   }
 }
+
+/**
+ * Throws when the application role can write a seller's Activity region.
+ *
+ * 🔴 WHAT 0064 CLOSED, AND WHY IT IS THE MOST IMPORTANT OF THE FOUR. The
+ * timeline is the one surface in this list the constitution calls a symptom on
+ * a seller's screen. `app.timeline_upsert` was granted to `crm_app` and took
+ * the contact, the owner, the ACTOR, the instant, the kind, the ref, the
+ * payload and the provenance as caller parameters, with no ownership predicate
+ * anywhere in its body. So a route could write onto a colleague's history with
+ * `actor_user_id` set to that colleague — and `app.timeline_read` renders
+ * `timeline.actor.you` for exactly that, so her own history said "You" about
+ * something she never did.
+ *
+ * The replacement takes an EVENT ID and reads every other field off
+ * `app.event_log`. There is nothing left to forge, which is why it needs no
+ * ownership predicate — and it could not have had one: the only caller is the
+ * relay under `withSystemWork`, where `current_user_id()` is NULL, so a
+ * predicate would have refused every production projection while passing every
+ * test in the tree.
+ *
+ * THREE QUESTIONS. The third is the one a signature-pinned check misses:
+ * `CREATE OR REPLACE app.timeline_project(p_event_id uuid, p_owner_override
+ * uuid DEFAULT NULL)` leaves the one-argument form resolvable, so the boot
+ * comes up clean over a door that has grown a way to lie to it.
+ */
+export async function assertTimelineWriterIsDefinerOnly(sql: postgres.Sql): Promise<void> {
+  const rows = await sql<
+    { upsert_granted: boolean | null; door_granted: boolean | null; door_args: number | null }[]
+  >`
+    SELECT (SELECT bool_or(has_function_privilege('crm_app', p.oid, 'EXECUTE'))
+              FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+             WHERE n.nspname = 'app' AND p.proname = 'timeline_upsert') AS upsert_granted,
+           (SELECT bool_or(has_function_privilege('crm_app', p.oid, 'EXECUTE'))
+              FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+             WHERE n.nspname = 'app' AND p.proname = 'timeline_project') AS door_granted,
+           (SELECT max(p.pronargs)::int
+              FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+             WHERE n.nspname = 'app' AND p.proname = 'timeline_project') AS door_args`
+
+  const row = rows[0]
+  if (row === undefined || row.door_granted !== true) {
+    throw new Error(
+      'BOOT013: refusing to start. app.timeline_project is missing or unreachable by ' +
+        'crm_app.\n\nIt is the only way an event becomes a line in a seller history. ' +
+        'Without it the Activity region silently stops growing — no error, no empty ' +
+        'state, just a history that stops. Run the migrations.',
+    )
+  }
+
+  if (row.upsert_granted === true) {
+    throw new Error(
+      'BOOT014: refusing to start. crm_app can execute app.timeline_upsert directly.\n\n' +
+        "That is a path for any route to write onto a colleague's Activity region with a " +
+        'caller-named owner, a caller-named actor and invented provenance — and the read ' +
+        'renders a caller-named actor as "You", so the forgery appears in the victim\'s ' +
+        'own history as her own action.\n\nMigration 0064 revoked it; something granted ' +
+        'it back, or a DROP/CREATE reset the ACL to EXECUTE TO PUBLIC.',
+    )
+  }
+
+  if (row.door_args !== 1) {
+    throw new Error(
+      `BOOT015: refusing to start. app.timeline_project takes ${String(row.door_args)} ` +
+        'arguments, not 1.\n\n' +
+        'The door is safe because it takes an event id and nothing else — every other ' +
+        'field is read off the event row. A second parameter, even an optional one, is a ' +
+        'field a caller can supply again, and it leaves the one-argument signature ' +
+        'resolvable so a privilege check notices nothing.',
+    )
+  }
+}

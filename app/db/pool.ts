@@ -6,6 +6,7 @@ import {
   assertDefinerOwnerIsPolicyBound,
   assertEventEmitIsDefinerOnly,
   assertLedgerAppendIsDefinerOnly,
+  assertTimelineWriterIsDefinerOnly,
   assertGateIsRecording,
   assertSafeConnection,
 } from './boot-assert'
@@ -119,6 +120,18 @@ void assertDefinerOwnerIsPolicyBound(pool).catch((err: unknown) => {
  * Unlike 0061's, what it guards is the public money number.
  */
 void assertLedgerAppendIsDefinerOnly(pool).catch((err: unknown) => {
+  console.error(err instanceof Error ? err.message : err)
+  process.exit(1)
+})
+
+/**
+ * Migration 0064's revoke, re-asserted at every boot.
+ *
+ * The only one of these whose failure has an (a)-class symptom — a forged line
+ * in a seller's own Activity region, attributed to her — which is also why it
+ * is the one worth catching before a request is served rather than after.
+ */
+void assertTimelineWriterIsDefinerOnly(pool).catch((err: unknown) => {
   console.error(err instanceof Error ? err.message : err)
   process.exit(1)
 })

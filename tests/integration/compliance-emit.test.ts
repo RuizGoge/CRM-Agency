@@ -454,12 +454,17 @@ describe('the refusal reaches the seller as one line with a reason', () => {
     // absorbed by the blocked arbiter, so it would pass with the wrong ref and
     // give false confidence; a DIFFERENT ref_type on the same subject is what
     // exposes the collision.
-    await withTenant(identity, async (tx) => {
-      await tx.execute(raw`
+    // The OWNER connection: 0064 revoked `timeline_upsert` from `crm_app`, so
+    // this fixture cannot run under the application role any more. That is the
+    // point of 0064 and it is asserted elsewhere; here it is only a fixture.
+    await sql.begin(async (tx) => {
+      await tx`SELECT app.begin_request(${TENANT}::uuid, ${ANA}::uuid)`
+      await tx`
         SELECT app.timeline_upsert(
           ${STOPPED_CONTACT}::uuid, ${ANA}::uuid, clock_timestamp() - interval '1 day',
           'lead_created'::app.timeline_kind, 'contact', ${STOPPED_CONTACT}::uuid,
-          '{}'::jsonb, gen_random_uuid(), ${ANA}::uuid, NULL)`)
+          '{}'::jsonb, gen_random_uuid(), clock_timestamp() - interval '1 day',
+          ${ANA}::uuid, NULL)`
     })
 
     const page = await readTimelineFor(identity, STOPPED_CONTACT, null)
