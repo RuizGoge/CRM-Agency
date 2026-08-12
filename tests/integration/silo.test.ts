@@ -63,20 +63,33 @@ afterAll(async () => {
 })
 
 /**
- * One unit of work, exactly as the application performs it: an explicit
- * transaction whose first statement sets the three GUCs with `is_local = true`,
- * then drops to the unprivileged role.
+ * One unit of work, exactly as the application performs it — and after 0067
+ * that sentence is TRUE rather than approximate.
+ *
+ * 🔴 THIS USED TO SET THE THREE GUCs BY HAND, which was the whole point of the
+ * finding 0067 closed: setting `app.user_id` was enough to BE somebody. It is
+ * not any more — an identity now needs a seal only `app.begin_request` and two
+ * other definers can mint — so this helper opens the same door a request does.
+ *
+ * The scope is no longer a parameter, because it never was an input:
+ * `begin_request` derives it from `app_user.role`. Claiming one is what
+ * `forgeScope` below is for, and claiming one is now an ATTACK rather than a
+ * fixture.
  */
 async function asUser<T>(
   userId: string,
-  scopeMode: 'owner' | 'tenant_read' | 'tenant_admin',
   fn: (tx: postgres.TransactionSql) => Promise<T>,
+  forgeScope?: 'owner' | 'tenant_read' | 'tenant_admin',
 ): Promise<T> {
   return sql.begin(async (tx) => {
-    await tx`SELECT set_config('app.tenant_id', ${TENANT}, true)`
-    await tx`SELECT set_config('app.user_id', ${userId}, true)`
-    await tx`SELECT set_config('app.scope_mode', ${scopeMode}, true)`
+    await tx`SELECT app.begin_request(${TENANT}::uuid, ${userId}::uuid)`
     await tx`SET LOCAL ROLE crm_app`
+    // 🎯 AFTER dropping to crm_app, because that is where an attacker stands.
+    // The identity stays sealed — only the scope claim is forged — which is
+    // exactly the shape `app.scope_is_global()` has always been built to refuse.
+    if (forgeScope !== undefined) {
+      await tx`SELECT set_config('app.scope_mode', ${forgeScope}, true)`
+    }
     return fn(tx)
   }) as Promise<T>
 }
@@ -212,7 +225,6 @@ describe('the owner-scoped policy actually denies', () => {
   it('shows a seller only their own rows', async () => {
     const rows = await asUser(
       ANA,
-      'owner',
       (tx) => tx<{ body: string }[]>`
       SELECT body FROM app.probe_note`,
     )
@@ -226,7 +238,6 @@ describe('the owner-scoped policy actually denies', () => {
     await expect(
       asUser(
         ANA,
-        'owner',
         (tx) => tx`
         INSERT INTO app.probe_note (tenant_id, owner_user_id, body)
         VALUES (${TENANT}, ${BEN}, 'FORGED BY ANA')`,
@@ -240,7 +251,7 @@ describe('the owner-scoped policy actually denies', () => {
   })
 
   it('refuses DELETE by privilege, not by policy', async () => {
-    await expect(asUser(ANA, 'owner', (tx) => tx`DELETE FROM app.probe_note`)).rejects.toThrow(
+    await expect(asUser(ANA, (tx) => tx`DELETE FROM app.probe_note`)).rejects.toThrow(
       /permission denied/i,
     )
   })
@@ -248,11 +259,16 @@ describe('the owner-scoped policy actually denies', () => {
 
 describe('scope is re-verified against the database, never trusted from the GUC', () => {
   it('gives a seller no global scope even when the session claims tenant_read', async () => {
-    const result = await asUser(ANA, 'tenant_read', async (tx) => {
-      const [scope] = await tx<{ global: boolean }[]>`SELECT app.scope_is_global() AS global`
-      const rows = await tx<{ body: string }[]>`SELECT body FROM app.probe_note`
-      return { global: scope?.global, bodies: rows.map((r) => r.body) }
-    })
+    const result = await asUser(
+      ANA,
+      async (tx) => {
+        const [scope] = await tx<{ global: boolean }[]>`SELECT app.scope_is_global() AS global`
+        const rows = await tx<{ body: string }[]>`SELECT body FROM app.probe_note`
+        return { global: scope?.global, bodies: rows.map((r) => r.body) }
+      },
+      // The forgery, issued as crm_app inside a real session.
+      'tenant_read',
+    )
 
     expect(result.global).toBe(false)
     expect(result.bodies).toEqual(['ANA PRIVATE NOTE'])
@@ -262,7 +278,7 @@ describe('scope is re-verified against the database, never trusted from the GUC'
     // USING passes (they may legitimately read); WITH CHECK fails. That
     // asymmetry is the whole authorization model, and it is what makes the
     // supervisor case a 403 rather than an owner-scoped not-found.
-    const bodies = await asUser(SUPER, 'tenant_read', async (tx) => {
+    const bodies = await asUser(SUPER, async (tx) => {
       const rows = await tx<{ body: string }[]>`SELECT body FROM app.probe_note ORDER BY body`
       return rows.map((r) => r.body)
     })
@@ -271,7 +287,6 @@ describe('scope is re-verified against the database, never trusted from the GUC'
     await expect(
       asUser(
         SUPER,
-        'tenant_read',
         (tx) => tx`
         INSERT INTO app.probe_note (tenant_id, owner_user_id, body)
         VALUES (${TENANT}, ${ANA}, 'WRITTEN BY SUPERVISOR')`,

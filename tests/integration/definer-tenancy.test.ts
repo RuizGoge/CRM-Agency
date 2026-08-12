@@ -45,6 +45,14 @@ const EXEMPT: ReadonlyMap<string, string> = new Map([
     'The job-runner counterpart of begin_request: takes the tenant a claimed job belongs to and establishes the session for it. Same circularity, same reason.',
   ],
   [
+    'app.identity_seal',
+    'It MINTS the proof the tenant context is made of, so requiring it to read that context would be circular in the same way begin_request is — it takes the tenant as a parameter. It also reaches no tenant-scoped relation at all: its only read is security.identity_secret, which has one row and no tenant dimension. Granted to nobody, so the only callers are the three definers that establish or elevate a session.',
+  ],
+  [
+    'app.current_user_id',
+    'It ANSWERS the question every other definer scopes by, and it is the hottest read path in the schema — every RLS policy calls it. It became a definer in 0067 so it could verify the session seal against security.identity_secret; that table has one row and no tenant dimension, and the function touches nothing else. Requiring it to establish a tenant would be requiring the answer to depend on itself.',
+  ],
+  [
     'app.resolve_identity',
     'Runs BEFORE a tenant exists. It maps a better-auth user id to its tenant and app_user row, which is the answer begin_request then needs — there is nothing to scope by yet, and that is the login path.',
   ],
@@ -158,6 +166,12 @@ describe('a definer function cannot forget the tenant', () => {
     expect([...EXEMPT.keys()].sort()).toEqual([
       'app.begin_request',
       'app.begin_system_work',
+      // Added by 0067, and exempt for the FIRST reason in its purest form: they
+      // are what the tenant context is MADE OF. `current_user_id` is the answer
+      // every other definer scopes by; `identity_seal` mints the proof that
+      // answer is genuine. Both read one row of `security.identity_secret`,
+      // which has no tenant dimension, and nothing else.
+      'app.current_user_id',
       // The ingest path, added when it merged. All three run BEFORE a tenant
       // exists, which is the one justification this list accepts: a provider
       // POST carries no session, and the endpoint token is what produces the
@@ -170,6 +184,7 @@ describe('a definer function cannot forget the tenant', () => {
       // security.harden() and nothing else.
       'app.ensure_audit_partitions',
       'app.ensure_event_partitions',
+      'app.identity_seal',
       'app.inbound_webhook_dead_letter',
       'app.outbox_claim',
       // Added by 0055, and the third exempt for the "no tenant is the right

@@ -470,6 +470,13 @@
       "when": 1786445461588,
       "tag": "0066_activity_log_note",
       "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1786449061588,
+      "tag": "0067_identity_is_sealed",
+      "breakpoints": true
     }
   ]
 }
