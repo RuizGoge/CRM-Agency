@@ -220,6 +220,41 @@ export async function ensurePartitions(): Promise<void> {
   })
 }
 
+/** One queue's place in the latency axis. */
+export interface JobRegistryRow {
+  readonly queueName: string
+  readonly priority: 'compliance' | 'interactive' | 'bulk'
+  readonly lane: string
+}
+
+/**
+ * The latency axis, read from `ref.job_registry` (`05c` §11.7).
+ *
+ * 🔴 THE WORKER DERIVES ITS LANES FROM THIS AND FROM NOTHING ELSE (§2394). A
+ * constant in `worker.ts` would be a second table of truth whose disagreement
+ * with the first is SILENT: a queue classified `compliance` in the database and
+ * drained by the bulk loop in the file looks perfectly healthy and is merely
+ * late — which, for the STOP chain, is the legal failure the lanes exist to
+ * prevent.
+ *
+ * No tenant session: `ref` is reference data with no tenant dimension, the same
+ * reason `ensureCapabilities` reads it without one.
+ */
+export async function readJobRegistry(): Promise<readonly JobRegistryRow[]> {
+  const rows = await db.execute<{
+    queue_name: string
+    priority: 'compliance' | 'interactive' | 'bulk'
+    lane: string
+  }>(sql`SELECT queue_name, priority::text AS priority, lane
+           FROM ref.job_registry ORDER BY queue_name`)
+
+  return [...rows].map((r) => ({
+    queueName: r.queue_name,
+    priority: r.priority,
+    lane: r.lane,
+  }))
+}
+
 /**
  * Raises a PROCESS-health alert across every tenant.
  *

@@ -7,6 +7,25 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 🛣️ EL EJE DE LATENCIA: TRES LÍNEAS CON POOL PROPIO (2026-08-12)
+Migración **0070** · `ref.job_registry` · `app/db/schema/jobs.ts` · `boss.ts` y `worker.ts` reescritos · `tests/integration/job-lanes.test.ts`. **755 → 763 tests.** `verify` verde.
+
+🔴 **LA CONTENCIÓN ERA REAL Y SE LEYÓ DEL CÓDIGO, NO SE SUPUSO.** `boss.ts` construía **UN** `PgBoss`, y los cuatro loops de `work()` sacaban del mismo pool interno. §11.7.2 lo describe exacto —*"un slot de worker igual se bloquea detrás de un job bulk largo"*— y por eso un drenaje de 20.000 jobs mataba de hambre a todas las demás colas. Eso es §2367: **un STOP de TCPA es el job 14.000 de un FIFO.** Ahora hay una instancia por línea, con pool propio (`max: 4`), así que la línea de compliance tiene conexiones que ningún drenaje bulk le puede sacar.
+
+**Verificado en el arranque:** `[worker] lanes: lane_bulk(1) · lane_compliance(2) · lane_interactive(1)`.
+
+- **La clasificación sale de §11.7.1, no la elegí:** `message-merge` → **compliance** (desde la 0069 esa cola *es* la cadena TCPA), `scheduled-job-dispatch` → **compliance** (§11.7.1 pone el recordatorio acá y **no** en interactive, y da la razón: un recordatorio tarde puede disparar **fuera de la ventana legal de llamada**), `call-merge` → **interactive** (y es la cola que la tormenta de la Puerta 6 realmente llena, que es justo por qué no puede compartir línea con el STOP), `dead-letter` → **bulk**.
+- **Las líneas se DERIVAN del registro** (§2394). Una constante en `worker.ts` sería una segunda tabla de verdad cuyo desacuerdo con la primera es silencioso: una cola clasificada `compliance` en la base y drenada por el loop bulk **se ve perfectamente sana y sólo llega tarde**.
+- **`JOBS004`: un worker cuyo juego de líneas no incluye `lane_compliance` no arranca.** Sin eso, un cambio que se lleve las colas de compliance produce un proceso que levanta limpio, reporta sano y **deja de honrar STOPs en silencio**.
+- **`JOBS005`: una cola sin fila de registro tampoco arranca** (§2382(b)) — es una cola que ninguna línea drena.
+- **La tabla es `immutable`**, así que mover una cola de línea cuesta una migración que tira un trigger protegido, no un UPDATE. §2407 lo pide en esos términos.
+
+⚠️ **DOS COSAS QUE EL SPEC DICE Y NO SE PUEDEN COPIAR TAL CUAL, las dos medidas contra el motor:**
+- §11.7.1 imprime `lane text GENERATED ALWAYS AS ('lane_' || priority::text)`. **Postgres lo rechaza**: el cast enum→text es STABLE y no IMMUTABLE, y una expresión generada debe ser inmutable. `CREATE TABLE` muere con *"generation expression is not immutable"*. Va como `CASE`, que da los mismos tres strings.
+- §11.7.3 rutea **cada entrega** sniffeando los primeros 320 bytes crudos y encolando un STOP en `lane_compliance` y las respuestas comunes en `lane_interactive`. **No está construido, y hay un conflicto que vale nombrar en vez de implementar callado:** la línea es propiedad de la COLA en este diseño (`ref.job_registry` está keyeada por nombre de cola), así que rutear por entrega significa **dos colas para un mismo merger** — y `message-merge` es `key_strict_fifo` sobre `provider_message_id`, cuyo propósito entero es que un mensaje y su re-declaración **serialicen**. Partidos en dos colas ya no lo hacen, y G2 midió que Aloware re-declara segundos después. Clasificar la cola **entera** como `compliance` es lo que shippeó: estrictamente más seguro, y sólo cuesta que una avalancha de SMS comparta la línea de compliance. **Decisión abierta de Jorge.**
+
+⚠️ **Y ESTO TAMPOCO CIERRA G6/P24.** Falta la medición: un STOP inyectado durante la tormenta de 20.000 webhooks, `suppression_list` en 5 s, y un discado a T+5 s rechazado, **en las dos topologías**. El aparato ya está entero; lo que falta es correr el arnés y afirmarlo.
+
 ### 🛑 UN STOP DE UN LEAD POR FIN SUPRIME — LA MITAD DE CORRECCIÓN DE G6/P24 (2026-08-12)
 Migración **0069** · `app.sms_intent_of` · `app.message_merge` reescrita · `tests/integration/stop-sniff.test.ts`. **731 → 755 tests.** `verify` verde.
 
@@ -3902,9 +3921,9 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 
 > ⚠️ **Los conteos de esta sección quedaron nueve días atrasados** (decía *"243 tests · 83 e2e"*, del 2026-08-03) mientras el detalle de arriba iba por 715. Corregido el 2026-08-12. **El estado real está en la primera entrada de _Current State_, no acá** — esta lista es de trabajo pendiente, y las cifras viven en las entradas fechadas.
 
-**Al 2026-08-12: 755 tests · 122 e2e · `verify` verde.** Los puntos 1, 2, 3, 4 y 6 de la lista de abajo están cerrados, y también el riel de salud que la abría (ver las entradas del 2026-08-03).
+**Al 2026-08-12: 763 tests · 122 e2e · `verify` verde.** Los puntos 1, 2, 3, 4 y 6 de la lista de abajo están cerrados, y también el riel de salud que la abría (ver las entradas del 2026-08-03).
 
-**Lo primero de todo, y no depende de nadie: `ref.job_registry.priority` — LAS LÍNEAS DE LATENCIA.** La 0069 cerró la mitad de **corrección** de G6/P24 (un STOP suprime, y el discado siguiente se rechaza). Falta la mitad de **latencia**: la fila de supresión dentro de **5 s** con 20.000 mensajes de backlog. `05c` §11.7 lo especifica completo —`app.job_priority` como enum `compliance | interactive | bulk`, `ref.job_registry` con `priority NOT NULL`, `harden()` que revienta sobre una fila sin clasificar **y sobre cualquier cola del bundle sin fila de registro**, capacidad reservada por línea y aserción de arranque— y **nada de eso existe en el árbol**. Es la última pieza de la Puerta 6, y hasta que esté, un STOP detrás de una tormenta llega tarde: fallo legal, no puerta roja.
+**Lo primero de todo, y no depende de nadie: CORRER G6/P24 Y AFIRMARLA.** El aparato está entero — la 0069 puso la corrección (un STOP suprime, el discado siguiente se rechaza) y la 0070 la latencia (tres líneas con pool propio, derivadas del registro, con negativa de arranque). **Lo que falta es la medición**, que es lo que cierra la Puerta 6: extender `scripts/gate-6-storm.ts` para inyectar un STOP durante las 20.000 entregas y afirmar `suppression_list` dentro de **5 s** más un discado a T+5 s devolviendo `blocked_suppressed`, **en las dos topologías** (`folded` y `split`), con `retries: 0`. Añadir además el **L2-P**: 20.000 jobs `bulk`, después uno `compliance`, y afirmar que arranca en 5 s con el backlog completo presente.
 
 **Lo que NO depende de nadie — por acá seguir, en este orden:**
 

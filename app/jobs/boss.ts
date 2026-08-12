@@ -96,19 +96,33 @@ class BossRunner implements JobRunner {
 export async function startJobRunner(
   connectionString: string,
   onError: (message: string) => void,
+  options: { readonly lane?: string; readonly max?: number } = {},
 ): Promise<JobRunner> {
   const boss = new PgBoss({
     connectionString,
     schema: 'pgboss',
     migrate: false,
     supervise: true,
+    // 🔴 ONE RUNNER PER LANE, EACH WITH ITS OWN POOL, AND THE POOL IS THE WHOLE
+    // POINT (`05c` §11.7.2). pg-boss's per-queue priority orders a fetch WITHIN
+    // a queue; it does nothing about a shared pool. Until this parameter existed
+    // there was ONE `PgBoss` here and all four `work()` loops drew from its
+    // single pool, so a 20,000-job bulk drain starved every other queue — which
+    // is precisely how a TCPA STOP becomes "job 14,000 in a FIFO drain" (§2367).
+    //
+    // Separate instances give separate pools, so the compliance lane holds
+    // connections no bulk drain can take. `supervise` stays on per instance: each
+    // one maintains only the queues it works.
+    ...(options.max === undefined ? {} : { max: options.max }),
   })
 
   // pg-boss reports operational failures as EVENTS rather than rejections, so
   // without this a queue that has stopped working looks exactly like a queue
-  // with nothing to do.
+  // with nothing to do. The lane is in the message because with three runners
+  // "the job runner failed" no longer says which one — and a wedged
+  // `lane_compliance` is a different incident from a wedged `lane_bulk`.
   boss.on('error', (err: Error) => {
-    onError(err.message)
+    onError(options.lane === undefined ? err.message : `${options.lane}: ${err.message}`)
   })
 
   await boss.start()
