@@ -41,6 +41,7 @@ export default [
   route('api/contacts/:contactId/timeline', 'routes/api/timeline.ts'),
   route('api/quick-add', 'routes/api/quick-add.ts'),
   route('api/opportunities', 'routes/api/opportunities.ts'),
+  route('api/notes', 'routes/api/notes.ts'),
   route('api/calls', 'routes/api/calls.ts'),
   // The ingest edge. NOT under `api/`, and versioned, because ruling P8.2 fixes
   // both: this URL is configured inside Aloware's panel and we cannot redeploy

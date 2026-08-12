@@ -12,6 +12,7 @@ import * as integrationHealth from '~/routes/api/integration-health'
 import * as leaderboard from '~/routes/api/leaderboard'
 import * as myBook from '~/routes/api/my-book'
 import * as myDay from '~/routes/api/my-day'
+import * as notes from '~/routes/api/notes'
 import * as opportunities from '~/routes/api/opportunities'
 import * as quickAdd from '~/routes/api/quick-add'
 import * as search from '~/routes/api/search'
@@ -95,6 +96,7 @@ const MODULE_ENTRIES: readonly (readonly [string, Record<string, unknown>])[] = 
   ['routes/api/leaderboard.ts', leaderboard],
   ['routes/api/my-book.ts', myBook],
   ['routes/api/my-day.ts', myDay],
+  ['routes/api/notes.ts', notes],
   ['routes/api/opportunities.ts', opportunities],
   ['routes/api/quick-add.ts', quickAdd],
   ['routes/api/search.ts', search],

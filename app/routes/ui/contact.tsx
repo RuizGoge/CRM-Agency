@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 
+import { NoteComposer } from '~/components/contacts/note-composer'
 import { StartDeal } from '~/components/contacts/start-deal'
 import { Timeline } from '~/components/contacts/timeline'
 import { useParams } from 'react-router'
@@ -101,6 +102,8 @@ function Record({
   contact: ContactRecord
   onChanged: () => void
 }): React.JSX.Element {
+  const [noteKey, setNoteKey] = useState(0)
+
   return (
     <>
       <h1
@@ -149,7 +152,14 @@ function Record({
           would keep the previous lead's rows on screen while the new one loads,
           which on this surface is not a flicker but somebody else's history
           under this person's name. */}
-      <Timeline key={contact.id} contactId={contact.id} />
+      {/* The composer sits ABOVE the history: the Activity region is reverse
+          chronological, so typing at the bottom and watching the line appear at
+          the top would be two ends of the same screen. `noteKey` remounts the
+          Timeline after a save, so the new line arrives through the SAME read
+          that drew the rest — no second source of truth for a seller's own
+          history. */}
+      <NoteComposer contactId={contact.id} onLogged={() => setNoteKey((n) => n + 1)} />
+      <Timeline key={`${contact.id}:${String(noteKey)}`} contactId={contact.id} />
 
       <h2
         style={{
