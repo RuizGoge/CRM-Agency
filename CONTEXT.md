@@ -17,7 +17,22 @@
 - 🔴 **El backlog TIENE que seguir ahí, y el arnés lo verifica.** Si la línea bulk se hubiera drenado antes de que tomaran el job de compliance, esto sería la medición de un sistema ocioso con el nombre de un test de contención — la misma clase de falso verde que la primera corrida de la tormenta, que metía un número de secuencia en cada cuerpo y no dedupeaba nada. Por eso el veredicto tiene un tercer valor: **UNRUN**.
 - **El job de compliance entra DESPUÉS de que el worker está arriba**, o el número sería el tiempo de arranque de `startWorker` reportado como resultado de línea.
 
-⚠️ **LA MUTACIÓN NO SE CORRIÓ, y la razón es que el mecanismo lo impide.** Lo que probaría que este test tiene dientes es reclasificar `message-merge` a `bulk` y verlo fallar — y `ref.job_registry` es **immutable**, así que eso cuesta una migración que tire un trigger protegido. Es exactamente la propiedad que §2407 pedía, funcionando en contra de mi conveniencia. Dicho y no deslizado: **este número no tiene mutación que lo respalde todavía.**
+🔴 **LA MUTACIÓN SE CORRIÓ AL DÍA SIGUIENTE Y L2-P NO TIENE DIENTES. El PASS de arriba no es evidencia de que las líneas funcionen.**
+
+| | |
+|---|---|
+| Control — tres líneas, pools separados | **2019 ms** |
+| Mutado — una línea, un pool (topología **pre-0070**) | **1965 ms** |
+
+Quitar las líneas **enteras** no cambia nada medible. La mutación colapsó las cuatro colas sobre un runner —un `PgBoss`, un pool, cuatro `work()` loops, exactamente lo que había antes de la 0070— conservando el nombre `lane_compliance` para que la negativa de arranque siguiera pasando y **la única variable removida fueran los pools separados**. Revertida con `git checkout`.
+
+**La razón está en el modelo de pg-boss, y la teníamos delante:** `work()` le da a **cada cola su propio loop de polling** con `batchSize: 1`. Una cola profunda de 20.000 jobs **cortos** nunca satura el pool — el handler sostiene **una** conexión por vez. La contención de §11.7.2 es *"un slot se bloquea detrás de un job bulk **largo**"*, y el *"job 14.000 de un FIFO"* de §2367 describe **un FIFO único sobre todas las colas**, que no es como está cableado este árbol: las colas ya tenían loop propio antes de la 0070.
+
+⚠️ **QUÉ NO PRUEBA ESTO.** No prueba que las líneas sean inútiles: siguen separando pools, y contra un handler bulk **lento** —o muchos jobs concurrentes en vuelo— la separación debería importar. Lo que queda demostrado es más angosto y más incómodo: **la aserción tal como §2405 la especifica no discrimina**, porque "20.000 jobs bulk" mide profundidad de cola y el mecanismo depende de duración.
+
+**Lo que haría falta para darle dientes:** que los jobs bulk sean **lentos** (que retengan la conexión) en vez de meramente numerosos. Sin eso, L2-P es un número verde que no significa lo que su nombre dice — que es exactamente la clase de verde que este proyecto existe para rechazar.
+
+📌 **Y el método vale tanto como el hallazgo.** El primer intento de mutación corrió con **Docker caído**: las dos corridas salían exit 1 sin salida, porque el `process.exit()` del arnés trunca stdout en Windows. Si me quedaba con esa primera corrida habría reportado *"la mutación pone el test rojo"* — la conclusión correcta, por la razón equivocada, sobre un test que no corrió. **Correr el control primero es lo que lo atrapó.**
 
 ### 🔀 EL LEG SPLIT DE LA PUERTA 6, CORRIDO (2026-08-12)
 `scripts/gate-6-storm.ts` · sonda de drenador · etiquetas por pata. **Las dos patas se corren ahora con el mismo arnés y `PROCESS_ROLES` como único interruptor**, que es el mismo que usa producción — un flag propio del arnés mediría una tercera cosa que no shippea a ningún lado.
