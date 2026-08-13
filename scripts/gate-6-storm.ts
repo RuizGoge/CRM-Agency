@@ -42,14 +42,30 @@
  *   · `admin_alert(kind='folded_topology_saturated')`, now a legal kind with a
  *     writer that fans out one row per tenant.
  *
- * ⚠️ ONE STILL CANNOT RUN, and it is the PROTECTED one. G6/P24 (05c:1588,
- * :2405): inject one STOP during the storm, assert the `suppression_list` row
- * within 5 s and a dial at T+5 s returning `blocked_suppressed`. There is no
- * STOP sniff at ingress (§10.9's `stopSniff` does not exist) and
- * `message.received` is unreachable, so no delivery can produce a STOP at all.
+ * ✅ AND SINCE 0069/0070 THE FOURTH — G6/P24 (05c:1588, :2405), the PROTECTED
+ * one — RUNS. It injects one STOP mid-storm, watches `suppression_list` against
+ * the 5-second deadline and asks the real gate for a verdict at T+5 s. The
+ * worker runs too, which no earlier version of this harness did: every previous
+ * run measured INGEST only, which was enough for "zero lost" and useless for an
+ * assertion whose whole subject is what happens to a job behind a backlog.
  *
- * So the gate STILL does not close. It is one assertion away rather than four,
- * and the one left is the one the register marks protected with `retries: 0`.
+ * 🔴 IT RUNS AND IT FAILS, and the cause is a declared Gate 2 open item rather
+ * than a code defect. `g2-aloware.md:559`: *"No event named for SMS … inbound
+ * SMS probably arrives as `Communication Initiated` — but §4.3 maps inbound SMS
+ * to `message.received`, and that binding is UNPROVEN."* `aloware-ingest.ts`
+ * reflects that honestly: none of its nine mapped names yields
+ * `message.received`. So `mergeMessageFromEvent` re-derives the canonical from
+ * the body, an unmapped name gives `null`, `stateOf(null)` returns `'failed'`,
+ * and 0069's `p_state = 'received'` condition never holds. The job RESOLVES,
+ * does not fail, and writes nothing.
+ *
+ * ⚠️ It cannot be fixed by inventing the name. Putting a plausible string in the
+ * map would turn this green against something nobody observed on the wire, which
+ * is the one thing this harness exists to refuse. It is blocked on capturing one
+ * real inbound SMS against the paid account.
+ *
+ * So the gate STILL does not close — but the reason is now MEASURED rather than
+ * assumed, and this is the folded leg only: :2405 wants both topologies.
  */
 
 import { createHash, randomUUID } from 'node:crypto'
@@ -299,25 +315,56 @@ async function injectStopAndWatch(seller: string, contactId: string): Promise<St
       if (elapsed > STOP_DEADLINE_MS * 3) break
       await new Promise((r) => setTimeout(r, 25))
     }
+
+    // 🔴 THE DIAL AT T+5 s, WHICH IS THE HALF THAT MATTERS TO A REGULATOR. A
+    // suppression row nobody reads is not a control; this asks the real gate, in
+    // a real seller session, the way the dial button does.
+    const remaining = STOP_DEADLINE_MS - (performance.now() - t0)
+    if (remaining > 0) await new Promise((r) => setTimeout(r, remaining))
+
+    // 🔴 UNDER A BREAK-GLASS OVERRIDE, AND WITHOUT IT THIS ASSERTION CANNOT BE
+    // READ. The first run answered `blocked_calling_window`: the harness ran in
+    // the evening, a Texas lead at 10pm Central IS outside the legal window, and
+    // the gate was right while the assertion was unreadable. No choice of state
+    // fixes it — between 06:00 and 12:00 UTC the entire United States is asleep
+    // and no lead anywhere is legally callable, so a gate whose verdict depends
+    // on what time the storm was run is a gate that reports the clock.
+    //
+    // ⚠️ AND THE OVERRIDE DOES NOT WEAKEN WHAT IS BEING ASSERTED, which is the
+    // whole reason it is the right instrument. It releases EXACTLY
+    // `blocked_timezone_unknown` and `blocked_calling_window`; suppression and
+    // the recording guard still bind, and `dial-gate.test.ts` has a standing
+    // assertion — *"does NOT release suppression under break-glass"* — that an
+    // admin under break-glass still cannot dial a STOP. So a
+    // `blocked_suppressed` here is the suppression deciding, on the one path
+    // where the clock no longer can.
+    //
+    // Opened around this call only, never for the run: an override left live
+    // would silently release the window for everything the storm touches.
+    await observer`
+      INSERT INTO app.break_glass_override (tenant_id, started_by_user_id, reason)
+      VALUES (${TENANT}::uuid, ${seller}::uuid,
+              'G6/P24: the clock must not decide the protected assertion')`
+
+    let verdictAtDeadline: string
+    try {
+      verdictAtDeadline = await withTenant({ tenantId: TENANT, userId: seller }, async (tx) => {
+        const rows = await tx.execute<{ verdict: string }>(
+          sql`SELECT verdict::text AS verdict
+                  FROM app.compliance_attempt(${contactId}::uuid, 'call', 'dial_button')`,
+        )
+        return rows[0]?.verdict ?? 'no row'
+      })
+    } finally {
+      await observer`
+        UPDATE app.break_glass_override SET ended_at = clock_timestamp(), end_reason = 'manual'
+         WHERE tenant_id = ${TENANT}::uuid AND ended_at IS NULL`
+    }
+
+    return { suppressedInMs, verdictAtDeadline, ingestOutcome }
   } finally {
     await observer.end()
   }
-
-  // 🔴 THE DIAL AT T+5 s, WHICH IS THE HALF THAT MATTERS TO A REGULATOR. A
-  // suppression row nobody reads is not a control; this asks the real gate, in a
-  // real seller session, the way the dial button does.
-  const remaining = STOP_DEADLINE_MS - (performance.now() - t0)
-  if (remaining > 0) await new Promise((r) => setTimeout(r, remaining))
-
-  const verdictAtDeadline = await withTenant({ tenantId: TENANT, userId: seller }, async (tx) => {
-    const rows = await tx.execute<{ verdict: string }>(
-      sql`SELECT verdict::text AS verdict
-            FROM app.compliance_attempt(${contactId}::uuid, 'call', 'dial_button')`,
-    )
-    return rows[0]?.verdict ?? 'no row'
-  })
-
-  return { suppressedInMs, verdictAtDeadline, ingestOutcome }
 }
 
 interface StormResult {
