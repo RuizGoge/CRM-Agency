@@ -7,6 +7,27 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 💵 UN NÚMERO EQUIVOCADO SE PUEDE CORREGIR — LA SUPERFICIE QUE LA CONSTITUCIÓN NOMBRABA Y NADIE CONSTRUYÓ (2026-08-12)
+Migración **0071** · `app.ledger_adjust` · `tests/integration/ledger-correction.test.ts`. **763 → 775 tests.** `verify` verde.
+
+🔴 **JORGE CUESTIONÓ EL PESO DE EARNINGS, Y AL IR A MIRAR EL PROBLEMA ERA OTRO Y PEOR.** Su pregunta fue por qué tanta maquinaria si el tablero *"es anotar plata según el estado del pipeline, no hay que validar ni pagar nada"*. Justa. Pero el `grep` dio esto: no existe `ledger_void`, ni `ledger_adjust`, ni `leaderboard_rebuild`, ni ruta, ni pantalla — y `ledger_append` no tiene grant desde la 0063, a propósito. O sea que el estado real **no era "corregir es ceremonioso"**, era:
+
+> **Un número equivocado en el tablero público no lo podía corregir NADIE, por ningún camino.** Ni editando (el trigger append-only lo rechaza, con razón) ni con un asiento compensatorio (nada podía escribir uno). El enum conoce `reversal`, `value_correction` y `manual_adjustment` desde la 0008 y los CHECKs los aceptan desde entonces; simplemente no había escritor. **La misma forma de "hay motor y no hay cableado" por cuarta vez esta sesión.**
+
+**Elegido por Jorge sobre sacar el append-only:** la corrección es un asiento nuevo, así que el tablero lee bien y la historia de cómo llegó ahí sobrevive. **No se tocó la constitución ni ninguna decisión firmada, y no hay job de recómputo** — E3 sigue siendo la razón: dos pasos que mueven el número lo cuentan doble.
+
+- **`manual_adjustment` no es un tipo de repuesto:** E5 y el CHECK `earnings_source_is_a_declared_input` **ya lo exceptúan** de nombrar evento fuente, porque ninguna corrección de admin sale de los cuatro eventos declarados.
+- **Nunca `reversal`.** `earnings_reverses_uidx` permite **una** reversa por asiento y ese cupo es del undo de 5 s de la vendedora; un admin consumiéndolo dejaría el undo imposible después.
+- **La razón es obligatoria (≥10 caracteres)** y es toda la diferencia entre *"un admin puede arreglar el número"* y *"un admin puede cambiar el número"*. Esa fila es el único registro de por qué el tablero se movió sin venta.
+- **La clave de idempotencia entra como `source_event_id`**, reusando el índice que la tabla llama *"THE correctness mechanism, not a performance index"*. El dinero es el único lugar donde *"dos envíos idénticos son dos hechos reales"* —la regla que `notes.ts` enuncia— es el default equivocado. Y con `was_duplicate` **tampoco se escribe una segunda fila de auditoría**.
+- **`ledger.adjusted` estaba en `audit_action_list()` desde la 0053 sin nada que lo escribiera.** Ahora tiene escritor.
+
+✅ **Y LO QUE MÁS IMPORTA DEL TEST ES EL ÚLTIMO BLOQUE: el ledger no quedó más débil.** `ledger_append` sigue **sin grant** (verificado por `has_function_privilege`), el ledger sigue rechazando UPDATE y DELETE **incluso al dueño**, y no se agregó ningún recómputo. `ledger_adjust` lo alcanza **como dueño**, la misma forma que usa `stage_move`.
+
+🎯 **El gate del camino del dinero lo cazó al entrar, y con razón.** `money-path.test.ts` fija el censo de escritores del ledger; agregar el segundo lo puso rojo. Es el mismo mecanismo que cazó a `message_merge` en el event store — el único lugar del árbol que ve un definer nuevo que acredita plata sin puerta delante.
+
+⚠️ **LO QUE FALTA, DICHO Y NO INSINUADO: la superficie no es alcanzable desde una pantalla.** Hay función y no hay ruta ni UI, que es exactamente el defecto que esta misma entrada denuncia. Está a una ruta de admin y un formulario — con confirmación, porque mueve el tablero público.
+
 ### 🔴 G6/P24 CORRIDA Y **FALLADA** — Y LA CAUSA NO ES CÓDIGO (2026-08-12)
 `scripts/gate-6-storm.ts` extendido: el worker corre, se inyecta un STOP a mitad de tormenta, se mira `suppression_list` y se pide veredicto a T+5 s. **La medición existe por primera vez y su respuesta es FAIL.**
 

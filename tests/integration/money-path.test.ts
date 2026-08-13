@@ -516,20 +516,37 @@ describe('the public money board has no application-role writer', () => {
     expect(parts.join(' | ')).toMatch(/permission denied/i)
   })
 
-  it('has exactly one function in the database that appends to the ledger', async () => {
+  it('has exactly two functions in the database that append to the ledger', async () => {
     // 🔴 STRONGER THAN THE PRIVILEGE CHECK. Every SECURITY DEFINER the owner
     // owns reaches `ledger_append` with no grant at all, so a third one added
     // later — crediting a caller-supplied premium with no close gate in front
     // of it — trips nothing above. Comments are stripped first: the same
     // precedent as `definer-tenancy.test.ts`, which once went red on the prose
     // explaining its own rule.
+    //
+    // ✅ AND IT DID ITS JOB. `app.ledger_adjust` (0071) turned this red the
+    // moment it landed, which is the gate working rather than being in the way:
+    // a second writer on the public money board is a DELIBERATE ACT and this
+    // list is where it becomes visible in a diff.
+    //
+    // Why the second one is defensible, in the terms this file already uses:
+    // `stage_move` is the SALE path and carries the close gate; `ledger_adjust`
+    // is the CORRECTION path and carries three different guards — admin checked
+    // inside the definer against the sealed identity, a mandatory reason of real
+    // length, and an idempotency key riding in as `source_event_id` so a double
+    // submit lands on `earnings_source_event_uidx` instead of crediting twice.
+    // It writes `manual_adjustment` only, never `sale` and never `reversal`:
+    // the reversal slot belongs to the seller's five-second undo.
+    //
+    // ⚠️ A THIRD ENTRY HERE IS NOT A TEST EDIT. It is the one place that would
+    // notice a definer quietly crediting money with no gate at all.
     const rows = await sql<{ proname: string }[]>`
       SELECT p.proname
         FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
        WHERE n.nspname IN ('app', 'ref')
          AND regexp_replace(p.prosrc, '--[^\n]*', '', 'g') LIKE '%ledger_append(%'
        ORDER BY p.proname`
-    expect(rows.map((r) => r.proname)).toEqual(['stage_move'])
+    expect(rows.map((r) => r.proname)).toEqual(['ledger_adjust', 'stage_move'])
   })
 
   it('bounds one ledger entry, and bounds the public number to the ledger', async () => {

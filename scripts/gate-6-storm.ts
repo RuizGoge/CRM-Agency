@@ -76,7 +76,7 @@ import { sql } from 'drizzle-orm'
 import postgres from 'postgres'
 
 import { ingestWebhook, withSystemWork, withTenant, type IngestOutcome } from '../app/db'
-import { startWorker, stopWorker } from '../app/jobs/worker'
+import { startWorker, stopWorker, workerEnabled } from '../app/jobs/worker'
 import { admitDelivery, drainSaturation } from '../app/lib/ingest/semaphore'
 
 /** Overridable so the harness can be smoke-run before the real 20 000. */
@@ -493,9 +493,27 @@ async function main(): Promise<void> {
   // harness measured INGEST only: deliveries landed, jobs were enqueued, and
   // nothing drained them. That was enough for "zero lost" and useless for
   // G6/P24, whose whole subject is what happens to a job behind a backlog.
-  // Folded — the worker inside this process — because that is the leg the
-  // product ships on and the harder of the two for this assertion.
-  await startWorker()
+  //
+  // 🔴 WHICH LEG THIS IS COMES FROM `PROCESS_ROLES` AND FROM NOTHING ELSE, which
+  // is the same switch production uses — §2543's point is that the fold is a
+  // deployment decision rather than a rewrite, so a harness with its own
+  // topology flag would be measuring a third thing that ships nowhere.
+  //
+  //   folded:  PROCESS_ROLES=web,worker,ingest   · the worker starts in here
+  //   split:   PROCESS_ROLES=web,ingest          · `npm run worker` drains, over there
+  //
+  // :2405 wants the protected assertion in BOTH legs, and §340 (N19) adds the
+  // reason the split leg carries its own weight: P1–P6 and P11 are asserted on
+  // the SPLIT topology only, so the poll floor measured here is the one that
+  // counts against its budget rather than an honest-but-uncounted number.
+  const folded = workerEnabled()
+  if (folded) await startWorker()
+
+  console.log(
+    folded
+      ? 'LEG: FOLDED — the worker runs inside this process.\n'
+      : 'LEG: SPLIT — the worker must be running SEPARATELY (`npm run worker`).\n',
+  )
 
   // 🔴 THE REAL HISTOGRAM, not the monitor's fake one. The first wiring of this
   // harness installed __installFakeHistogram(0) and dutifully reported a loop
