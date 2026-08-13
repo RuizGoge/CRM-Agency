@@ -44,7 +44,15 @@ Migración **0071** · `app.ledger_adjust` · `tests/integration/ledger-correcti
 
 🎯 **El gate del camino del dinero lo cazó al entrar, y con razón.** `money-path.test.ts` fija el censo de escritores del ledger; agregar el segundo lo puso rojo. Es el mismo mecanismo que cazó a `message_merge` en el event store — el único lugar del árbol que ve un definer nuevo que acredita plata sin puerta delante.
 
-⚠️ **LO QUE FALTA, DICHO Y NO INSINUADO: la superficie no es alcanzable desde una pantalla.** Hay función y no hay ruta ni UI, que es exactamente el defecto que esta misma entrada denuncia. Está a una ruta de admin y un formulario — con confirmación, porque mueve el tablero público.
+✅ **CABLEADA EL MISMO DÍA — `/admin/earnings` y `POST /api/ledger-corrections`.** La entrada de arriba decía que faltaba, y era el mismo defecto que denunciaba. **Verificado en pantalla y contra la base:** la admin Valeria quitó **−$310,00** del total de Priya con la razón *"Policy lapsed inside the free-look window."*, respuesta **201**, una fila de `manual_adjustment` y **una** fila de `ledger.adjusted` en el audit.
+
+- **La pantalla lee `/api/leaderboard`, no una ruta de admin nueva.** El tablero ya devuelve exactamente lo que una admin necesita antes de corregir —cada vendedora, su id y su total como string de centavos— y una segunda lectura de las mismas filas sería una segunda cosa que mantener cierta.
+- 🔴 **El importe se parsea EN EL SERVIDOR y nunca llega como número.** El cliente manda el string que la admin tipeó (`$310.00`) y `parseUserAmount` lo vuelve `-31000` centavos; rechaza precisión sub-centavo en vez de redondear, porque redondear plata es una decisión de dominio que esa función no está autorizada a tomar. **El cliente no hace aritmética de dinero, nunca.**
+- **Importe positivo + dirección (add/remove), no un menos tipeado.** Un `-` que se cae silenciosamente **duplicaría** el número en vez de reducirlo.
+- ⚠️ **Paso de confirmación, NO el undo optimista de 5 s de la casa, y la excepción está argumentada en el lugar:** esto mueve un tablero **público** donde compiten cincuenta personas, y el cupo de undo de un asiento es de la vendedora — una corrección de admin no puede consumirlo.
+- **La clave de idempotencia se regenera sólo cuando una corrección aterriza**, que es lo que permite una segunda corrección deliberada sin permitir un doble click.
+
+⚠️ El gate del registro de rutas pidió que salirse de la sonda de silo fuera explícito: **octavo opt-out**, con su razón — `ledger_adjust` devuelve el mismo NULL para un id ajeno que para uno inexistente, así que no hay id que conteste distinto.
 
 ### 🔴 G6/P24 CORRIDA Y **FALLADA** — Y LA CAUSA NO ES CÓDIGO (2026-08-12)
 `scripts/gate-6-storm.ts` extendido: el worker corre, se inyecta un STOP a mitad de tormenta, se mira `suppression_list` y se pide veredicto a T+5 s. **La medición existe por primera vez y su respuesta es FAIL.**

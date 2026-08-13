@@ -18,6 +18,7 @@ import * as quickAdd from '~/routes/api/quick-add'
 import * as search from '~/routes/api/search'
 import * as signOut from '~/routes/api/sign-out'
 import * as timeline from '~/routes/api/timeline'
+import * as ledgerCorrections from '~/routes/api/ledger-corrections'
 import * as webhookEndpoints from '~/routes/api/webhook-endpoints'
 import * as webhooksAloware from '~/routes/api/webhooks-aloware'
 
@@ -95,6 +96,7 @@ const MODULE_ENTRIES: readonly (readonly [string, Record<string, unknown>])[] = 
   ['routes/api/home-setup.ts', homeSetup],
   ['routes/api/integration-health.ts', integrationHealth],
   ['routes/api/leaderboard.ts', leaderboard],
+  ['routes/api/ledger-corrections.ts', ledgerCorrections],
   ['routes/api/my-book.ts', myBook],
   ['routes/api/my-day.ts', myDay],
   ['routes/api/notes.ts', notes],
@@ -207,7 +209,7 @@ describe('what the registry lets the suites ask', () => {
       ).toBeGreaterThan(80)
     }
 
-    // Pinned. SEVEN today, and each one is argued in its own module. An eighth
+    // Pinned. EIGHT today, and each one is argued in its own module. An eighth
     // is a decision somebody makes on purpose.
     //
     // `webhook-endpoints.ts` joined on 2026-08-12 and its reason is the
@@ -220,6 +222,11 @@ describe('what the registry lets the suites ask', () => {
       'routes/api/home-setup.ts',
       'routes/api/integration-health.ts',
       'routes/api/leaderboard.ts',
+      // Admin-only by scope, and `app.ledger_adjust` derives the tenant from the
+      // sealed session: a foreign owner id returns the same NULL as one that
+      // never existed, so there is no id a probe could present that answers
+      // differently. Same shape as the two above it, on the money path.
+      'routes/api/ledger-corrections.ts',
       'routes/api/quick-add.ts',
       'routes/api/sign-out.ts',
       'routes/api/webhook-endpoints.ts',

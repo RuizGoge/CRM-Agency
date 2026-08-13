@@ -28,6 +28,9 @@ export default [
     // tenant_admin_only, so a seller reaching this URL reads zero rows and the
     // screen renders its no-permission state rather than a table of zeros.
     route('admin/integration-health', 'routes/ui/integration-health.tsx'),
+    // Correcting a wrong number on the public board. Admin-only by policy, not
+    // by this line: `app.ledger_adjust` checks the role inside the definer.
+    route('admin/earnings', 'routes/ui/earnings-admin.tsx'),
   ]),
 
   route('sign-out', 'routes/api/sign-out.ts'),
@@ -54,6 +57,8 @@ export default [
   // the definer rather than here — `webhook_endpoint` is `definer_only`, so
   // `crm_app` holds no privilege on the table at all.
   route('api/webhook-endpoints', 'routes/api/webhook-endpoints.ts'),
+  // The compensating append. The ledger stays append-only; this never edits.
+  route('api/ledger-corrections', 'routes/api/ledger-corrections.ts'),
   // better-auth mounts its whole surface under one splat. See the note in the
   // module for why this is the one resource route outside the endpoint factory.
   route('api/auth/*', 'routes/api/auth.ts'),
