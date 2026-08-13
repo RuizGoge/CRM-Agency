@@ -19,6 +19,8 @@ import * as search from '~/routes/api/search'
 import * as signOut from '~/routes/api/sign-out'
 import * as timeline from '~/routes/api/timeline'
 import * as ledgerCorrections from '~/routes/api/ledger-corrections'
+import * as userAccess from '~/routes/api/user-access'
+import * as users from '~/routes/api/users'
 import * as webhookEndpoints from '~/routes/api/webhook-endpoints'
 import * as webhooksAloware from '~/routes/api/webhooks-aloware'
 
@@ -105,6 +107,8 @@ const MODULE_ENTRIES: readonly (readonly [string, Record<string, unknown>])[] = 
   ['routes/api/search.ts', search],
   ['routes/api/sign-out.ts', signOut],
   ['routes/api/timeline.ts', timeline],
+  ['routes/api/user-access.ts', userAccess],
+  ['routes/api/users.ts', users],
   ['routes/api/webhook-endpoints.ts', webhookEndpoints],
   ['routes/api/webhooks-aloware.ts', webhooksAloware],
 ]
@@ -209,7 +213,7 @@ describe('what the registry lets the suites ask', () => {
       ).toBeGreaterThan(80)
     }
 
-    // Pinned. EIGHT today, and each one is argued in its own module. An eighth
+    // Pinned. TEN today, and each one is argued in its own module. An eighth
     // is a decision somebody makes on purpose.
     //
     // `webhook-endpoints.ts` joined on 2026-08-12 and its reason is the
@@ -229,6 +233,11 @@ describe('what the registry lets the suites ask', () => {
       'routes/api/ledger-corrections.ts',
       'routes/api/quick-add.ts',
       'routes/api/sign-out.ts',
+      // Admin-only by scope and scoped by app.current_tenant() in the query or
+      // the definer: a foreign id answers the same as one that never existed,
+      // so there is nothing a probe could present that discriminates.
+      'routes/api/user-access.ts',
+      'routes/api/users.ts',
       'routes/api/webhook-endpoints.ts',
       'routes/api/webhooks-aloware.ts',
     ])

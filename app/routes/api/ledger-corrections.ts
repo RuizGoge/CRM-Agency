@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm'
 import { withTenant } from '~/db'
 import { requireIdentity } from '~/lib/auth/identity'
 import { defineEndpoint } from '~/lib/endpoint/define'
+import { refusalSentence } from '~/lib/endpoint/refusal'
 import { MoneyError, negate, parseUserAmount, toWireString, type Money } from '~/lib/money/money'
 
 /**
@@ -77,13 +78,20 @@ export async function correctLedger(
     return { status: 'invalid', reason: 'Reload the form and try again.' }
   }
 
-  return withTenant(identity, async (tx, scope) => {
-    // The database checks this too, inside the definer, against the sealed
-    // identity. This decides which SCREEN STATE renders; it is not what protects
-    // the board.
-    if (scope !== 'tenant_admin') return { status: 'forbidden' }
+  // 🔴 THE CATCH IS AROUND `withTenant`, NOT INSIDE IT. A raise from the definer
+  // does not reject at the `tx.execute` await — postgres.js surfaces it when the
+  // TRANSACTION closes, outside the callback — so a catch inside never runs and
+  // every refusal escapes as `500 Unexpected Server Error`. This route shipped
+  // with the catch in the wrong place and the definer tests never saw it,
+  // because a direct call raises where the caller is looking. Found by driving
+  // the real HTTP route on `/api/user-access`, which had it too.
+  try {
+    return await withTenant(identity, async (tx, scope) => {
+      // The database checks this too, inside the definer, against the sealed
+      // identity. This decides which SCREEN STATE renders; it is not what
+      // protects the board.
+      if (scope !== 'tenant_admin') return { status: 'forbidden' }
 
-    try {
       const rows = await tx.execute<{ id: string | null }>(sql`
         SELECT app.ledger_adjust(
           ${input.ownerUserId}::uuid,
@@ -95,16 +103,14 @@ export async function correctLedger(
       const entryId = rows[0]?.id ?? null
       if (entryId === null) return { status: 'not_found' }
       return { status: 'applied', entryId, deltaCents: toWireString(deltaCents) }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      for (const [code, sentence] of REFUSALS) {
-        if (message.includes(code)) return { status: 'invalid', reason: sentence }
-      }
-      // Anything we did not name is a fault, not the admin's mistake, and must
-      // not be swallowed into a 422 that reads like one.
-      throw error
-    }
-  })
+    })
+  } catch (error) {
+    const sentence = refusalSentence(error, REFUSALS)
+    // Anything we did not name is a fault, not the admin's mistake, and must
+    // not be swallowed into a 422 that reads like one.
+    if (sentence === null) throw error
+    return { status: 'invalid', reason: sentence }
+  }
 }
 
 export async function action({ request }: { request: Request }): Promise<Response> {

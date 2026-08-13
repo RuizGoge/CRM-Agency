@@ -7,6 +7,22 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 🖥️ LA PANTALLA DE EQUIPO, Y UN BUG QUE HACÍA 500 A TODO RECHAZO EN DOS RUTAS (2026-08-13)
+`/admin/users` · `GET /api/users` · `POST /api/user-access` · `app/lib/endpoint/refusal.ts`. **784 tests**, `verify` verde. **Verificado en pantalla y contra el server real.**
+
+**Los escritores de la 0072 llegan a una superficie.** Verificado: Valeria promovió a Priya a `supervisor` con razón, **una** fila de auditoría con `before`/`after`/actor, y la segunda llamada idéntica devolvió `unchanged` **sin escribir una segunda**.
+
+🔴 **EL BUG, Y ESTABA EN DOS RUTAS.** Los rechazos del definer (`UR003`, `UR004`, `LA004`…) salían como **`500 Unexpected Server Error`** en vez de 422 con la frase. Dos causas encadenadas, las dos encontradas manejando la ruta HTTP real:
+
+1. **Drizzle envuelve el error de Postgres**, así que `error.message` dice *"Failed query: …"* y el código vive en `error.cause`. Un `message.includes('UR003')` no matchea nunca. → `refusalSentence()` recorre la cadena de `cause`.
+2. **Y lo que de verdad lo rompía: el `catch` estaba ADENTRO de `withTenant`.** Un raise del definer **no rechaza en el `await` de `tx.execute`** — postgres.js lo emerge al **cerrar la transacción**, fuera del callback. Así que el catch nunca corría. → El catch envuelve la llamada a `withTenant`, no su interior.
+
+⚠️ **POR QUÉ NINGÚN TEST LO VIO, y es la lección repetida de esta semana:** `ledger-correction.test.ts` y `user-role.test.ts` llaman al **definer directo**, donde el raise llega crudo y donde el llamador está mirando. **Probaron el mecanismo y nunca el camino** — exactamente lo mismo que pasó con la cadena de STOP de la 0069, que el arnés de la tormenta destapó. `ledger-corrections.ts` shippeó ayer con este defecto.
+
+📌 **Y una trampa operativa, séptima aparición de la misma firma:** `compliance-emit.test.ts` pasó sola (20/20) y falló dos aserciones dentro de `npm run verify` — **con `npm run dev` corriendo en paralelo**. Apagado el server, verde. **No corras la suite con el dev server levantado.**
+
+⚠️ **La pantalla no tiene alta de usuarios y lo dice**, en vez de mostrar un botón que falla: *"New people are set up by hand for now — we don't send email yet, so there's no invitation to click."* Esa sigue siendo tu decisión.
+
 ### 👤 EL ROL POR FIN TIENE ESCRITOR — Y LA COLUMNA QUE GOBIERNA LA PLATA DEJA DE SER INMUTABLE (2026-08-13)
 Migración **0072** · `app.app_user_set_role` / `app.app_user_set_active` · `tests/integration/user-role.test.ts`. **775 → 784 tests.** `verify` verde.
 

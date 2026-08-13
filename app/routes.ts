@@ -31,6 +31,9 @@ export default [
     // Correcting a wrong number on the public board. Admin-only by policy, not
     // by this line: `app.ledger_adjust` checks the role inside the definer.
     route('admin/earnings', 'routes/ui/earnings-admin.tsx'),
+    // Who is on the floor and what they may do. Admin-only by policy: both
+    // writers check the role inside the definer against the sealed identity.
+    route('admin/users', 'routes/ui/users-admin.tsx'),
   ]),
 
   route('sign-out', 'routes/api/sign-out.ts'),
@@ -59,6 +62,10 @@ export default [
   route('api/webhook-endpoints', 'routes/api/webhook-endpoints.ts'),
   // The compensating append. The ledger stays append-only; this never edits.
   route('api/ledger-corrections', 'routes/api/ledger-corrections.ts'),
+  route('api/users', 'routes/api/users.ts'),
+  // The writers app_user.role never had. Promoting somebody here hands them the
+  // surfaces that move money, which is why the copy says so before the click.
+  route('api/user-access', 'routes/api/user-access.ts'),
   // better-auth mounts its whole surface under one splat. See the note in the
   // module for why this is the one resource route outside the endpoint factory.
   route('api/auth/*', 'routes/api/auth.ts'),
