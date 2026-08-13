@@ -7,6 +7,26 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### ✍️ REVERSIÓN FIRMADA POR JORGE: ENTRAN GOOGLE LOGIN Y EMAIL TRANSACCIONAL, EN ESE ORDEN (2026-08-13)
+**Decisión de Jorge, tomada hoy. Nada construido todavía** — esta entrada existe para que la próxima sesión no lea el texto viejo y diseñe sobre una regla que ya no rige.
+
+**Qué se revierte.** `05-architecture:1273` corta explícitamente: *"No self-signup, no SSO, no OAuth, no password reset email, no invitation flow."* Y CLAUDE.md lista *"no transactional email in the MVP"* entre las ausencias deliberadas. **Las dos caen**, con este orden: **Google login primero, email transaccional después.**
+
+✅ **Lo que hace la reversión barata:** `05-architecture:1669` dice que el reset autogestionado *"llega con el email de V1.1"*. El email estaba **diferido, no matado**. Traerlo adelante es adelantar V1.1, no romper un "nunca".
+
+🎯 **POR QUÉ GOOGLE PRIMERO, Y ES EL PUNTO QUE DECIDIÓ EL ORDEN.** Con Google, el hueco del alta —el producto no puede dar de alta a nadie— **se cierra sin un solo email**: el admin crea la fila de `app_user` con el correo de la persona, y esa persona entra con su cuenta de Google. No hay invitación que mandar ni contraseña inicial que pasar por fuera. Y el reset de contraseña deja de existir para esos usuarios, porque lo maneja Google — lo que vuelve **irrelevante** (no incorrecta) la decisión firmada del 2026-08-01 sobre `sendResetPassword` para ellos.
+
+🔴 **LA PARTE QUE HAY QUE HACER BIEN, Y ES DE SILO.** Con Google, cualquiera con una cuenta de Google puede **intentar** entrar. La defensa no puede ser el proveedor: **el login debe resolver sólo si ya existe una fila de `app_user` con ese correo, no deactivada.** O sea que el admin sigue dando de alta primero y Google sólo prueba **quién sos**, nunca **si podés pasar**. Un `signIn` que cree la fila al vuelo sería self-signup por la puerta de atrás, que es lo que `:1273` cortaba.
+
+⚠️ **TRES FALLOS FIRMADOS QUE DESCANSAN SOBRE "NO HAY EMAIL", y hay que revisitarlos cuando el email entre — no ahora:**
+- **`05c` C11 y :1264** declaran `mfa: false` en endpoints `tenant_admin` **precisamente porque** sin email no hay recuperación de enrolamiento, y un admin que pierde su TOTP **pierde el break-glass para siempre**. Con email ese argumento se disuelve y *"¿MFA obligatorio en admin?"* se reabre. Las tres rutas de admin de esta semana llevan `mfa: false` con su `mfaReason` citando esa ausencia — **habrá que reescribir esas tres razones o cambiar la decisión.**
+- **`:1267` / `:1501`** — el lockout de MFA del admin, los códigos de recuperación y el runbook de `crm_migrator` están premisados en no-email.
+- **`:455`** — el kiosco se cortó en parte por *"sin email no hay recuperación autogestionada para una pantalla desatendida"*. **No se revive**; sólo cambia su razón.
+
+🔴 **BLOQUEADO EN JORGE, Y ES LO PRIMERO:** crear el cliente OAuth en Google Cloud y verificar el dominio. Claude no crea cuentas ni carga credenciales. Sin eso el trabajo se puede diseñar pero no probar de punta a punta.
+
+⚠️ **Y el email sigue teniendo su propio bloqueo cuando llegue:** proveedor, verificación de dominio y probablemente método de pago — con §9.4.1 haciendo de la ausencia de método de pago el control de costo de este proyecto.
+
 ### 🖥️ LA PANTALLA DE EQUIPO, Y UN BUG QUE HACÍA 500 A TODO RECHAZO EN DOS RUTAS (2026-08-13)
 `/admin/users` · `GET /api/users` · `POST /api/user-access` · `app/lib/endpoint/refusal.ts`. **784 tests**, `verify` verde. **Verificado en pantalla y contra el server real.**
 
