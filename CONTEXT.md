@@ -30,7 +30,18 @@ Quitar las líneas **enteras** no cambia nada medible. La mutación colapsó las
 
 ⚠️ **QUÉ NO PRUEBA ESTO.** No prueba que las líneas sean inútiles: siguen separando pools, y contra un handler bulk **lento** —o muchos jobs concurrentes en vuelo— la separación debería importar. Lo que queda demostrado es más angosto y más incómodo: **la aserción tal como §2405 la especifica no discrimina**, porque "20.000 jobs bulk" mide profundidad de cola y el mecanismo depende de duración.
 
-**Lo que haría falta para darle dientes:** que los jobs bulk sean **lentos** (que retengan la conexión) en vez de meramente numerosos. Sin eso, L2-P es un número verde que no significa lo que su nombre dice — que es exactamente la clase de verde que este proyecto existe para rechazar.
+🔴 **Y AL IR A DARLE DIENTES APARECIÓ LA CAUSA REAL: LA 0070 SEPARÓ EL POOL EQUIVOCADO.** Hay **dos** pools en este árbol y no son el mismo:
+
+| | |
+|---|---|
+| `app/db/pool.ts` | **UNO SOLO**, `max: 8` (`DB_POOL_MAX`). Lo usa **todo handler** vía `withTenant`/`withSystemWork` — y, plegado, **toda request web** |
+| Pools internos de pg-boss | separados, sólo para el fetch/complete de jobs. **Esto** es lo que la 0070 partió en tres con `max: 4` por línea |
+
+Un handler de job **no saca conexiones del pool de pg-boss**: saca del pool de la aplicación, que es compartido y que la 0070 **no tocó**. Eso explica el resultado de la mutación exactamente — colapsar las instancias de pg-boss no cambió nada porque su pool nunca fue el cuello de botella.
+
+⚠️ **CONSECUENCIA SOBRE EL TRABAJO QUE IBA A HACER:** hacer los jobs bulk **lentos** produce contención en `pool` (max 8), que las líneas **no separan** — así que el test se pondría rojo en el control **y** en la mutación por igual. Habría sido una tarde de trabajo para construir un segundo test que tampoco discrimina. **Leído del código, no medido todavía** — la medición que lo cerraría es bajar `DB_POOL_MAX` y ver si las dos patas se degradan igual.
+
+**Lo que la 0070 SÍ compró, y sigue en pie independiente de esto:** `JOBS004` (la línea de compliance no se puede desplegar por omisión), `JOBS005` (una cola sin fila de registro no arranca en vez de quedar sin drenar en silencio), y el eje de latencia como declaración con gate. **Lo que NO compró:** protección contra el hambre de pool a nivel de handler, que es el escenario que §11.7.2 describe. **No propongo revertirla** — separar pools es barato y las dos negativas de arranque valen por sí solas —, pero su argumento de latencia queda sin respaldo hasta que exista un reservado sobre el pool de la aplicación, o un pool por línea ahí.
 
 📌 **Y el método vale tanto como el hallazgo.** El primer intento de mutación corrió con **Docker caído**: las dos corridas salían exit 1 sin salida, porque el `process.exit()` del arnés trunca stdout en Windows. Si me quedaba con esa primera corrida habría reportado *"la mutación pone el test rojo"* — la conclusión correcta, por la razón equivocada, sobre un test que no corrió. **Correr el control primero es lo que lo atrapó.**
 
