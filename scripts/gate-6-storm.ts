@@ -367,6 +367,30 @@ async function injectStopAndWatch(seller: string, contactId: string): Promise<St
   }
 }
 
+/**
+ * 🔴 THE PROBE THE SPLIT LEG CANNOT RUN WITHOUT, and the reason is a
+ * misattribution rather than a missing number.
+ *
+ * Folded, the worker is in this process and its absence is impossible. Split, it
+ * is a SEPARATE `npm run worker` that somebody has to have started — and if
+ * nobody did, every job sits in `created`, the STOP never merges,
+ * `suppression_list` never gets its row, and the run reports **exactly the
+ * failure G6/P24 already has for a completely different reason**. We would read
+ * "the compliance lane did not deliver in time" off a run where nothing was
+ * draining at all, and the honest conclusion and the dishonest one look
+ * identical on the console.
+ *
+ * §7.10's `security.process_heartbeat` would answer this directly and does not
+ * exist, so this observes the property we actually care about instead of a proxy
+ * for it: has ANYTHING moved a job out of `created` while the storm was running.
+ */
+async function drainerIsPresent(observer: postgres.Sql): Promise<boolean> {
+  const rows = await observer<{ n: string }[]>`
+    SELECT count(*) AS n FROM pgboss.job
+     WHERE name = 'call-merge' AND state <> 'created'`
+  return Number.parseInt(rows[0]?.n ?? '0', 10) > 0
+}
+
 interface StormResult {
   readonly outcomes: Record<string, number>
   readonly errors: number
@@ -515,6 +539,25 @@ async function main(): Promise<void> {
       : 'LEG: SPLIT — the worker must be running SEPARATELY (`npm run worker`).\n',
   )
 
+  // Sampled a few seconds in, once the storm has given a drainer something to
+  // do. Folded needs no probe: the worker is this process.
+  let drainerSeen = folded
+  const drainProbe = folded
+    ? Promise.resolve()
+    : new Promise<void>((resolve) => {
+        setTimeout(() => {
+          const probe = postgres(process.env['MIGRATION_DATABASE_URL'] ?? '', {
+            max: 1,
+            onnotice: () => {},
+          })
+          void drainerIsPresent(probe)
+            .then((seen) => {
+              drainerSeen = seen
+            })
+            .finally(() => probe.end().then(resolve, () => resolve()))
+        }, 10_000)
+      })
+
   // 🔴 THE REAL HISTOGRAM, not the monitor's fake one. The first wiring of this
   // harness installed __installFakeHistogram(0) and dutifully reported a loop
   // p99 of 0.0 ms — a measurement of nothing, printed under the name of the
@@ -572,7 +615,11 @@ async function main(): Promise<void> {
       `achieved ${(TOTAL / (result.wallMs / 1000)).toFixed(0)}/s`,
   )
 
+  await drainProbe
+
   console.log('\n— G6/P24, THE PROTECTED ASSERTION —')
+  console.log(`  leg                  ${folded ? 'folded' : 'split'}`)
+  console.log(`  drainer observed     ${drainerSeen ? 'yes' : '🔴 NO'}`)
   console.log(`  STOP ingested        ${stop.ingestOutcome}`)
   console.log(
     `  suppression_list     ${
@@ -585,19 +632,53 @@ async function main(): Promise<void> {
 
   const p24InTime = stop.suppressedInMs !== null && stop.suppressedInMs <= STOP_DEADLINE_MS
   const p24Blocked = stop.verdictAtDeadline === 'blocked_suppressed'
-  console.log(`  VERDICT              ${p24InTime && p24Blocked ? 'PASS' : 'FAIL'}`)
 
-  console.log('\n— FOLDED BULKHEAD (the poll floor, same event loop) —')
+  // 🔴 WITHOUT A DRAINER THERE IS NO VERDICT TO REPORT, only the appearance of
+  // one. A split run with nobody working the queues produces the identical
+  // console output to a real G6/P24 failure, and printing FAIL under it would
+  // be this project's own worst failure mode: a number reported for a half that
+  // was never measured. So the assertion is declared UNRUN rather than failed.
+  const p24Meaningful = drainerSeen
+  console.log(
+    `  VERDICT              ${
+      !p24Meaningful
+        ? 'UNRUN — nothing drained the queues'
+        : p24InTime && p24Blocked
+          ? 'PASS'
+          : 'FAIL'
+    }`,
+  )
+  if (!p24Meaningful) {
+    console.log(
+      '  🔴 The split leg needs a SEPARATE worker. Start one in another shell:\n' +
+        '       npm run worker\n' +
+        '     and run this with PROCESS_ROLES=web,ingest so this process does not fold one in.\n' +
+        '     Nothing above about G6/P24 means anything until that is true.',
+    )
+  }
+
+  console.log(
+    folded
+      ? '\n— FOLDED BULKHEAD (the poll floor, same event loop as the storm) —'
+      : '\n— THE POLL FLOOR (split: the worker is a different process) —',
+  )
   console.log(`  samples ${floorSamples.length}   failed ${floorFailed}`)
   console.log(
     `  p50 ${pct(floorSamples, 0.5).toFixed(2)}ms  ` +
       `p95 ${pct(floorSamples, 0.95).toFixed(2)}ms  ` +
       `p99 ${pct(floorSamples, 0.99).toFixed(2)}ms`,
   )
+  // 🔴 THE SAME NUMBER MEANS DIFFERENT THINGS IN THE TWO LEGS, and §340 (N19) is
+  // why: P1–P6 and P11 are asserted on the SPLIT topology ONLY. Folded, this is
+  // an honest number that is not the budget; split, it IS the budget.
   console.log(
-    `  P11 red line is 80 ms for a 304. This is the FULL read, not a 304, and ` +
-      `it is the folded leg — §340 (N19) says P1–P6 and P11 are asserted on the ` +
-      `SPLIT topology only and the folded rung publishes its own honest numbers.`,
+    folded
+      ? `  P11's red line is 80 ms for a 304. This is the FULL read, not a 304, and it is ` +
+          `the FOLDED leg — §340 (N19) asserts P1–P6 and P11 on the SPLIT topology only, ` +
+          `so this rung publishes its own honest number and is not judged by that budget.`
+      : `  P11's red line is 80 ms for a 304, and §340 (N19) asserts it on THIS leg. ` +
+          `Measured as the FULL read rather than a 304, so it is stricter than the budget ` +
+          `rather than looser: ${pct(floorSamples, 0.95).toFixed(2)}ms against 80.`,
   )
 
   const cpuPerWebhook = result.cpuMs / TOTAL
@@ -639,17 +720,17 @@ async function main(): Promise<void> {
 
   const lost = TOTAL - answered
   const clean = lost === 0 && result.errors === 0 && saturation.shed === 0
-  const p24 = p24InTime && p24Blocked
+  const p24 = p24Meaningful && p24InTime && p24Blocked
 
   console.log(
-    `\nRESULT: ${lost === 0 ? 'zero webhooks lost' : `🔴 ${lost} WEBHOOKS LOST`}, ` +
+    `\nRESULT [${folded ? 'folded' : 'split'}]: ` +
+      `${lost === 0 ? 'zero webhooks lost' : `🔴 ${lost} WEBHOOKS LOST`}, ` +
       `${saturation.shed} shed, loop p99 ${loop.loopP99Ms.toFixed(1)}ms. ` +
-      `G6/P24 ${p24 ? 'PASSED' : '🔴 FAILED'}.`,
+      `G6/P24 ${!p24Meaningful ? '⬜ UNRUN' : p24 ? 'PASSED' : '🔴 FAILED'}.`,
   )
   console.log(
     p24 && clean
-      ? '  All four previously subject-less assertions now have one, and this leg is the FOLDED one.\n' +
-          '  Gate 6 still needs the SPLIT leg before it closes — :2405 says both.'
+      ? `  This leg (${folded ? 'folded' : 'split'}) is done. :2405 wants BOTH — run the other one.`
       : '  Gate 6 NOT closed.',
   )
 

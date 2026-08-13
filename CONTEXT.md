@@ -7,6 +7,24 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 🔀 EL LEG SPLIT DE LA PUERTA 6, CORRIDO (2026-08-12)
+`scripts/gate-6-storm.ts` · sonda de drenador · etiquetas por pata. **Las dos patas se corren ahora con el mismo arnés y `PROCESS_ROLES` como único interruptor**, que es el mismo que usa producción — un flag propio del arnés mediría una tercera cosa que no shippea a ningún lado.
+
+```
+npm run worker                    # en otra terminal
+PROCESS_ROLES=web,ingest npx tsx --env-file-if-exists=.env scripts/gate-6-storm.ts
+```
+
+**Medido, pata SPLIT, 20.000 entregas a 333/s:** 20.000 respondidas · **cero perdidas** · ingesta p95 **18,64 ms** (p50 6,51 · p99 37,28) · **piso de polling p95 15,05 ms** · loop p99 11,6 ms · 0 shed · pico de cola 13 · espera más larga 38 ms · `cpu_ms_per_webhook` 1,530.
+
+🎯 **Y ACÁ ESE NÚMERO SÍ ES EL PRESUPUESTO.** §340 (N19) asserta P1–P6 y P11 **sólo en la topología split**, así que el piso de polling de 15,05 ms se mide contra la línea roja de 80 — y encima como lectura **completa**, no un 304, o sea más estricto que el presupuesto y no más laxo. Plegado el mismo número es honesto y no es el presupuesto. El arnés ahora imprime la frase correcta según la pata en vez de una sola que era falsa en la mitad de los casos.
+
+⚠️ **Comparación entre patas, misma máquina:** ingesta p95 **11,62 ms plegado → 18,64 ms split**, piso de polling **10,80 → 15,05**. La pata split sale **más lenta**, que es contraintuitivo hasta mirar qué cambió: el worker separado compite por el mismo Postgres y el mismo hierro, y en esta máquina eso pesa más de lo que alivia sacar el worker del event loop. En una instancia real con vCPUs separadas la relación puede invertirse. **No se saca conclusión de fold/split de esto**, y el número de CPU sigue siendo el cuarto dependiente de máquina.
+
+🔴 **LA SONDA DE DRENADOR, Y SIN ELLA ESTE LEG NO SE PODÍA CORRER HONESTAMENTE.** Plegado el worker está en el proceso y su ausencia es imposible. Split es un `npm run worker` que alguien tiene que haber levantado — y si nadie lo hizo, cada job queda en `created`, el STOP nunca mergea, y **la corrida reporta exactamente el fallo que G6/P24 ya tiene, por una razón completamente distinta**. Leeríamos *"la línea de compliance no entregó a tiempo"* de una corrida donde no drenaba nada. Ahora la aserción se declara **UNRUN** en vez de FAIL, con las instrucciones para arreglarlo. (§7.10 `security.process_heartbeat` lo contestaría directo y **no existe**, así que la sonda observa la propiedad que importa: si algo movió un job fuera de `created`.)
+
+**G6/P24 en split: FAIL, por la misma causa que en plegado** — ningún nombre de evento mapea a `message.received`. Confirmado que el bloqueo no depende de la topología.
+
 ### 💵 UN NÚMERO EQUIVOCADO SE PUEDE CORREGIR — LA SUPERFICIE QUE LA CONSTITUCIÓN NOMBRABA Y NADIE CONSTRUYÓ (2026-08-12)
 Migración **0071** · `app.ledger_adjust` · `tests/integration/ledger-correction.test.ts`. **763 → 775 tests.** `verify` verde.
 
