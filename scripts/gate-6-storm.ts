@@ -52,7 +52,7 @@
  * and the one left is the one the register marks protected with `retries: 0`.
  */
 
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { monitorEventLoopDelay } from 'node:perf_hooks'
 import { performance } from 'node:perf_hooks'
 
@@ -60,6 +60,7 @@ import { sql } from 'drizzle-orm'
 import postgres from 'postgres'
 
 import { ingestWebhook, withSystemWork, withTenant, type IngestOutcome } from '../app/db'
+import { startWorker, stopWorker } from '../app/jobs/worker'
 import { admitDelivery, drainSaturation } from '../app/lib/ingest/semaphore'
 
 /** Overridable so the harness can be smoke-run before the real 20 000. */
@@ -141,6 +142,182 @@ async function seed(): Promise<string> {
     throw new Error('no seller in the demo tenant — run npm run db:seed first')
   }
   return seller
+}
+
+/**
+ * G6/P24 — THE PROTECTED ASSERTION (`05c` :1588, :2405).
+ *
+ * *"During the 20,000-webhook replay at 333/s, inject one STOP; assert the
+ * `suppression_list` row exists within 5 seconds and that a dial to that number
+ * issued at T+5 s returns `blocked_suppressed`."*
+ *
+ * 🔴 THIS IS THE ONE ASSERTION IN THE GATE WITH A LEGAL CONSEQUENCE, and it is
+ * the reason the latency lanes exist. The STOP arrives as an SMS, so it lands in
+ * `message-merge` — `lane_compliance` since 0070 — while the 20,000 call
+ * deliveries fill `call-merge`, which is `lane_interactive`. Before the lanes
+ * both drew from ONE pg-boss pool, and the STOP was §2367's "job 14,000 in a
+ * FIFO drain".
+ */
+const STOP_OUR_NUMBER = '+13125559624'
+const STOP_SEAT = 962_400
+/** The deadline the register names, in ms. Not a tuning knob. */
+const STOP_DEADLINE_MS = 5_000
+
+/**
+ * 🔴 A FRESH LEAD NUMBER EVERY RUN, AND THE APPEND-ONLY RULE IS WHY.
+ *
+ * The first version of this cleaned up after itself with `DELETE FROM
+ * app.suppression_list` as the OWNER, and the engine refused: *"AP001:
+ * suppression_list is append-only. Corrections are compensating appends, never
+ * edits."* The statement trigger covers the owner too, which is the constitution
+ * working rather than an obstacle — this is one of the three append-only tables
+ * and there is no recompute job by design.
+ *
+ * Reusing a number would also make the assertion pass for the wrong reason: a
+ * suppression row left by an earlier run exists at T0, and the elapsed time
+ * reads as zero. A number nobody has ever texted is the only honest subject.
+ */
+const RUN_SUFFIX = String(Date.now()).slice(-7)
+const STOP_LEAD_NUMBER = `+1415${RUN_SUFFIX}`
+
+/**
+ * The subject of the protected assertion, seeded as the owner.
+ *
+ * Texas on purpose: two zones and one-party recording, so neither the calling
+ * window nor the recording guard decides the verdict this assertion is about.
+ * `dial.test.ts` learned that with Florida, which would have passed for the
+ * wrong reason.
+ */
+async function seedStopSubject(seller: string): Promise<string> {
+  const ownerUrl = process.env['MIGRATION_DATABASE_URL']
+  if (ownerUrl === undefined || ownerUrl === '') {
+    throw new Error('MIGRATION_DATABASE_URL is required to seed the STOP subject')
+  }
+
+  const contactId = randomUUID()
+  const owner = postgres(ownerUrl, { max: 1, onnotice: () => {} })
+  try {
+    await owner`
+      INSERT INTO app.aloware_number_mapping
+        (tenant_id, owner_user_id, aloware_user_id, aloware_line_id, from_number_e164, verified_at)
+      SELECT ${TENANT}::uuid, ${seller}::uuid, ${STOP_SEAT}, 96240, ${STOP_OUR_NUMBER}, clock_timestamp()
+       WHERE NOT EXISTS (
+         SELECT 1 FROM app.aloware_number_mapping
+          WHERE tenant_id = ${TENANT}::uuid AND from_number_e164 = ${STOP_OUR_NUMBER})`
+
+    await owner`
+      INSERT INTO app.contact (tenant_id, id, owner_user_id, full_name, created_via, state_code, zip5)
+      VALUES (${TENANT}::uuid, ${contactId}::uuid, ${seller}::uuid, 'Gate6 Stopper', 'manual', 'TX', '75201')`
+
+    await owner`
+      INSERT INTO app.contact_phone (tenant_id, contact_id, owner_user_id, phone_e164, is_primary)
+      VALUES (${TENANT}::uuid, ${contactId}::uuid, ${seller}::uuid, ${STOP_LEAD_NUMBER}, true)`
+  } finally {
+    await owner.end()
+  }
+  return contactId
+}
+
+interface StopResult {
+  /** ms from the STOP being answered at the edge to the suppression row existing. */
+  readonly suppressedInMs: number | null
+  /** The gate's verdict for a dial issued at T0 + 5 s. */
+  readonly verdictAtDeadline: string
+  readonly ingestOutcome: string
+}
+
+/**
+ * Injects ONE STOP through the same edge the storm uses, then watches for the
+ * consequence.
+ *
+ * The delivery is an inbound SMS whose body is the bare keyword, which is what
+ * `app.sms_intent_of` matches whole. Everything else about the path is the
+ * product's: `ingestWebhook` stores it and enqueues `message-merge`, the
+ * compliance-lane worker drains it, and `app.message_merge` appends the consent
+ * row and the suppression row inside its own transaction.
+ */
+async function injectStopAndWatch(seller: string, contactId: string): Promise<StopResult> {
+  const providerMessageId = `gate6-stop-${Date.now()}`
+  const body = Buffer.from(
+    JSON.stringify({
+      event: 'Sms-Received',
+      body: {
+        id: Number(providerMessageId.replace(/\D/g, '').slice(-9)),
+        direction: 1,
+        user_id: STOP_SEAT,
+        incoming_number: STOP_OUR_NUMBER,
+        lead_number: STOP_LEAD_NUMBER,
+        body: 'STOP',
+        created_at: new Date().toISOString().replace('T', ' ').slice(0, 19),
+      },
+    }),
+  )
+
+  const t0 = performance.now()
+  const ingestOutcome = await admitDelivery(() =>
+    ingestWebhook({
+      endpointToken: TOKEN,
+      body,
+      providerEvent: 'Sms-Received',
+      canonical: 'message.received',
+      alowareCallId: providerMessageId,
+      parseStatus: 'parsed',
+      signatureValid: null,
+    }),
+  )
+
+  // Poll for the row. Polling rather than LISTEN because what the register
+  // asserts is wall-clock arrival, and a notification would measure the notify
+  // rather than the write.
+  //
+  // 🔴 WATCHED AS THE OWNER, AND THE FIRST VERSION COULD NOT. `suppression_list`
+  // is `definer_only`: `crm_app` holds no SELECT on it at all, and the poll died
+  // with `permission denied for table suppression_list`. That is the
+  // classification working — the tenant-wide table a STOP writes is not one the
+  // application role reads directly, it reaches it through the gate. So the
+  // harness observes from outside the product's own privilege set, which is also
+  // the more honest vantage point for an assertion about whether a row EXISTS.
+  const observer = postgres(process.env['MIGRATION_DATABASE_URL'] ?? '', {
+    max: 1,
+    onnotice: () => {},
+  })
+
+  let suppressedInMs: number | null = null
+  try {
+    for (;;) {
+      const elapsed = performance.now() - t0
+      const rows = await observer<{ n: string }[]>`
+      SELECT count(*) AS n FROM app.suppression_list
+       WHERE tenant_id = ${TENANT}::uuid AND phone_e164 = ${STOP_LEAD_NUMBER}`
+      const found = (rows[0]?.n ?? '0') !== '0'
+      if (found) {
+        suppressedInMs = performance.now() - t0
+        break
+      }
+      // Watched past the deadline on purpose: "how late" is a more useful number
+      // than "late", and stopping at 5 s would report null for a 5.2 s arrival.
+      if (elapsed > STOP_DEADLINE_MS * 3) break
+      await new Promise((r) => setTimeout(r, 25))
+    }
+  } finally {
+    await observer.end()
+  }
+
+  // 🔴 THE DIAL AT T+5 s, WHICH IS THE HALF THAT MATTERS TO A REGULATOR. A
+  // suppression row nobody reads is not a control; this asks the real gate, in a
+  // real seller session, the way the dial button does.
+  const remaining = STOP_DEADLINE_MS - (performance.now() - t0)
+  if (remaining > 0) await new Promise((r) => setTimeout(r, remaining))
+
+  const verdictAtDeadline = await withTenant({ tenantId: TENANT, userId: seller }, async (tx) => {
+    const rows = await tx.execute<{ verdict: string }>(
+      sql`SELECT verdict::text AS verdict
+            FROM app.compliance_attempt(${contactId}::uuid, 'call', 'dial_button')`,
+    )
+    return rows[0]?.verdict ?? 'no row'
+  })
+
+  return { suppressedInMs, verdictAtDeadline, ingestOutcome }
 }
 
 interface StormResult {
@@ -263,6 +440,15 @@ async function pollFloor(seller: string, stop: () => boolean): Promise<[number[]
 async function main(): Promise<void> {
   console.log(`Gate 6 — retry storm. ${TOTAL} deliveries at ${TARGET_RATE}/s, folded topology.\n`)
   const seller = await seed()
+  const stopContact = await seedStopSubject(seller)
+
+  // 🔴 THE WORKER RUNS, AND UNTIL NOW IT DID NOT. Every earlier run of this
+  // harness measured INGEST only: deliveries landed, jobs were enqueued, and
+  // nothing drained them. That was enough for "zero lost" and useless for
+  // G6/P24, whose whole subject is what happens to a job behind a backlog.
+  // Folded — the worker inside this process — because that is the leg the
+  // product ships on and the harder of the two for this assertion.
+  await startWorker()
 
   // 🔴 THE REAL HISTOGRAM, not the monitor's fake one. The first wiring of this
   // harness installed __installFakeHistogram(0) and dutifully reported a loop
@@ -273,9 +459,24 @@ async function main(): Promise<void> {
 
   let done = false
   const floor = pollFloor(seller, () => done)
+
+  // Injected mid-storm rather than before or after it. The register says
+  // "during", and the whole question is whether the compliance lane holds while
+  // `call-merge` is draining 20,000 jobs — a STOP fired into a quiet system
+  // measures nothing.
+  const stopRun = new Promise<StopResult>((resolve, reject) => {
+    setTimeout(
+      () => {
+        injectStopAndWatch(seller, stopContact).then(resolve, reject)
+      },
+      (TOTAL / TARGET_RATE) * 1000 * 0.5,
+    )
+  })
+
   const result = await storm()
   done = true
   const [floorSamples, floorFailed] = await floor
+  const stop = await stopRun
 
   // The bulkhead's own counters, and the REAL event loop.
   const saturation = drainSaturation()
@@ -305,6 +506,21 @@ async function main(): Promise<void> {
     `  wall ${(result.wallMs / 1000).toFixed(1)}s  ` +
       `achieved ${(TOTAL / (result.wallMs / 1000)).toFixed(0)}/s`,
   )
+
+  console.log('\n— G6/P24, THE PROTECTED ASSERTION —')
+  console.log(`  STOP ingested        ${stop.ingestOutcome}`)
+  console.log(
+    `  suppression_list     ${
+      stop.suppressedInMs === null
+        ? 'NEVER APPEARED'
+        : `${stop.suppressedInMs.toFixed(0)}ms  (deadline ${STOP_DEADLINE_MS}ms)`
+    }`,
+  )
+  console.log(`  dial at T+5s         ${stop.verdictAtDeadline}  (must be blocked_suppressed)`)
+
+  const p24InTime = stop.suppressedInMs !== null && stop.suppressedInMs <= STOP_DEADLINE_MS
+  const p24Blocked = stop.verdictAtDeadline === 'blocked_suppressed'
+  console.log(`  VERDICT              ${p24InTime && p24Blocked ? 'PASS' : 'FAIL'}`)
 
   console.log('\n— FOLDED BULKHEAD (the poll floor, same event loop) —')
   console.log(`  samples ${floorSamples.length}   failed ${floorFailed}`)
@@ -354,17 +570,27 @@ async function main(): Promise<void> {
   console.log(`  budget                  200ms`)
   console.log(`  alert raised            ${loop.alerted ? 'YES' : 'no'}`)
 
-  console.log('\n— STILL NOT ASSERTED, no subject exists —')
-  console.log('  G6/P24 STOP injection   · no STOP sniff at ingress (PROTECTED assertion)')
+  await stopWorker()
 
   const lost = TOTAL - answered
+  const clean = lost === 0 && result.errors === 0 && saturation.shed === 0
+  const p24 = p24InTime && p24Blocked
+
   console.log(
     `\nRESULT: ${lost === 0 ? 'zero webhooks lost' : `🔴 ${lost} WEBHOOKS LOST`}, ` +
       `${saturation.shed} shed, loop p99 ${loop.loopP99Ms.toFixed(1)}ms. ` +
-      `Gate 6 still NOT closed — G6/P24 has no subject.`,
+      `G6/P24 ${p24 ? 'PASSED' : '🔴 FAILED'}.`,
+  )
+  console.log(
+    p24 && clean
+      ? '  All four previously subject-less assertions now have one, and this leg is the FOLDED one.\n' +
+          '  Gate 6 still needs the SPLIT leg before it closes — :2405 says both.'
+      : '  Gate 6 NOT closed.',
   )
 
-  process.exit(lost === 0 && result.errors === 0 && saturation.shed === 0 ? 0 : 1)
+  // `retries: 0` on the protected assertion means exactly this: no second run,
+  // no "flaky, re-run it". A failing G6/P24 is a red exit.
+  process.exit(clean && p24 ? 0 : 1)
 }
 
 void main()

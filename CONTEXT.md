@@ -7,6 +7,23 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 🔴 G6/P24 CORRIDA Y **FALLADA** — Y LA CAUSA NO ES CÓDIGO (2026-08-12)
+`scripts/gate-6-storm.ts` extendido: el worker corre, se inyecta un STOP a mitad de tormenta, se mira `suppression_list` y se pide veredicto a T+5 s. **La medición existe por primera vez y su respuesta es FAIL.**
+
+**Lo medido, pata plegada, 20.000 entregas a 333/s:** 20.000 respondidas · **cero perdidas** · p95 de ingesta 11,62 ms · piso de polling p95 10,80 ms · loop p99 11,8 ms · 0 shed. Todo eso sigue verde. **G6/P24: `suppression_list` NEVER APPEARED · dial a T+5 s = `blocked_calling_window` · VERDICT FAIL.**
+
+🔴 **LA CAUSA RAÍZ ES UN PENDIENTE DECLARADO DE LA PUERTA 2, y está escrito desde el 2026-08-05.** `g2-aloware.md:559`: *"**No hay evento nombrado para SMS.** El modelo de datos de Aloware parece llamar 'communications' a llamadas y textos por igual, así que un SMS entrante probablemente llega como `Communication Initiated` — pero §4.3 mapea SMS entrante a `message.received` keyeado por `provider_message_id`, y **ese binding no está probado**."* El mapa del extractor lo refleja con honestidad: de los nueve nombres que mapea, **ninguno da `message.received`** — el único de SMS es `OutboundSMS-DispositionInvalid` → `message.delivery_failed`.
+
+**Consecuencia exacta:** `mergeMessageFromEvent` **re-deriva** el canónico del cuerpo con `extractKeys`, un nombre no mapeado da `canonical = null`, y `stateOf(null)` devuelve `'failed'`. Así que la condición `p_state = 'received'` de la 0069 nunca se cumple y **la cadena no corre**. El job resuelve, no falla, y no escribe nada.
+
+⚠️ **Y ESTO DESTAPA ALGO SOBRE MI PROPIO TEST DE LA 0069.** `stop-sniff.test.ts` llama a `app.message_merge` **directo**, así que saltea el extractor: probó la cadena y **nunca probó el camino**. Los 24 tests siguen siendo ciertos y ninguno cubría esto. La tormenta sí.
+
+🔴 **NO SE PUEDE ARREGLAR INVENTANDO EL NOMBRE.** Poner `'Sms-Received'` en el mapa lo pondría verde contra un string que nadie observó en el cable. **Bloqueado en Aloware**: hay que capturar un SMS entrante real contra la cuenta y leer el nombre. La cuenta está paga, así que es una tarde de trabajo — pero es evidencia, no código.
+
+⚠️ **Un segundo hueco del arnés, más chico y arreglable:** el discado a T+5 s devolvió `blocked_calling_window`, o sea que el reloj decidió antes que la supresión. `dial-gate.test.ts` ya resolvió esto con un break-glass por test que libera **exactamente** zona y ventana; el arnés necesita lo mismo o la segunda mitad de la aserción no puede leerse. Con el bloqueo de arriba vivo es discutible igual, pero hay que arreglarlo antes de volver a correrla.
+
+**Dos cosas que el arnés encontró de paso, las dos siendo el mecanismo funcionando:** `DELETE FROM app.suppression_list` **como dueño** lo rechaza el trigger append-only (`AP001`) — por eso ahora cada corrida usa un número nuevo en vez de limpiar, que además es más honesto; y `crm_app` **no tiene SELECT** sobre `suppression_list` (`definer_only`), así que el observador del arnés mira como dueño, desde fuera del juego de privilegios del producto.
+
 ### 🛣️ EL EJE DE LATENCIA: TRES LÍNEAS CON POOL PROPIO (2026-08-12)
 Migración **0070** · `ref.job_registry` · `app/db/schema/jobs.ts` · `boss.ts` y `worker.ts` reescritos · `tests/integration/job-lanes.test.ts`. **755 → 763 tests.** `verify` verde.
 
