@@ -505,6 +505,13 @@
       "when": 1786463461588,
       "tag": "0071_ledger_correction",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1786467061588,
+      "tag": "0072_user_role_writer",
+      "breakpoints": true
     }
   ]
 }

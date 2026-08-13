@@ -7,6 +7,21 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 👤 EL ROL POR FIN TIENE ESCRITOR — Y LA COLUMNA QUE GOBIERNA LA PLATA DEJA DE SER INMUTABLE (2026-08-13)
+Migración **0072** · `app.app_user_set_role` / `app.app_user_set_active` · `tests/integration/user-role.test.ts`. **775 → 784 tests.** `verify` verde.
+
+🔴 **POR QUÉ ESTO DEJÓ DE SER PROLIJIDAD ESTA SEMANA.** `app_user.role` no tenía escritor en ningún lado: el rol de una persona era el que le dio el seed, para siempre. Eso era un hueco mientras el rol sólo elegía un menú. Ya no: `app.scope_is_admin()` ahora gobierna **tres** superficies — emitir y revocar la credencial de ingesta (0068), **corregir el tablero público de plata** (0071), y leer dead letters. **La columna que decide quién puede mover plata era la única que nada en el producto podía escribir.** Y la 0067 selló el par (tenant, usuario), así que el rol es autoritativo y no un consejo.
+
+- **Razón obligatoria (≥10) en las dos funciones**, y el `before` es la mitad que importa: *"ella es admin"* lo lee cualquiera hoy; *"la hicieron admin el martes, esta persona, por esto"* no lo reconstruye nadie después. `user.role_assigned` y `user.access_revoked` estaban en `audit_action_list()` desde la 0053 **sin escritor**.
+- **Desactivar, no borrar.** Las filas del ledger de quien se fue quedan, `earnings_disposition` ya decide si sigue en el tablero all-time, y un DELETE se llevaría la procedencia de un número público.
+- **No-op idempotente y honesto:** poner el rol que ya tiene devuelve `false` y **no escribe auditoría**. Una fila de auditoría por un cambio que no ocurrió es una fila que alguien tiene que explicar después.
+
+🎯 **UN HALLAZGO SOBRE MI PROPIA MIGRACIÓN, Y LO ENCONTRÓ EL TEST, NO YO.** Escribí guardas de "último admin" (`UR005`/`UR010`) que cuentan los otros admins vivos y se niegan en cero. **Son inalcanzables:** llegar ahí exige que el llamador sea admin, y un admin que **no** es el objetivo **es** otro admin vivo, así que el conteo nunca da cero; y un admin que **sí** es el objetivo ya lo frenó `UR004`/`UR009`. **La protección que sostiene hoy es la de auto-protección, no el contador.** Quedan en el árbol porque el invariante que enuncian —un tenant siempre tiene un admin alcanzable— es el verdadero, y pasan a ser portantes en cuanto alguien relaje una auto-guarda; pero el test afirma **la forma alcanzable** y dice explícitamente que ésta no lo es. Los `COMMENT ON` decían de más y quedaron corregidos.
+
+⚠️ **LO QUE NO HACE, Y ES DECISIÓN TUYA: crear un usuario.** Una cuenta con la que se pueda entrar necesita `auth.api.signUpEmail` —una llamada JS de better-auth, no SQL— y **sin email transaccional en el MVP no hay invitación que mandar**, así que un admin tendría que fijar una contraseña inicial y pasarla por fuera. Eso es forma de producto, no algo a resolver adentro de una migración. **El producto sigue sin poder dar de alta a nadie**; lo que ya puede es promover, degradar, desactivar y reactivar.
+
+⚠️ **Y sigue sin haber ruta ni pantalla** — función sola, otra vez. La siguiente sesión la cablea.
+
 ### ✅ L2-P PASA — 44 ms CON 20.000 JOBS ENCIMA (2026-08-13)
 `scripts/l2p-lane-latency.ts`. **La primera aserción de esta zona que se pone VERDE**, y la única que no depende de nadie: G6/P24 espera la captura de un SMS real de Aloware; L2-P es puramente sobre si las líneas de la 0070 hacen lo que dicen.
 
