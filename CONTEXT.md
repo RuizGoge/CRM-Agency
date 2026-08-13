@@ -7,6 +7,18 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### ✅ L2-P PASA — 44 ms CON 20.000 JOBS ENCIMA (2026-08-13)
+`scripts/l2p-lane-latency.ts`. **La primera aserción de esta zona que se pone VERDE**, y la única que no depende de nadie: G6/P24 espera la captura de un SMS real de Aloware; L2-P es puramente sobre si las líneas de la 0070 hacen lo que dicen.
+
+**Medido:** 20.000 jobs `bulk` encolados en `dead-letter`, después **uno** `compliance` en `message-merge`. Arrancó en **44 ms** contra el plazo de **5.000**, con **19.999 de 20.000 todavía en `created`**.
+
+- **"Arranca" es la palabra del registro, no una más blanda elegida acá.** pg-boss estampa `started_on` cuando un worker **toma** el job, así que esa columna es la hora de llegada de lo que se afirma. Completar es otra pregunta y metería el trabajo del handler adentro de un número sobre scheduling.
+- **Las colas salen del registro, no están escritas en el arnés.** Si alguien reclasifica una, el arnés mide el arreglo nuevo en vez del que tenía cuando se escribió.
+- 🔴 **El backlog TIENE que seguir ahí, y el arnés lo verifica.** Si la línea bulk se hubiera drenado antes de que tomaran el job de compliance, esto sería la medición de un sistema ocioso con el nombre de un test de contención — la misma clase de falso verde que la primera corrida de la tormenta, que metía un número de secuencia en cada cuerpo y no dedupeaba nada. Por eso el veredicto tiene un tercer valor: **UNRUN**.
+- **El job de compliance entra DESPUÉS de que el worker está arriba**, o el número sería el tiempo de arranque de `startWorker` reportado como resultado de línea.
+
+⚠️ **LA MUTACIÓN NO SE CORRIÓ, y la razón es que el mecanismo lo impide.** Lo que probaría que este test tiene dientes es reclasificar `message-merge` a `bulk` y verlo fallar — y `ref.job_registry` es **immutable**, así que eso cuesta una migración que tire un trigger protegido. Es exactamente la propiedad que §2407 pedía, funcionando en contra de mi conveniencia. Dicho y no deslizado: **este número no tiene mutación que lo respalde todavía.**
+
 ### 🔀 EL LEG SPLIT DE LA PUERTA 6, CORRIDO (2026-08-12)
 `scripts/gate-6-storm.ts` · sonda de drenador · etiquetas por pata. **Las dos patas se corren ahora con el mismo arnés y `PROCESS_ROLES` como único interruptor**, que es el mismo que usa producción — un flag propio del arnés mediría una tercera cosa que no shippea a ningún lado.
 
