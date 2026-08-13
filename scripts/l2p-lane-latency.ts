@@ -33,6 +33,9 @@ const BULK = Number(process.env['L2P_BULK'] ?? 20_000)
 /** §2405's deadline, in ms. Not a tuning knob. */
 const DEADLINE_MS = 5_000
 
+/** The seeded demo tenant. The bulk jobs carry it so their handler does real work. */
+const TENANT = '00000000-0000-7000-8000-00000000de01'
+
 /** The lanes, read from the registry rather than named here. */
 async function lanesOf(sql: postgres.Sql): Promise<Map<string, string>> {
   const rows = await sql<{ queue_name: string; lane: string }[]>`
@@ -67,10 +70,21 @@ async function main(): Promise<void> {
     // The whole backlog BEFORE the compliance job, because "with the full
     // backlog present" is the condition being asserted. Enqueued as one
     // statement: 20,000 round trips would take longer than the drain.
+    // 🔴 THE BULK JOBS CARRY A TENANT, AND THAT IS WHAT MAKES THEM COST
+    // ANYTHING. Without it the dead-letter handler short-circuits on a
+    // console.error and touches no database at all — so the first version of
+    // this harness enqueued 20,000 jobs that were FREE, and measured a lane
+    // against a backlog that occupied nothing. That is why the mutation could
+    // not tell the legs apart. With a tenant the handler runs
+    // `recordJobDeadLetter`, which goes through `app/db/pool.ts` — the pool
+    // every OTHER handler shares, and the one 0070 did not separate.
     const t0 = performance.now()
     await owner`
       INSERT INTO pgboss.job (name, data, policy, retry_limit, expire_seconds, deletion_seconds, keep_until)
-      SELECT ${bulkQueue}, jsonb_build_object('l2p', 'bulk', 'n', g), 'standard', 0, 120, 3600,
+      SELECT ${bulkQueue},
+             jsonb_build_object('l2p', 'bulk', 'n', g, 'tenantId', ${TENANT}::text,
+                                'alowareCallId', 'l2p-' || g),
+             'standard', 0, 120, 3600,
              now() + interval '1 hour'
         FROM generate_series(1, ${BULK}) g`
     console.log(`  backlog enqueued in ${((performance.now() - t0) / 1000).toFixed(1)}s`)

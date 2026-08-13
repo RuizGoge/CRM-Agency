@@ -39,7 +39,22 @@ Quitar las líneas **enteras** no cambia nada medible. La mutación colapsó las
 
 Un handler de job **no saca conexiones del pool de pg-boss**: saca del pool de la aplicación, que es compartido y que la 0070 **no tocó**. Eso explica el resultado de la mutación exactamente — colapsar las instancias de pg-boss no cambió nada porque su pool nunca fue el cuello de botella.
 
-⚠️ **CONSECUENCIA SOBRE EL TRABAJO QUE IBA A HACER:** hacer los jobs bulk **lentos** produce contención en `pool` (max 8), que las líneas **no separan** — así que el test se pondría rojo en el control **y** en la mutación por igual. Habría sido una tarde de trabajo para construir un segundo test que tampoco discrimina. **Leído del código, no medido todavía** — la medición que lo cerraría es bajar `DB_POOL_MAX` y ver si las dos patas se degradan igual.
+✅ **MEDIDO (2026-08-13), Y EL RESULTADO ES MÁS SIMPLE Y PEOR QUE LA HIPÓTESIS.** Cuatro corridas cruzando las dos variables — líneas sí/no × pool de app 8/2 con jobs bulk que hacen trabajo real:
+
+| # | líneas | `DB_POOL_MAX` | jobs bulk | arranque |
+|---|---|---|---|---|
+| 1 | tres | 8 | libres (sin tenant) | **2019 ms** |
+| 2 | **una** | 8 | libres | **1965 ms** |
+| 3 | tres | **2** | **con trabajo real** | **2008 ms** |
+| 4 | **una** | **2** | **con trabajo real** | **1991 ms** |
+
+🔴 **CUATRO COMBINACIONES, CUATRO NÚMEROS DENTRO DEL 2%.** El arranque no depende de las líneas, ni del tamaño del pool de la aplicación, ni de si los jobs bulk tocan la base. Está clavado en ~2 segundos porque **eso es el intervalo de polling de pg-boss**. L2-P no mide latencia de línea: **mide el reloj del poller.**
+
+**Consecuencia:** con un plazo de 5 s y un poll de ~2 s, la aserción **pasa por construcción** y sólo podría fallar con el sistema completamente trabado. No es un test flojo — es un test que no puede distinguir nada de lo que dice distinguir. El PASS de la 0070 y el PASS de la mutación son el mismo número medido dos veces.
+
+**Lo que sigue siendo cierto de la hipótesis del pool** (leído del código, ahora sin importancia práctica): las líneas separan los pools de pg-boss, no `app/db/pool.ts`. Pero la corrida 3 vs 4 muestra que ni siquiera **estrangulando el pool de la aplicación a 2** con 2.000 jobs haciendo INSERTs se mueve la aguja — porque el poller domina todo lo demás.
+
+⚠️ **Mejora del arnés que queda:** los jobs bulk ahora llevan `tenantId`, así que su handler corre `recordJobDeadLetter` de verdad. Antes eran **gratis** —el handler cortaba en un `console.error` sin tocar la base— y por eso el backlog no ocupaba nada. Eso era un defecto real del arnés, independiente de todo lo anterior.
 
 **Lo que la 0070 SÍ compró, y sigue en pie independiente de esto:** `JOBS004` (la línea de compliance no se puede desplegar por omisión), `JOBS005` (una cola sin fila de registro no arranca en vez de quedar sin drenar en silencio), y el eje de latencia como declaración con gate. **Lo que NO compró:** protección contra el hambre de pool a nivel de handler, que es el escenario que §11.7.2 describe. **No propongo revertirla** — separar pools es barato y las dos negativas de arranque valen por sí solas —, pero su argumento de latencia queda sin respaldo hasta que exista un reservado sobre el pool de la aplicación, o un pool por línea ahí.
 
