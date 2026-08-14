@@ -30,7 +30,22 @@ Lo que sí se hizo son las dos cosas disponibles:
 
 🔴 **EL TEST FIJA QUE (b) NO RIGE, y ése es su trabajo.** Suena raro hasta ver cuál es el fallo que este proyecto paga una y otra vez: una afirmación en un documento alejándose del motor con todo verde. **Ocho filas podridas en `CONTEXT.md` esta semana**, dos de ellas haciendo que una sesión planificara trabajo ya hecho. El día que alguien corra las migraciones como `crm_migrator`, **ese test se pone rojo** y obliga a actualizar la afirmación en CLAUDE.md y acá.
 
-⚠️ **LO QUE FALTA ES CONFIGURACIÓN, NO CÓDIGO, Y ES DE JORGE:** correr las migraciones como `crm_migrator` en vez de `crm`. Con eso el deploy puede **consumir** una autorización y no **crearla** — la ubicación de E1b, exacta. **No lo cambio yo**: hay migraciones que pueden necesitar superuser (extensiones, event triggers), y averiguar cuáles es trabajo aparte con riesgo de dejar el deploy roto.
+✅ **Y LA INVESTIGACIÓN SE HIZO EL MISMO DÍA: [`docs/sprint-0/deploy-credential-isolation.md`](docs/sprint-0/deploy-credential-isolation.md).**
+
+**72 de las 75 migraciones corren limpias como `crm_migrator`.** Tres no, y **ninguna necesita superuser para su trabajo de esquema** — las tres quieren autoridad sobre roles o propiedad:
+
+| migración | sentencia | necesita |
+|---|---|---|
+| `0018:18` | `ALTER ROLE crm_app WITH LOGIN` | `CREATEROLE` |
+| `0056:34` | `ALTER ROLE crm SET idle_in_transaction…` | superuser — `crm` **es** uno |
+| `0056:39` | `ALTER ROLE crm_ci SET idle_in_transaction…` | `CREATEROLE` |
+| `0075:108` | `ALTER TABLE authz.ddl_authorization OWNER TO crm` | membresía en `crm` |
+
+🎯 **Y EL CAMBIO ES VIABLE IGUAL, porque las tres YA ESTÁN APLICADAS.** Un deploy no re-corre nada: drizzle sólo ejecuta lo que el journal no registró. Lo que el cambio restringe es el futuro — **una migración que altere un rol deja de poder ir en la cadena ordinaria**, que es poco precio y discutiblemente una corrección: alterar un rol del cluster no es trabajo de esquema.
+
+⚠️ **UN HALLAZGO SOBRE MI PROPIA 0075, DICHO Y NO ARREGLADO EN SILENCIO.** La migración que **califica** (b) es una de las tres que un deploy aislado no puede aplicar. No es tanto un bug como la propiedad apareciendo con honestidad: **la infraestructura de autorización no puede arrancarse a sí misma bajo la credencial que existe para limitar.** No la edité: 0075 está mergeada y la regla es que una migración no se edita después de mergear. Las dos opciones están en el documento y son tuyas.
+
+📌 **Cuatro pasadas, y tres dieron una respuesta segura y equivocada.** La primera reportó 27 migraciones necesitando superuser — todas cascada de que 0000 falló. La segunda y la tercera, cascadas de entregas de propiedad incompletas. La cuarta: **45 "fallas" con mensaje vacío eran `NOTICE`**, porque psql los manda a stderr y la sonda tomaba cualquier salida como error. Cada una la cazó **la forma del resultado**, no releer el script. Vale como método.
 
 📌 **Un aviso de método:** `leaderboard-poll-perf` (P11) falló **una vez** en la suite completa y pasó en las tres corridas aisladas (44,2 / 36,7 / 39,2 ms) y en la corrida completa siguiente (39,9 ms), contra una línea roja de 80. **Transitorio bajo contención, no una regresión de la 0074** — dicho así en vez de "lo arreglé".
 
