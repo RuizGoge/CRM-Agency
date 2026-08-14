@@ -147,11 +147,24 @@ describe('the snapshot chain is level with the migrations', () => {
       // reason: an index created alongside a partition is storage for a
       // declared parent, not something anybody models in Drizzle. Every
       // literal CREATE INDEX still parses, which is what this gate is for.
+      // ⚠️ AND THE SCHEMA IS LOAD-BEARING TOO, which the table check above knew
+      // and this one did not. That check reads `(app|ref)` only, because
+      // migration 0000 owns `security` and Drizzle deliberately does not model
+      // it — the comment forty lines up says so. This one matched ANY schema,
+      // so the first index on a `security` table reported a generator gap that
+      // cannot exist: the generator was never going to propose it.
+      //
+      // Excluding by name rather than including one, so an index on `auth` —
+      // which Drizzle DOES model — keeps counting. An allow-list of `app|ref`
+      // would have dropped three real ones and shrunk the gate in silence.
       for (const match of statements.matchAll(
-        /CREATE (?:UNIQUE )?INDEX (?:CONCURRENTLY )?(?:IF NOT EXISTS )?"?([a-z0-9_]+)"?\s+ON\s/gi,
+        /CREATE (?:UNIQUE )?INDEX (?:CONCURRENTLY )?(?:IF NOT EXISTS )?"?([a-z0-9_]+)"?\s+ON\s+"?([a-z0-9_]+)"?\./gi,
       )) {
         const index = match[1]
-        if (index !== undefined) created.add(index)
+        const schema = match[2]
+        if (index === undefined) continue
+        if (schema === 'security' || schema === 'authz') continue
+        created.add(index)
       }
     }
 

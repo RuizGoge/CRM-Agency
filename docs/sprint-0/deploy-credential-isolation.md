@@ -79,8 +79,29 @@ Measured, all as `crm_migrator`:
 
 That last row was **a hole I built and then measured.** The guard asks "did this transaction consume an authorisation?" with `age(xmin) = 0`, and the deploy must hold `UPDATE` or it could not consume anything — so re-touching any spent row satisfied it, and spent rows are never deleted. From the first authorisation onward the deploy authorised itself for ever, with every other refusal still passing its test. Closed by making a spent row immutable.
 
+## The fifth statement, and the credential switch had silently broken the deploy (2026-08-14)
+
+`drizzle-kit migrate` under `crm_migrator` fails with **`permission denied for schema drizzle`** on any database whose `drizzle` schema was created by `crm` — which is every database bootstrapped before the switch. **No migration could be applied at all.**
+
+Three things hid it simultaneously, and each will hide the next one:
+
+1. **`drizzle-kit migrate` exits 1 and prints nothing.** No message, no cause, just a spinner and a status code. The error above came from drizzle-orm's migrator, called by hand.
+2. **`npm run verify` does not run the deploy.** It typechecks, lints, tests and measures budgets; the one command that would have failed is the one it never calls.
+3. **The grade read `(b)` throughout.** Credential isolation was real — the deploy genuinely could not authorise itself. It also could not deploy, and the grade has no opinion about that.
+
+Fixed by `scripts/deploy-credential.sql`, applied by `npm run db:guard`: the `drizzle` schema and its bookkeeping table are handed to `crm_migrator`. It cannot be a migration — drizzle opens that table *before* applying anything, so the fix could never be recorded.
+
+## The primary enforcement point, built second (2026-08-14)
+
+`05c` §11.11.3 is titled *"Platform reality, and it is why this cannot be the primary"*; §11.11.4 is *"the digest chain, which needs no superuser and is the primary."* The guard above is §11.11.3. Migration **0076** is §11.11.4, and none of it existed.
+
+It hashes the protected surface **by class** — every RLS policy, every `t_immutable_*` trigger, every SECURITY DEFINER body, every RLS flag, partitions excluded — and refuses the deploy (`PO001`) when one is removed or changed without an authorisation. Every process re-checks the digest at boot (`BOOT017`/`BOOT018`). No superuser anywhere.
+
+**The two are not redundant**, and the sharpest case proves it: `ALTER TABLE app.earnings_ledger DISABLE TRIGGER t_immutable_earnings_ledger` switches off the append-only enforcement on the money record. The event-trigger guard lets it through — bare `ALTER TABLE`, RLS untouched, the reported identity is the table. PO001 names it.
+
 ### What it still does not close
 
 - **R4 is untouched.** A superuser disables the event trigger in one statement. What changed is that the *deploy* is no longer a superuser, so R4's actor is a human at a console rather than every migration.
 - **R2 decides whether this exists in production at all, and it is still unmeasured.** If Render grants no superuser, the guard cannot be installed there. `npm run db:guard` refuses under a non-superuser credential rather than half-installing, and the grade records `(a)+(c)` for a database that was migrated but never armed.
 - **`DROP TRIGGER` on `security.table_registry` is not gated.** `crm_migrator` owns that table, so it can remove the row trigger that protects the registry. Two statements instead of one, and the first is visible in a diff — not `(b)` on its own.
+- **The circular attack, which §11.11.4 names and this tree cannot close.** The deploy role owns `security.protected_object`, so a migration that weakens something *and* rewrites its own baseline in the same deploy produces a self-consistent digest and passes PO001. The corpus closes it with the seal chain of §7.6.2 — `ci/seal-manifest.jsonl`, `security.seal`, boot comparing manifest heads. **Measured 2026-08-14: none of it exists.** What holds is every weakening that does not also rewrite its own baseline — which is every accidental one — plus, where the event triggers are installed, an in-transaction refusal that does not consult the baseline at all.

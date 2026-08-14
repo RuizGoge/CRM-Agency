@@ -62,8 +62,15 @@ describe('there is one decay threshold and it is cold_threshold_days', () => {
     // `tenant_rotting_before_cold` did not merely name the deleted design — it
     // ENFORCED it, so a tenant could not have been configured out of the two
     // tiers even by hand.
+    //
+    // ⚠️ THE PATTERN WAS `'%rot%'` AND CAUGHT THE WRONG WORD. Migration 0076's
+    // `protected_object` constraints contain "p-ROT-ected", so this went red on
+    // a change that has nothing to do with decay tiers. Narrowed to the two
+    // shapes the sibling assertion above already uses, which still match
+    // `tenant_rotting_before_cold` exactly — the guard is unchanged, its aim is.
     const constraints = await sql<{ conname: string }[]>`
-      SELECT conname FROM pg_constraint WHERE conname ILIKE '%rot%'`
+      SELECT conname FROM pg_constraint
+       WHERE conname ILIKE '%rotting%' OR conname ILIKE '%rot%threshold%'`
 
     expect(constraints).toEqual([])
   })

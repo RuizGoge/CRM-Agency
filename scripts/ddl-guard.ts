@@ -29,6 +29,21 @@ export async function installDdlGuard(sql: postgres.Sql): Promise<void> {
   await sql.unsafe(readFileSync(join(here, 'ddl-guard.sql'), 'utf8'))
 }
 
+/**
+ * Hands drizzle's own bookkeeping to the deploy role.
+ *
+ * 🔴 A DIFFERENT CONCERN FROM THE GUARD, sharing only the actor and the moment:
+ * both are statements only the owner can run, and both are needed before the
+ * isolated credential works at all. Without this, `drizzle-kit migrate` under
+ * `crm_migrator` fails with "permission denied for schema drizzle" and prints
+ * nothing — so the deploy is broken and silent. `deploy-credential.sql` carries
+ * the full finding.
+ */
+export async function handOverDeployBookkeeping(sql: postgres.Sql): Promise<void> {
+  const here = dirname(fileURLToPath(import.meta.url))
+  await sql.unsafe(readFileSync(join(here, 'deploy-credential.sql'), 'utf8'))
+}
+
 /** What a correctly armed database looks like. Read by the boot assertion too. */
 export const GUARD_EVENT_TRIGGERS = [
   'authz_guard_alter',

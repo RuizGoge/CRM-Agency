@@ -1,6 +1,6 @@
 import postgres from 'postgres'
 
-import { installDdlGuard, GUARD_EVENT_TRIGGERS } from './ddl-guard'
+import { handOverDeployBookkeeping, installDdlGuard, GUARD_EVENT_TRIGGERS } from './ddl-guard'
 
 /**
  * Arms the E1b guard, as the OWNER, out of band.
@@ -56,6 +56,10 @@ async function refuseWithoutSuperuser(): Promise<void> {
 
 async function main(): Promise<void> {
   await refuseWithoutSuperuser()
+
+  // First, because a database whose deploy cannot record a migration has no use
+  // for a guard on what its migrations may do.
+  await handOverDeployBookkeeping(client)
   await installDdlGuard(client)
 
   const armed = await client<{ evtname: string; evtenabled: string }[]>`
@@ -74,7 +78,9 @@ async function main(): Promise<void> {
   console.log(
     `🔒 E1b guard armed: ${armed.map((t) => t.evtname).join(', ')} + t_authz_guard_registry.\n` +
       `   A protected change now spends an authorisation this database's deploy role\n` +
-      `   cannot create. Mint one with:  npm run db:authorize -- "why"`,
+      `   cannot create. Mint one with:  npm run db:authorize -- "why"\n` +
+      `📒 drizzle bookkeeping belongs to crm_migrator, so the isolated credential can\n` +
+      `   actually record a deploy. See scripts/deploy-credential.sql.`,
   )
 }
 

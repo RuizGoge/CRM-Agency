@@ -9,6 +9,7 @@ import {
   assertLedgerAppendIsDefinerOnly,
   assertTimelineWriterIsDefinerOnly,
   assertGateIsRecording,
+  assertProtectedSurfaceUnchanged,
   assertSafeConnection,
 } from './boot-assert'
 import { assertRequiredCapabilities, readCapabilities } from './capability-registry'
@@ -147,6 +148,19 @@ void assertTimelineWriterIsDefinerOnly(pool).catch((err: unknown) => {
  * in the pipeline looks for it, which is why it is here.
  */
 void assertDdlGuardIsArmed(pool).catch((err: unknown) => {
+  console.error(err instanceof Error ? err.message : err)
+  process.exit(1)
+})
+
+/**
+ * Migration 0076's digest, recomputed at every boot — `05c` §11.11.4's second
+ * enforcement point, and the one that works where nothing else does.
+ *
+ * The guard above needs superuser to exist at all and PO001 needs a deploy to
+ * happen. This needs neither, so it is the only check that fires on a process
+ * that comes up hours after somebody changed a policy by hand.
+ */
+void assertProtectedSurfaceUnchanged(pool).catch((err: unknown) => {
   console.error(err instanceof Error ? err.message : err)
   process.exit(1)
 })

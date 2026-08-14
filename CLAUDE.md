@@ -19,7 +19,12 @@ So a rule is only a rule if it is one of these:
 
 Anything enforced by "remember to…", "a PR that only touches this file", or a comment is **documentation, not a guarantee** — say so plainly instead of presenting it as a mechanism. And note the corollary: _"only the migrator role can weaken this"_ means _"Claude writes a migration and nobody reads the diff."_ Only three properties survive that actor: **(a)** a symptom on screen, **(b)** a gate anchored outside the working tree, **(c)** re-assertion at deploy and at boot.
 
-**(b) exists now, and only for the seller silo.** The deploy runs as `crm_migrator` and `scripts/ddl-guard.sql` — installed out of band by the owner, uninstallable by the deploy — makes dropping a policy, switching off `FORCE` RLS, dropping a registered table, replacing `harden()` or reclassifying a `table_registry` row cost a row in `authz.ddl_authorization` that only the owner can create. `npm run db:migrate` prints the grade; the app refuses to boot unarmed (`BOOT016`). **Everything else in this file is still (a)+(c).** Two things this does NOT do: it does not survive a superuser (R4, unchanged), and **whether a managed provider grants superuser at all is R2 and still unmeasured** — so in production this may be uninstallable, and the grade will say so rather than assume.
+**(b) exists now, and only for the seller silo, the money record's append-only triggers and the definers.** Weakening one costs a row in `authz.ddl_authorization` that only the owner can create. There are **two enforcement points and they are not redundant** (`05c` §11.11.3–4):
+
+- **The primary — `security.assert_protected_objects()` (PO001), migration 0076. Needs no superuser.** Every RLS policy, `t_immutable_*` trigger, SECURITY DEFINER body and RLS flag is hashed by class, outside partitions. `npm run db:migrate` refuses on a removal or a changed definition; every process re-checks the digest at boot (`BOOT017`/`BOOT018`). This is what works on a managed platform.
+- **The belt-and-braces — `scripts/ddl-guard.sql`, installed out of band by the owner.** Event triggers refuse the DDL _in the same transaction_, so the change never lands. Stronger where it exists, and **`CREATE EVENT TRIGGER` needs superuser, which R2 says a managed provider may not grant** — so it may not exist in production at all.
+
+Neither covers the other: the guard misses `DISABLE TRIGGER` on `earnings_ledger` (bare `ALTER TABLE`, RLS untouched) and PO001 names it; PO001 runs after the migration committed and the guard would have rolled it back. **Everything else in this file is still (a)+(c).** Open, on purpose: R4 (a superuser defeats both) and **the circular attack — the deploy owns `security.protected_object`, so a migration that weakens something _and_ rewrites its own baseline passes PO001.** `05c` §7.6.2 closes that with a seal chain that **is not built** (measured 2026-08-14: no `security.seal`, no `harden_run`, no manifest).
 
 ---
 
@@ -38,12 +43,19 @@ npm run build        # production build
 npm run db:up        # local Postgres 18 in Docker — same major as production
 npm run db:down
 npm run db:generate  # drizzle-kit generate (after editing app/db/schema/*)
-npm run db:migrate  # applies migrations, then GRADES the deploy connection.
-                     # MIGRATION_DATABASE_URL must point at crm_migrator, NOT a
-                     # superuser: the grade is recorded from current_user, so a
-                     # superuser deploy records (a)+(c) and says so out loud.
-npm run db:guard     # arms the E1b guard. OUT OF BAND, as the OWNER — needs
-                     # superuser, so the deploy cannot run it and cannot undo it.
+npm run db:migrate  # migrations, then PO001 (the protected-surface check), then
+                     # the property-(b) grade. MIGRATION_DATABASE_URL must point
+                     # at crm_migrator, NOT a superuser: the grade is recorded
+                     # from current_user, so a superuser deploy records (a)+(c)
+                     # and says so out loud. PO001 refuses the deploy when a
+                     # policy, an append-only trigger, a definer body or an RLS
+                     # flag moved without an authorisation.
+npm run db:guard     # OUT OF BAND, as the OWNER. Two things the deploy cannot do
+                     # for itself: arm the E1b event triggers (needs superuser,
+                     # so the deploy can neither install nor remove them), and
+                     # hand drizzle's own bookkeeping schema to crm_migrator —
+                     # without which `drizzle-kit migrate` fails with "permission
+                     # denied for schema drizzle" AND PRINTS NOTHING.
                      # Not part of db:migrate, and must never become part of it.
 npm run db:authorize -- "why"   # mints ONE authorisation for ONE protected
                      # change. In production this is an INSERT typed into the

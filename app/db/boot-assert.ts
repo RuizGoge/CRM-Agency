@@ -508,3 +508,84 @@ export async function assertDdlGuardIsArmed(
     )
   }
 }
+
+/**
+ * `05c` §11.11.4's second enforcement point: every process recomputes the
+ * protected surface at boot and refuses to start when it has drifted.
+ *
+ * 🔴 THIS IS THE ONE THAT WORKS WHERE NOTHING ELSE DOES. The event-trigger
+ * guard needs superuser and may not exist in production at all (R2). PO001
+ * needs a deploy to happen. This needs neither: it fires on every start, on
+ * every process, including the ones that come up hours after a change.
+ *
+ * It recomputes through `ref.protected_surface_digest()` rather than
+ * reimplementing the four catalog reads here. That is deliberate and it is the
+ * reason the function lives in `ref` rather than `security`: a second
+ * definition of "what is protected" would drift from the first, and the drift
+ * would be invisible because each side would still agree with itself.
+ *
+ * ⚠️ WHAT IT CANNOT TELL YOU IS WHICH OBJECT MOVED. A digest is one value; the
+ * list lives in `security.protected_object`, which `crm_app` cannot read and
+ * should not. The refusal names the command that will say.
+ */
+export async function assertProtectedSurfaceUnchanged(
+  sql: postgres.Sql | postgres.TransactionSql,
+): Promise<void> {
+  const rows = await sql<{ live: string; recorded: string | null; environment: string | null }[]>`
+    SELECT ref.protected_surface_digest() AS live,
+           (SELECT c.value FROM ref.system_constant c
+             WHERE c.key = 'protected_surface_digest') AS recorded,
+           (SELECT c.value FROM ref.system_constant c
+             WHERE c.key = 'environment') AS environment`
+
+  const row = rows[0]
+  if (row === undefined) {
+    throw new Error('BOOT017: refusing to start. The protected-surface check returned nothing.')
+  }
+
+  // 🔴 THE INTEGRATION HARNESS IS EXEMPT, AND ONLY IT. This is the one boot
+  // assertion whose subject legitimately moves while a process is running:
+  // `crm_test` is shared across files and several of them change the schema ON
+  // PURPOSE — `silo.test.ts` creates unclassified tables to prove `harden()`
+  // refuses them. Every vitest worker that imports `~/db` boots a pool, and an
+  // unconditional check killed eight of them with `process.exit(1)` mid-run.
+  // The suite still reported 846 passing tests and the command still exited 1,
+  // which is the worst of both readings.
+  //
+  // ⚠️ NARROWED TO `test` RATHER THAN TO "NOT PRODUCTION". `assertRequiredCapabilities`
+  // is production-only and its own comment calls that its weakness — development
+  // never exercises the refusal. Development stays armed here: a dev database
+  // that drifts without a deploy refuses to boot, exactly as production does,
+  // and `npm run db:migrate` is what levels it again. Only the harness, which
+  // has no deploy between its schema changes, is let through — and
+  // `protected-objects.test.ts` calls this predicate directly to exercise both
+  // arms, so the refusal is still tested rather than merely written.
+  if (row.environment === 'test') return
+
+  // Absent is a different failure from drifted, and it is the likelier one: a
+  // database restored from a backup taken before 0076, or one migrated by
+  // something that skipped the deploy step. "Nobody ever recorded a baseline"
+  // must not read as "somebody changed a policy".
+  if (row.recorded === null) {
+    throw new Error(
+      'BOOT017: refusing to start. No protected-surface baseline was ever recorded.\n\n' +
+        'Migration 0076 seeds one and every deploy refreshes it, so this database was ' +
+        'either migrated by something that skipped the deploy step or restored from a ' +
+        'backup taken before it existed.\n\n  npm run db:migrate\n',
+    )
+  }
+
+  if (row.recorded !== row.live) {
+    throw new Error(
+      'BOOT018: refusing to start. The protected surface has drifted since the last ' +
+        'authorised deploy.\n\n' +
+        `  recorded  ${row.recorded.slice(0, 16)}…\n` +
+        `  live      ${row.live.slice(0, 16)}…\n\n` +
+        'An RLS policy, a t_immutable_ trigger, a SECURITY DEFINER body or a FORCE ' +
+        'ROW LEVEL SECURITY flag is not what the last deploy left behind. Every screen ' +
+        'would keep rendering, which is why this is a refusal rather than a log line.\n\n' +
+        'To see WHICH object moved:\n\n  npm run db:migrate\n\n' +
+        'It will name them and refuse without an authorisation (PO001).',
+    )
+  }
+}
