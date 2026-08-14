@@ -7,6 +7,33 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### ⚖️ LA PROPIEDAD (b) DEJA DE SER UNA AFIRMACIÓN Y PASA A SER UNA MEDICIÓN (2026-08-13)
+Migración **0075** · esquema `authz` · `authz.ddl_authorization` · `security.property_b_grade()` · `property-b.test.ts`. **802 → 810 tests.** `verify` verde.
+
+🔴 **NO CONSTRUÍ (b), Y ESO ES EL RESULTADO, NO UN FRACASO.** Medido antes de escribir nada: las migraciones corren como **`crm`, que es SUPERUSER**. Contra un superusuario **nada dentro de esta base es (b)** — puede insertar cualquier autorización, tirar cualquier trigger, devolver cualquier grant revocado, en una sentencia. **R4 ya lo dice y lo califica "structural · unclosable in-document".** Construir un mecanismo que *pareciera* un ancla fuera del árbol mientras un superusuario lo forja sería peor que no tenerlo, porque el próximo lector dejaría de mirar.
+
+Lo que sí se hizo son las dos cosas disponibles:
+
+**1 · La estructura que E1b manda y este árbol nunca construyó.** `ddl_authorization` **no existía en ningún lado** — ni la tabla, ni `authorize_ddl`, ni el sello, ni `protected_assertion`. E1b es errata **normativa rango 1** y dice: *"si esta ubicación no se adopta, la afirmación en negrita queda tachada y §11.11 se califica (a)+(c) solamente."* Estuvo **sin adoptar y sin calificar desde la Puerta 5.**
+
+**2 · El grado, como función que cualquiera puede llamar.** Si (b) rige es un hecho sobre privilegios de roles, y un hecho se mide:
+
+| rol | grado |
+|---|---|
+| `crm` (corre las migraciones) | **`(a)+(c)`** — es superuser |
+| `crm_migrator` | **`(b)`** — no puede crear una autorización, sí consumirla |
+| `crm_app` | `n/a` — no es rol de deploy |
+
+🎯 **Y ENCONTRÉ UNA COLISIÓN ENTRE DOS MECANISMOS DEL PROPIO PROYECTO.** La primera versión puso la tabla en `security` y **no podía funcionar**: `own_to_migrator()` de la 0062 hace a `crm_migrator` dueño de todo objeto en los esquemas gestionados **más `security`**, y un dueño siempre puede insertar en su propia tabla — que es justo lo único que E1b necesita que esta tabla le niegue al rol del deploy. **Ninguno de los dos está mal; simplemente no son compatibles en un mismo esquema.** Por eso la tabla vive en `authz`, fuera de la lista de `own_to_migrator`, con su fila de `schema_policy` porque E1 volvió la pasada de hardening **default-deny**.
+
+⚠️ **LO ENCONTRÓ LA MEDICIÓN, NO LA LECTURA.** El grado leía `(b)` con el archivo corriendo solo y `degraded` en la suite completa — porque `crm_test` se reconstruye desde todas las migraciones en orden y `own_to_migrator()` se había llevado la tabla de vuelta. Décima aparición de la firma "pasa sola, falla en la suite". Ahora hay una aserción que corre `own_to_migrator()` y verifica que la tabla sobreviva.
+
+🔴 **EL TEST FIJA QUE (b) NO RIGE, y ése es su trabajo.** Suena raro hasta ver cuál es el fallo que este proyecto paga una y otra vez: una afirmación en un documento alejándose del motor con todo verde. **Ocho filas podridas en `CONTEXT.md` esta semana**, dos de ellas haciendo que una sesión planificara trabajo ya hecho. El día que alguien corra las migraciones como `crm_migrator`, **ese test se pone rojo** y obliga a actualizar la afirmación en CLAUDE.md y acá.
+
+⚠️ **LO QUE FALTA ES CONFIGURACIÓN, NO CÓDIGO, Y ES DE JORGE:** correr las migraciones como `crm_migrator` en vez de `crm`. Con eso el deploy puede **consumir** una autorización y no **crearla** — la ubicación de E1b, exacta. **No lo cambio yo**: hay migraciones que pueden necesitar superuser (extensiones, event triggers), y averiguar cuáles es trabajo aparte con riesgo de dejar el deploy roto.
+
+📌 **Un aviso de método:** `leaderboard-poll-perf` (P11) falló **una vez** en la suite completa y pasó en las tres corridas aisladas (44,2 / 36,7 / 39,2 ms) y en la corrida completa siguiente (39,9 ms), contra una línea roja de 80. **Transitorio bajo contención, no una regresión de la 0074** — dicho así en vez de "lo arreglé".
+
 ### 🔐 EL TENANT DEJA DE SER UN RECLAMO PELADO — R1 CERRADO (2026-08-13)
 Migración **0074** · `app.tenant_seal` · `app.current_tenant` reescrita · seis aserciones nuevas en `identity-seal.test.ts`. **796 → 802 tests.** `verify` verde.
 

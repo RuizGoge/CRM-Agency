@@ -526,6 +526,13 @@
       "when": 1786474261588,
       "tag": "0074_tenant_is_sealed",
       "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1786477861588,
+      "tag": "0075_property_b_is_graded",
+      "breakpoints": true
     }
   ]
 }
