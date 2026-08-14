@@ -19,6 +19,8 @@ So a rule is only a rule if it is one of these:
 
 Anything enforced by "remember to…", "a PR that only touches this file", or a comment is **documentation, not a guarantee** — say so plainly instead of presenting it as a mechanism. And note the corollary: _"only the migrator role can weaken this"_ means _"Claude writes a migration and nobody reads the diff."_ Only three properties survive that actor: **(a)** a symptom on screen, **(b)** a gate anchored outside the working tree, **(c)** re-assertion at deploy and at boot.
 
+**(b) exists now, and only for the seller silo.** The deploy runs as `crm_migrator` and `scripts/ddl-guard.sql` — installed out of band by the owner, uninstallable by the deploy — makes dropping a policy, switching off `FORCE` RLS, dropping a registered table, replacing `harden()` or reclassifying a `table_registry` row cost a row in `authz.ddl_authorization` that only the owner can create. `npm run db:migrate` prints the grade; the app refuses to boot unarmed (`BOOT016`). **Everything else in this file is still (a)+(c).** Two things this does NOT do: it does not survive a superuser (R4, unchanged), and **whether a managed provider grants superuser at all is R2 and still unmeasured** — so in production this may be uninstallable, and the grade will say so rather than assume.
+
 ---
 
 ## Commands
@@ -40,6 +42,15 @@ npm run db:migrate  # applies migrations, then GRADES the deploy connection.
                      # MIGRATION_DATABASE_URL must point at crm_migrator, NOT a
                      # superuser: the grade is recorded from current_user, so a
                      # superuser deploy records (a)+(c) and says so out loud.
+npm run db:guard     # arms the E1b guard. OUT OF BAND, as the OWNER — needs
+                     # superuser, so the deploy cannot run it and cannot undo it.
+                     # Not part of db:migrate, and must never become part of it.
+npm run db:authorize -- "why"   # mints ONE authorisation for ONE protected
+                     # change. In production this is an INSERT typed into the
+                     # provider's console; here it is the same row, minted from
+                     # OWNER_DATABASE_URL. It refuses if that equals
+                     # MIGRATION_DATABASE_URL — a deploy that can authorise
+                     # itself is the defect E1b is named after.
 npm run db:seed
 ```
 

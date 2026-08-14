@@ -23,6 +23,8 @@
     "db:generate": "tsx scripts/guard-db-generate.ts && drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate && tsx --env-file-if-exists=.env scripts/grade-property-b.ts",
     "db:studio": "drizzle-kit studio",
+    "db:guard": "tsx --env-file-if-exists=.env scripts/install-ddl-guard.ts",
+    "db:authorize": "tsx --env-file-if-exists=.env scripts/authorize-ddl.ts",
     "db:seed": "tsx scripts/seed.ts",
     "db:jobs": "tsx scripts/install-jobs.ts",
     "events:generate": "tsx scripts/generate-events.ts",

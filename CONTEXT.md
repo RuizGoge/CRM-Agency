@@ -7,6 +7,34 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 🔒 E1b DEJA DE SER UNA UBICACIÓN Y PASA A SER UNA PROTECCIÓN (2026-08-14, tarde)
+`scripts/ddl-guard.sql` · `npm run db:guard` · `npm run db:authorize` · `assertDdlGuardIsArmed` (BOOT016) · `tests/integration/ddl-guard.test.ts`. **811 → 832 tests · 79 archivos.** `verify` verde. **Verificado en pantalla: la app arranca con el guard armado y `db:migrate` reporta `🔒 E1b: (b)`.**
+
+🎯 **LO QUE SE CIERRA, MEDIDO ANTES DE ESCRIBIR NADA.** Con la credencial ya aislada y el grado leyendo `(b)`, las tres sentencias seguían funcionando:
+
+```
+SET ROLE crm_migrator; DROP POLICY p_app ON app.contact;                    -- pasaba
+SET ROLE crm_migrator; ALTER TABLE app.contact NO FORCE ROW LEVEL SECURITY; -- pasaba
+SET ROLE crm_migrator; DROP TABLE app.contact CASCADE;                      -- pasaba
+```
+
+Ahora las tres cuestan una fila de `authz.ddl_authorization` que el rol del deploy **puede consumir y no puede crear**. Se suman dos rutas que no son DDL de política y llegaban al mismo lugar: **reclasificar una tabla viva en `table_registry`** (sin escribir DDL en ningún lado, la próxima `harden()` reparte las leads de todas) y **reemplazar `security.harden()`**, que es como se derrotaría la exención.
+
+🔴 **NO ES UNA MIGRACIÓN Y NO PUEDE SERLO.** `CREATE EVENT TRIGGER` exige superuser y el deploy dejó de serlo. Es la **cuarta sentencia fuera de banda** de `deploy-credential-isolation.md`. Medido, todo como `crm_migrator`: tirar o deshabilitar el trigger → *must be owner*; `SET event_triggers = off` → *permission denied to set parameter*; reemplazar cualquier función de `authz` → *permission denied for schema*.
+
+🔴 **CONSTRUÍ UN AGUJERO Y LO ENCONTRÓ EL TEST QUE INTENTABA SER HONESTO.** El guard pregunta "¿esta transacción consumió una autorización?" con `age(xmin) = 0`, y el deploy **necesita** UPDATE o no podría consumir nada. Entonces **re-tocar una fila ya gastada** alcanzaba — y las gastadas no se borran nunca. Desde la primera autorización, el deploy se auto-autorizaba para siempre, **con todas las demás negativas pasando su test**. Misma especie que la 0075: el objeto construido para eliminar un defecto conteniéndolo. Cerrado haciendo inmutable la fila gastada (`AUTHZ002`/`AUTHZ003`/`AUTHZ004`). Lo descubrí porque el test se llamaba "se gasta una sola vez" y **probaba otra cosa**.
+
+⚠️ **LA MITAD DEL TRABAJO FUE QUE EL PRODUCTO SIGA ANDANDO, y sin eso esto rompía en producción a medianoche.** `harden()` hace `DROP POLICY`/`CREATE POLICY` sobre **cada** relación gestionada, y la 0057 la ató a la **creación de particiones** — así que un gate ingenuo le pide autorización al worker la noche que aparece el primer `event_outbox` del día, la partición no se crea y **el transporte de eventos se detiene en silencio**. `harden()` queda exenta, y la exención es segura porque **genera** las políticas desde el registro: no se puede usar para instalar una política elegida, sólo la que el registro ya implica. Medido: `ensure_event_partitions()` → `made = 1`, sin pedir nada. Y el purgado por drop de particiones tampoco pide: **44 filas de registro, 58 particiones, cero particiones con fila propia** — eso separa una tabla real de una partición sin depender del nombre.
+
+📌 **Y una corrección a lo que le dije a Jorge antes de medir:** le dije que una migración que agrega una tabla iba a pedir autorización. **No pide.** El `INSERT` en `table_registry` quedó libre a propósito — una fila nueva describe una tabla que no existía, así que no puede debilitar un aislamiento que nunca estuvo; lo peligroso es el `UPDATE` sobre una tabla viva, y ése sí se niega.
+
+⚠️ **LO QUE NO CIERRA, DICHO ACÁ Y NO DESCUBIERTO DESPUÉS:**
+- **R4 intacto.** Un superuser lo deshabilita en una sentencia. Lo que cambió es que el **deploy** ya no es superuser, así que el actor de R4 pasó a ser una persona en una consola en vez de cada migración.
+- 🔴 **R2 decide si esto existe en producción, y sigue sin medir.** Si Render no da superuser, **el guard no se puede instalar allá**. `db:guard` se niega bajo una credencial sin superuser en vez de instalar a medias, y el grado graba `(a)+(c)` para una base migrada y nunca armada.
+- **`DROP TRIGGER` sobre `security.table_registry` no está gateado.** `crm_migrator` es dueño de esa tabla. Dos sentencias en vez de una, y la primera se ve en un diff — no es (b) por sí solo.
+
+📌 **Trampa del arnés, y es la misma firma de siempre en versión nueva:** un `SET ROLE` dentro de una transacción **que commitea** sobrevive a la transacción, y el pool tiene una sola conexión — así que el único test que commitea dejó la sesión pegada como `crm_migrator` y el `INSERT` del owner siguiente volvió *"permission denied for table ddl_authorization"*. **El error nombraba la tabla, así que se leía como un grant faltante y no como un rol filtrado.** `SET LOCAL ROLE` no se escapa.
+
 ### ⚖️ EL DEPLOY DEJA DE SER SUPERUSER, Y (b) PASA DE PARÁMETRO A OBSERVACIÓN (2026-08-14)
 `scripts/grade-property-b.ts` dentro de `npm run db:migrate` · `MIGRATION_DATABASE_URL` → `crm_migrator` · `ref.system_constant['property_b_grade']` · el gate de `definer-owner.test.ts` **cambiado a propósito**. **810 → 811 tests.** `verify` verde.
 
@@ -17,6 +45,8 @@
 ⚠️ **EL GRADO ES UNA PROPIEDAD DE QUIEN DESPLEGÓ, no del árbol.** Dos entornos, dos respuestas verdaderas, ninguna hardcodeada: desarrollo graba **`(b)`**; `crm_test` graba **`(a)+(c)`**, porque `global-setup.ts` lo construye como `crm`. Cada uno graba lo que observó, y `property-b.test.ts` fija la observación del arnés — apuntá el arnés a un rol aislado y se pone rojo.
 
 🎯 **DICHO ANGOSTO: esto es la UBICACIÓN de E1b — el PRERREQUISITO, no la protección.** Medido el mismo día: `SET ROLE crm_migrator; DROP POLICY p_app ON app.contact;` **sigue funcionando**. Nada exige todavía que un cambio protegido consuma una autorización, así que **el aislamiento entre vendedoras lo puede borrar el rol del deploy hoy**. El primer mensaje del script decía `✅ property (b)` y eso sobreafirmaba; se angostó después de medir.
+
+> ✅ **SUPERADO LA MISMA TARDE.** El guard de la entrada de arriba cerró exactamente esto: las tres sentencias ya no pasan. Lo que sigue vigente de este párrafo es el método —angostar la afirmación hasta lo medido— y no su conclusión.
 
 ⚠️ **CAMBIÉ UN GATE, Y LO CAUSÉ YO.** `definer-owner.test.ts` exigía `crm_migrator` **NOLOGIN**. Le hice correr a Jorge `ALTER ROLE crm_migrator WITH LOGIN` sin revisar que había una afirmación firmada en contra; el gate lo encontró. NOLOGIN y (b) **no pueden regir a la vez**: el deploy necesita conectarse. Un rol `crm_deploy` separado sería ceremonia — crear objetos en esos esquemas exige **membresía**, y la membresía da `SET ROLE crm_migrator`. Así que la aserción pasó a ser un **censo**: los roles que pueden loguearse Y alcanzar al dueño son exactamente `crm` y `crm_migrator`. `crm_app` ya estaba cubierto cuatro tests más abajo (USAGE **y** MEMBER), que es el muro real.
 

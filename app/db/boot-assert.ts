@@ -235,9 +235,15 @@ export async function assertEventEmitIsDefinerOnly(sql: postgres.Sql): Promise<v
  *     stays false while `'MEMBER'` is true. Both questions are asked.
  *
  * ⚠️ IT DOES NOT CHECK THAT THE OWNER IS BOUNDED. `p_sys` is `USING (true)`,
- * and as `crm_migrator` you can drop it, disable FORCE, or grant `crm_app`
- * anything. What 0062 bought is determinism and a non-superuser definer, not
- * scoping — do not read this assertion as more than that.
+ * so `crm_migrator` reads every row in every tenant. What 0062 bought is
+ * determinism and a non-superuser definer, not scoping — do not read this
+ * assertion as more than that.
+ *
+ * 📌 The rest of that sentence used to read "and as `crm_migrator` you can drop
+ * it, disable FORCE, or grant `crm_app` anything." Two of those three stopped
+ * being true on 2026-08-14: `assertDdlGuardIsArmed` below covers the E1b guard,
+ * which makes dropping a policy and switching off FORCE cost an authorisation
+ * the deploy role cannot create. Granting `crm_app` privileges is still ungated.
  */
 export async function assertDefinerOwnerIsPolicyBound(sql: postgres.Sql): Promise<void> {
   const rows = await sql<{ foreign_rls: number; app_is_member: boolean }[]>`
@@ -428,6 +434,77 @@ export async function assertTimelineWriterIsDefinerOnly(sql: postgres.Sql): Prom
         'field is read off the event row. A second parameter, even an optional one, is a ' +
         'field a caller can supply again, and it leaves the one-argument signature ' +
         'resolvable so a privilege check notices nothing.',
+    )
+  }
+}
+
+/**
+ * E1b's guard, re-asserted at every boot — property (c) over property (b).
+ *
+ * 🔴 THIS IS THE ONE THAT GUARDS A THING NO MIGRATION CAN RESTORE. The guard is
+ * installed OUT OF BAND by the owner, because `CREATE EVENT TRIGGER` needs
+ * superuser and the deploy no longer is one. That is what makes it (b) — and it
+ * is also what makes it forgettable: nothing in `npm run db:migrate`, in
+ * `verify`, or in any diff will notice a database that was migrated and never
+ * armed. A restored-from-backup database, a new region, a provider migration:
+ * every one of those arrives unarmed and works perfectly.
+ *
+ * What it costs to miss is the whole point of the exercise. Unarmed, one
+ * statement from the deploy role removes seller isolation:
+ *
+ *     DROP POLICY p_app ON app.contact;
+ *
+ * and every screen keeps rendering, with every seller's leads.
+ *
+ * ⚠️ IT IS UNCONDITIONAL, INCLUDING IN DEVELOPMENT, AND THAT IS A DECISION
+ * (2026-08-14). A gate that only arms in production is a gate whose first firing
+ * is a production incident. The cost is that a fresh clone must run
+ * `npm run db:guard` once after migrating; the refusal below says so by name.
+ */
+export async function assertDdlGuardIsArmed(
+  // A transaction is accepted as well as the pool, and only for the test that
+  // exercises the REFUSING arm: event trigger DDL is transactional, so the guard
+  // can be disabled and rolled back rather than left off for whatever runs next.
+  sql: postgres.Sql | postgres.TransactionSql,
+): Promise<void> {
+  const rows = await sql<{ armed: number; disabled: number; registry: number }[]>`
+    SELECT (SELECT count(*)::int FROM pg_event_trigger
+             WHERE evtname IN ('authz_guard_policy', 'authz_guard_alter', 'authz_guard_drop')
+               AND evtenabled <> 'D') AS armed,
+           (SELECT count(*)::int FROM pg_event_trigger
+             WHERE evtname IN ('authz_guard_policy', 'authz_guard_alter', 'authz_guard_drop')
+               AND evtenabled = 'D') AS disabled,
+           (SELECT count(*)::int FROM pg_trigger
+             WHERE tgname = 't_authz_guard_registry' AND NOT tgisinternal
+               AND tgenabled <> 'D') AS registry`
+
+  const row = rows[0]
+  if (row === undefined) {
+    throw new Error('BOOT016: refusing to start. The E1b guard check returned nothing.')
+  }
+
+  // Disabled is reported apart from absent on purpose. Absent is "nobody ran
+  // db:guard"; disabled is "somebody with superuser turned it off", and those
+  // are different conversations.
+  if (row.disabled > 0) {
+    throw new Error(
+      `BOOT016: refusing to start. ${String(row.disabled)} of the E1b event triggers ` +
+        'are DISABLED.\n\n' +
+        'ALTER EVENT TRIGGER ... DISABLE needs superuser, so this was not the deploy. ' +
+        'Somebody turned off the thing that stops a policy being dropped. Re-enable it ' +
+        'or re-run `npm run db:guard`.',
+    )
+  }
+
+  if (row.armed < 3 || row.registry < 1) {
+    throw new Error(
+      `BOOT016: refusing to start. The E1b DDL guard is not armed ` +
+        `(${String(row.armed)}/3 event triggers, ${String(row.registry)}/1 registry trigger).\n\n` +
+        'Without it the deploy role can DROP a policy, switch off FORCE row level ' +
+        'security, or drop a registered table in one statement — and every screen ' +
+        'keeps working while it does. This database was migrated but never armed.\n\n' +
+        'Run it once, as the OWNER and not as the deploy credential:\n\n' +
+        '  npm run db:guard\n',
     )
   }
 }

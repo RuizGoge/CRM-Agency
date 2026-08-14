@@ -49,4 +49,38 @@ The reproducible version is pass 4. Worth keeping as method: three of the four p
 
 ## What it unblocks
 
-Setting `MIGRATION_DATABASE_URL` to a `crm_migrator` credential — which also needs `ALTER ROLE crm_migrator WITH LOGIN` and a password set out of band, since it is `NOLOGIN` today — makes `security.property_b_grade()` return `(b)`, and `property-b.test.ts` go red so the claim in `CLAUDE.md` gets updated in the same change. **That is the whole remaining distance.**
+Setting `MIGRATION_DATABASE_URL` to a `crm_migrator` credential — which also needs `ALTER ROLE crm_migrator WITH LOGIN` and a password set out of band, since it is `NOLOGIN` today — makes `security.property_b_grade()` return `(b)`, and `property-b.test.ts` go red so the claim in `CLAUDE.md` gets updated in the same change.
+
+~~**That is the whole remaining distance.**~~ **It was not, and the sentence was wrong the day it was written (struck 2026-08-14).** Isolating the credential is the *placement*: the deploy can consume an authorisation it cannot create. It makes nothing *cost* one. Measured the morning after the switch, under the isolated credential, with the grade reading `(b)`:
+
+```
+SET ROLE crm_migrator; DROP POLICY p_app ON app.contact;                    -- succeeded
+SET ROLE crm_migrator; ALTER TABLE app.contact NO FORCE ROW LEVEL SECURITY; -- succeeded
+SET ROLE crm_migrator; DROP TABLE app.contact CASCADE;                      -- succeeded
+```
+
+## The fourth out-of-band statement (2026-08-14)
+
+The three statements above are things a migration *wants* and cannot have. This is the opposite: something the deploy must never be able to run at all.
+
+`scripts/ddl-guard.sql`, applied by `npm run db:guard` **as the owner**. It installs three event triggers and two row triggers; a protected change must then spend a row in `authz.ddl_authorization`, which `crm_migrator` can read and consume and cannot create.
+
+**It cannot be a migration, and that is the property rather than a gap.** `CREATE EVENT TRIGGER` requires superuser and the deploy is no longer one. The authorisation infrastructure cannot bootstrap itself under the credential it exists to limit.
+
+Measured, all as `crm_migrator`:
+
+| attempt | result |
+|---|---|
+| `DROP EVENT TRIGGER` / `ALTER EVENT TRIGGER … DISABLE` | `must be owner of event trigger` |
+| `SET event_triggers = off` | `permission denied to set parameter` |
+| `CREATE OR REPLACE` any `authz.*` function | `permission denied for schema authz` |
+| `INSERT INTO authz.ddl_authorization` | `permission denied for table` |
+| re-touching an already-spent authorisation | `AUTHZ002: already spent` |
+
+That last row was **a hole I built and then measured.** The guard asks "did this transaction consume an authorisation?" with `age(xmin) = 0`, and the deploy must hold `UPDATE` or it could not consume anything — so re-touching any spent row satisfied it, and spent rows are never deleted. From the first authorisation onward the deploy authorised itself for ever, with every other refusal still passing its test. Closed by making a spent row immutable.
+
+### What it still does not close
+
+- **R4 is untouched.** A superuser disables the event trigger in one statement. What changed is that the *deploy* is no longer a superuser, so R4's actor is a human at a console rather than every migration.
+- **R2 decides whether this exists in production at all, and it is still unmeasured.** If Render grants no superuser, the guard cannot be installed there. `npm run db:guard` refuses under a non-superuser credential rather than half-installing, and the grade records `(a)+(c)` for a database that was migrated but never armed.
+- **`DROP TRIGGER` on `security.table_registry` is not gated.** `crm_migrator` owns that table, so it can remove the row trigger that protects the registry. Two statements instead of one, and the first is visible in a diff — not `(b)` on its own.

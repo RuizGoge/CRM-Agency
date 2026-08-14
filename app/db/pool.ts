@@ -3,6 +3,7 @@ import postgres from 'postgres'
 import { installCapabilities } from '~/modules/communications/capability'
 
 import {
+  assertDdlGuardIsArmed,
   assertDefinerOwnerIsPolicyBound,
   assertEventEmitIsDefinerOnly,
   assertLedgerAppendIsDefinerOnly,
@@ -132,6 +133,20 @@ void assertLedgerAppendIsDefinerOnly(pool).catch((err: unknown) => {
  * is the one worth catching before a request is served rather than after.
  */
 void assertTimelineWriterIsDefinerOnly(pool).catch((err: unknown) => {
+  console.error(err instanceof Error ? err.message : err)
+  process.exit(1)
+})
+
+/**
+ * E1b's guard, re-asserted at every boot.
+ *
+ * The only one of these whose object CANNOT be restored by a migration: the
+ * guard needs superuser to install, so a database that arrives unarmed — from a
+ * backup, a new region, a provider migration — stays unarmed, works perfectly,
+ * and leaves seller isolation one statement from the deploy role. Nothing else
+ * in the pipeline looks for it, which is why it is here.
+ */
+void assertDdlGuardIsArmed(pool).catch((err: unknown) => {
   console.error(err instanceof Error ? err.message : err)
   process.exit(1)
 })

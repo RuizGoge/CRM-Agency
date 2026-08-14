@@ -2,6 +2,7 @@ import { drizzle } from 'drizzle-orm/postgres-js'
 import { migrate } from 'drizzle-orm/postgres-js/migrator'
 import postgres from 'postgres'
 
+import { installDdlGuard } from '../../../scripts/ddl-guard'
 import { installJobSchema } from '../../../scripts/jobs-schema'
 
 import { ADMIN_URL, APP_ROLE_PASSWORD, OWNER_URL, TEST_DB } from './urls'
@@ -98,14 +99,25 @@ export async function setup(): Promise<void> {
       SELECT 'property_b_grade', g.grade,
              'Observed by tests/integration/setup/global-setup.ts, whose role is '
              || current_user || '. ' || g.reason
-             || ' NOTE: this grades E1b''s PLACEMENT only. Nothing yet requires a '
-             || 'protected change to consume an authorisation, so this role can '
-             || 'still DROP a policy — measured 2026-08-14.'
+             || ' The E1b guard IS armed here, so a protected change spends an '
+             || 'authorisation; what keeps this degraded is the ROLE, not the guard.'
         FROM security.property_b_grade(current_user) g
       ON CONFLICT (key) DO UPDATE
         SET value = EXCLUDED.value, reason = EXCLUDED.reason`
 
     await installJobSchema(sql)
+
+    // 🔴 ARMED LAST, AND THE SUITE RUNS ARMED. Everything above issues DDL the
+    // guard would otherwise have to be authorised for — 75 migrations' worth of
+    // policies, plus pg-boss's schema — so arming before them would mean minting
+    // authorisations to build a test database, which teaches the harness to mint
+    // them freely. Arming here means every test after this point runs against the
+    // same protection production has, and `ddl-guard.test.ts` exercises it.
+    //
+    // ⚠️ This connection is `crm`, a superuser, which is the only reason the
+    // harness CAN arm it. That is the honest shape of an out-of-band step: the
+    // thing that installs the guard is not the thing the guard limits.
+    await installDdlGuard(sql)
   } finally {
     await sql.end()
   }

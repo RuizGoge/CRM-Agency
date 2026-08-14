@@ -86,12 +86,26 @@ describe('E1b has a structure at last', () => {
   it('records who authorised it without being told', async () => {
     // `created_by` defaults from `current_user`: a caller that could name who
     // authorised it could name somebody who did not. Same rule as audit_write.
-    const [row] = await sql<{ created_by: string }[]>`
-      INSERT INTO authz.ddl_authorization (purpose)
-      VALUES ('Authorising the property-b test to insert one row and roll it back')
-      RETURNING created_by`
-    expect(row?.created_by).toBe('crm')
-    await sql`DELETE FROM authz.ddl_authorization WHERE purpose LIKE 'Authorising the property-b%'`
+    //
+    // ⚠️ ROLLED BACK RATHER THAN DELETED, AND THAT CHANGED ON 2026-08-14. The
+    // guard made this table append-only — `AUTHZ003: an authorisation is a
+    // record of who allowed what` — for the same reason `earnings_ledger` and
+    // `audit_log` are: a spend that can be erased is a spend nobody can audit.
+    // The DELETE this test used to end with now raises.
+    let createdBy: string | undefined
+    await sql
+      .begin(async (tx) => {
+        const [row] = await tx<{ created_by: string }[]>`
+          INSERT INTO authz.ddl_authorization (purpose)
+          VALUES ('Authorising the property-b test to insert one row and roll it back')
+          RETURNING created_by`
+        createdBy = row?.created_by
+        throw new Error('rollback')
+      })
+      .catch((err: unknown) => {
+        if (!(err instanceof Error) || err.message !== 'rollback') throw err
+      })
+    expect(createdBy).toBe('crm')
   })
 })
 
@@ -121,12 +135,15 @@ describe('the grade is measured, and it discriminates', () => {
     // Point the harness at an isolated role and this goes red.
     expect(row?.value).toBe('(a)+(c)')
 
-    // ⚠️ AND THE RECORDING SAYS WHAT IT DOES NOT MEAN. Measured 2026-08-14:
-    // `SET ROLE crm_migrator; DROP POLICY p_app ON app.contact;` still succeeds.
-    // The grade is E1b's PLACEMENT — the deploy cannot authorise itself — and
-    // not "protected objects are protected", because nothing yet requires a
-    // protected change to consume an authorisation.
-    expect(row?.reason).toContain('PLACEMENT only')
+    // ⚠️ AND THE RECORDING SAYS WHICH HALF IS MISSING. Until 2026-08-14 this
+    // read "PLACEMENT only", because nothing required a protected change to
+    // consume an authorisation and `DROP POLICY p_app ON app.contact` from the
+    // deploy role simply worked. The guard closed that half; what keeps THIS
+    // database degraded is now the role alone — global-setup deploys as `crm`,
+    // a superuser — and the reason has to say which, or the next reader learns
+    // the wrong thing from a true grade.
+    expect(row?.reason).toContain('guard IS armed')
+    expect(row?.reason).toContain('SUPERUSER')
   })
 
   it('still grades a superuser deploy as degraded, which is the discrimination', async () => {
