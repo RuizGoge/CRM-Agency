@@ -48,11 +48,34 @@ describe('the definer owner is the role the policies name', () => {
     // 🔴 AND THE OWNER MUST NOT BE ABLE TO BYPASS. If it could, the handover
     // would have bought nothing: the definers would still work for the reason
     // they worked before, and the p_sys policies would still be decoration.
-    const [owner] = await sql<{ can_bypass: boolean; can_login: boolean }[]>`
-      SELECT rolsuper OR rolbypassrls AS can_bypass, rolcanlogin AS can_login
+    const [owner] = await sql<{ can_bypass: boolean }[]>`
+      SELECT rolsuper OR rolbypassrls AS can_bypass
         FROM pg_roles WHERE rolname = 'crm_migrator'`
     expect(owner?.can_bypass).toBe(false)
-    expect(owner?.can_login).toBe(false)
+
+    // ⚠️ THIS LINE USED TO READ `expect(owner?.can_login).toBe(false)` AND IT WAS
+    // TRADED DELIBERATELY ON 2026-08-14, not relaxed to make a build pass. The
+    // deploy moved off the superuser onto this role, which needs a credential to
+    // connect at all — so NOLOGIN and property (b) could not both hold.
+    //
+    // A separate `crm_deploy` role would look stricter and buy nothing: creating
+    // objects in schemas this role owns requires MEMBERSHIP in it, membership
+    // grants `SET ROLE crm_migrator`, and the definer-owner authority is
+    // therefore reachable from any credential that can deploy. The wall is not
+    // "no credential exists" — it is WHICH credentials can reach the owner.
+    //
+    // 🎯 SO THE ASSERTION IS NOW A CENSUS. The role that matters most is already
+    // covered four tests down — `crm_app` is checked for USAGE *and* MEMBER, and
+    // that one is the real wall. What NOLOGIN was quietly also doing was capping
+    // the population: no credential could reach the owner because none existed.
+    // A census keeps that cap without forbidding the deploy its connection. Add
+    // a fourth login role that can reach the owner and this goes red WITH ITS
+    // NAME, which is more than the boolean ever said.
+    const reach = await sql<{ rolname: string }[]>`
+      SELECT rolname FROM pg_roles
+       WHERE rolcanlogin AND pg_has_role(rolname, 'crm_migrator', 'USAGE')
+       ORDER BY 1`
+    expect(reach.map((r) => r.rolname)).toEqual(['crm', 'crm_migrator'])
   })
 
   it('leaves no managed relation a definer cannot write', async () => {

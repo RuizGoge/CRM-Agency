@@ -87,6 +87,24 @@ export async function setup(): Promise<void> {
     // from the deploy script rather than reimplemented, so the two cannot
     // drift — a second copy would be a test harness asserting against a schema
     // production does not have.
+    // 🔴 THE GRADE IS A PROPERTY OF WHOEVER DEPLOYED, so the harness records its
+    // own rather than inheriting a number from somewhere else. `npm run db:migrate`
+    // does this for the development database over MIGRATION_DATABASE_URL; this
+    // connection is OWNER_URL, which is `crm`, so the honest answer here is
+    // degraded — and property-b.test.ts pins exactly that. If somebody ever
+    // points the harness at an isolated role, the pin goes red and says so.
+    await sql`
+      INSERT INTO ref.system_constant (key, value, reason)
+      SELECT 'property_b_grade', g.grade,
+             'Observed by tests/integration/setup/global-setup.ts, whose role is '
+             || current_user || '. ' || g.reason
+             || ' NOTE: this grades E1b''s PLACEMENT only. Nothing yet requires a '
+             || 'protected change to consume an authorisation, so this role can '
+             || 'still DROP a policy — measured 2026-08-14.'
+        FROM security.property_b_grade(current_user) g
+      ON CONFLICT (key) DO UPDATE
+        SET value = EXCLUDED.value, reason = EXCLUDED.reason`
+
     await installJobSchema(sql)
   } finally {
     await sql.end()

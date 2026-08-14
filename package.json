@@ -21,7 +21,7 @@
     "db:down": "docker compose -f docker/docker-compose.yml down",
     "db:reset": "docker compose -f docker/docker-compose.yml down -v",
     "db:generate": "tsx scripts/guard-db-generate.ts && drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
+    "db:migrate": "drizzle-kit migrate && tsx --env-file-if-exists=.env scripts/grade-property-b.ts",
     "db:studio": "drizzle-kit studio",
     "db:seed": "tsx scripts/seed.ts",
     "db:jobs": "tsx scripts/install-jobs.ts",

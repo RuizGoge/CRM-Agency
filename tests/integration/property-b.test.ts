@@ -96,10 +96,43 @@ describe('E1b has a structure at last', () => {
 })
 
 describe('the grade is measured, and it discriminates', () => {
-  it('🔴 PINS THE TRUTH: property (b) does NOT hold today', async () => {
-    // If this goes red, (b) started holding and the claim in CLAUDE.md and
-    // CONTEXT.md must be updated in the same change. That is the whole job of
-    // this assertion. Do not "fix" it by loosening it.
+  it('🔴 PINS WHAT THE DEPLOY OBSERVED, not a role name typed here', async () => {
+    // 🔴 THE FIRST VERSION PINNED `grade('crm')` AND STOPPED MEANING ANYTHING
+    // THE MOMENT IT MATTERED. When Jorge pointed MIGRATION_DATABASE_URL at
+    // crm_migrator, the deploy role changed and this stayed GREEN: `crm` is
+    // still a superuser, it simply no longer deploys. The pin was true and had
+    // become a statement about nothing.
+    //
+    // The function knows role privileges; it cannot know which role the deploy
+    // connects as. So `scripts/grade-property-b.ts` runs over
+    // MIGRATION_DATABASE_URL, grades `current_user` — the deploy role BY
+    // CONSTRUCTION — and records it. This pins the RECORDING.
+    const [row] = await sql<{ value: string; reason: string }[]>`
+      SELECT value, reason FROM ref.system_constant WHERE key = 'property_b_grade'`
+
+    expect(row, 'no deploy ever recorded a grade').toBeDefined()
+
+    // ⚠️ `(a)+(c)` HERE IS THE HONEST ANSWER, NOT A STALE ONE. The grade belongs
+    // to whoever deployed, and this database was built by global-setup over
+    // OWNER_URL, which is `crm` — a superuser. The DEVELOPMENT database records
+    // `(b)`, because `npm run db:migrate` runs over MIGRATION_DATABASE_URL,
+    // which Jorge pointed at crm_migrator on 2026-08-14. Two environments, two
+    // true answers, and neither is hardcoded: each records what it observed.
+    // Point the harness at an isolated role and this goes red.
+    expect(row?.value).toBe('(a)+(c)')
+
+    // ⚠️ AND THE RECORDING SAYS WHAT IT DOES NOT MEAN. Measured 2026-08-14:
+    // `SET ROLE crm_migrator; DROP POLICY p_app ON app.contact;` still succeeds.
+    // The grade is E1b's PLACEMENT — the deploy cannot authorise itself — and
+    // not "protected objects are protected", because nothing yet requires a
+    // protected change to consume an authorisation.
+    expect(row?.reason).toContain('PLACEMENT only')
+  })
+
+  it('still grades a superuser deploy as degraded, which is the discrimination', async () => {
+    // `crm` is what this used to deploy as. It remains a superuser, so asking
+    // about it still answers degraded — which is what keeps the function honest
+    // rather than stuck on yes now that the real answer flipped.
     const g = await grade('crm')
     expect(g?.holds).toBe(false)
     expect(g?.grade).toBe('(a)+(c)')

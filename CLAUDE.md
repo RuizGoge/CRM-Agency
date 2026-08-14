@@ -36,7 +36,10 @@ npm run build        # production build
 npm run db:up        # local Postgres 18 in Docker — same major as production
 npm run db:down
 npm run db:generate  # drizzle-kit generate (after editing app/db/schema/*)
-npm run db:migrate
+npm run db:migrate  # applies migrations, then GRADES the deploy connection.
+                     # MIGRATION_DATABASE_URL must point at crm_migrator, NOT a
+                     # superuser: the grade is recorded from current_user, so a
+                     # superuser deploy records (a)+(c) and says so out loud.
 npm run db:seed
 ```
 
