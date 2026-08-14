@@ -7,6 +7,24 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 🪑 EL PRODUCTO POR FIN PUEDE PONER A ALGUIEN EN EL PISO (2026-08-13)
+Migración **0073** · `app.app_user_create` · `POST /api/user-create` · formulario en `/admin/users` · `user-create.test.ts`. **784 → 796 tests.** `verify` verde. **Verificado en pantalla y contra la base.**
+
+🔴 **EL ÚLTIMO DE LOS CUATRO ESCRITORES QUE FALTABAN.** La 0065 dio forma de empezar un negocio, la 0066 de escribir una nota, la 0072 de cambiar un rol — y ninguna servía para una persona que no podía existir. **Todo usuario de esta base lo puso el seed.**
+
+🎯 **Y SE VOLVIÓ CONSTRUIBLE PORQUE ADR-085 CAMBIÓ LO QUE SIGNIFICA UNA FILA.** Hasta el fallo de hoy, crear un usuario exigía una contraseña que entregar, porque una fila sin forma de entrar era inútil. Con Google en camino **la fila ES la cosa**: registra **quién puede entrar**, y Google después prueba que la persona es quien dice. Así que se crea con `auth_user_id` **NULL** — un asiento reservado, sin reclamar.
+
+✅ **`auth_user_id` YA ACEPTABA NULL**, verificado contra el motor. ADR-085 listaba hacerlo nullable como trabajo pendiente y **estaba equivocada**; la ADR quedó corregida. Una migración menos.
+
+⚠️ **LA ASERCIÓN QUE CARGA EL DISEÑO: esa fila NO PUEDE ENTRAR.** `app.resolve_identity` matchea por `auth_user_id`, así que NULL no matchea ninguna sesión — el test lo afirma contra el puente real, no contra la intención. Una superficie de alta que produjera por accidente una cuenta con la que se puede entrar sería la prima del self-signup: acceso otorgado por lo que tipeó un admin y no por la persona probando quién es.
+
+- **La colisión la caza el ÍNDICE, no una consulta previa.** `app_user_email_uidx` es UNIQUE sobre (tenant, email); un check-then-insert pierde esa carrera y **dos admins agregando al mismo ingresante a la vez pasan los dos**.
+- **Sin paso de confirmación, y la asimetría con el editor de roles es deliberada:** crear un asiento no otorga nada y se corrige desactivando; cambiar un rol entrega las superficies que mueven plata, ya y a una persona real. Poner dos clics en el primero enseñaría a hacer clic de corrido en los dos.
+- **Tercer módulo del dominio de usuarios**, y el gate del registro es la razón: un descriptor declara **un** método, así que la lectura del roster y las dos escrituras no pueden compartir archivo. Meter el alta en `/api/user-access` habría evitado la fragmentación y **vuelto mentira ese nombre**.
+- **`user.created` es vocabulario nuevo**, sin colisión con nombre de evento vivo ni fantasma.
+
+**Verificado en el server real:** alta **201**, duplicado **422** *"Somebody with that address is already on this team."*, dirección inválida **422**, nombre vacío **422** — y la fila creada quedó con `auth_user_id` NULL y su fila de auditoría a nombre de Valeria.
+
 ### ✍️ REVERSIÓN FIRMADA POR JORGE: ENTRAN GOOGLE LOGIN Y EMAIL TRANSACCIONAL, EN ESE ORDEN (2026-08-13)
 **Decisión de Jorge, tomada hoy. Nada construido todavía** — esta entrada existe para que la próxima sesión no lea el texto viejo y diseñe sobre una regla que ya no rige.
 

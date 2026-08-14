@@ -53,7 +53,8 @@ So a Google user with no `app_user` row resolves to **nothing**: no tenant, no s
 
 - **Password sign-in stays.** Both paths land on the same `resolve_identity`, so the authorisation story is one story. Nobody who already signs in loses anything.
 - **The orphan case is real and needs a screen.** A person who signs in with Google and has no row leaves a better-auth user behind with nothing attached. That is harmless — it grants nothing — but the screen must say so plainly, and the orphan should be cleanable.
-- **`app_user.auth_user_id` must be nullable, and the admin create-user surface must write a row without one.** Neither exists yet; both are part of building this.
+- ~~**`app_user.auth_user_id` must be nullable**~~ — **wrong, and corrected on 2026-08-13**: it was already nullable. Checked against the engine rather than assumed.
+- ✅ **The admin create-user surface exists (0073).** It writes the row with `auth_user_id` NULL, and `user-create.test.ts` asserts against the real `resolve_identity` that such a row answers no session. The reservation half of this ADR is built; the claiming half is what waits on the OAuth client.
 - **MFA is untouched.** `05c` C11's ruling rests on transactional email, not on SSO, and email is not arriving in this step. It is revisited when email lands, not here.
 - **Google outages become sign-in outages** for whoever uses Google. Password sign-in remaining available is the mitigation, and it is a reason not to migrate everybody off passwords.
 

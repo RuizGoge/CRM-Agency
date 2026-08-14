@@ -66,6 +66,8 @@ export default [
   // The writers app_user.role never had. Promoting somebody here hands them the
   // surfaces that move money, which is why the copy says so before the click.
   route('api/user-access', 'routes/api/user-access.ts'),
+  // Reserves a seat. Records who may enter; grants no way in (ADR-085).
+  route('api/user-create', 'routes/api/user-create.ts'),
   // better-auth mounts its whole surface under one splat. See the note in the
   // module for why this is the one resource route outside the endpoint factory.
   route('api/auth/*', 'routes/api/auth.ts'),

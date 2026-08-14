@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import type { AccessResult } from '~/routes/api/user-access'
+import type { CreateUserResult } from '~/routes/api/user-create'
 import type { RosterResult, TeamMember } from '~/routes/api/users'
 
 import type { Route } from './+types/users-admin'
@@ -13,10 +14,11 @@ import type { Route } from './+types/users-admin'
  * letters — so making somebody an admin on this screen hands them the surfaces
  * that move money. The copy says so before the click, not after.
  *
- * ⚠️ THE PRODUCT STILL CANNOT CREATE A USER. A signable-in account needs a
- * better-auth call and, with no transactional email in the MVP, there is no
- * invitation to send. That is a product decision rather than a missing button,
- * and the screen says it plainly instead of showing an "Add" that fails.
+ * ⚠️ ADDING SOMEBODY RESERVES A SEAT; IT DOES NOT LET THEM IN. 0073 writes the
+ * row with `auth_user_id` NULL, and `app.resolve_identity` matches on that
+ * column, so the row answers no session. Until Google login exists (ADR-085) a
+ * person added here cannot sign in at all — which the screen says at the point
+ * of the click rather than leaving to be discovered on their first Monday.
  */
 
 export function meta(_: Route.MetaArgs) {
@@ -134,6 +136,7 @@ export default function UsersAdmin(_: Route.ComponentProps): React.JSX.Element {
   // for zero members would be unreachable code pretending to be care.
   return (
     <Shell>
+      <AddMember onAdded={refresh} />
       <ul style={{ listStyle: 'none', padding: 0 }}>
         {state.members.map((member) => (
           <li key={member.userId} style={{ ...CARD, marginTop: 'var(--space-3)' }}>
@@ -188,12 +191,194 @@ function Shell({ children }: { children: React.ReactNode }): React.JSX.Element {
       {/* ⚠️ THE STANDING LINE, and it is here because the absence would read as
           a missing feature rather than a decision. */}
       <p style={{ marginBottom: 'var(--space-6)', color: 'var(--color-text-secondary)' }}>
-        New people are set up by hand for now — we don&rsquo;t send email yet, so there&rsquo;s no
-        invitation to click. This page changes what the people who already have accounts are allowed
-        to do.
+        Adding somebody records that they may enter. It doesn&rsquo;t give them a way in yet &mdash;
+        that arrives with Google sign-in. Until then, people you add here show up on the team but
+        can&rsquo;t log in.
       </p>
       {children}
     </main>
+  )
+}
+
+/**
+ * Adding somebody to the team.
+ *
+ * ⚠️ NO CONFIRM STEP, and the asymmetry with the Editor below is deliberate.
+ * Creating a seat grants nothing — the row cannot sign in — and it is
+ * correctable by deactivating. Changing a role hands somebody the surfaces that
+ * move money, immediately and to a real person. Two clicks belong on the second,
+ * and putting them on the first would teach an admin to click through both.
+ */
+function AddMember({ onAdded }: { onAdded: () => void }): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const [email, setEmail] = useState('')
+  const [fullName, setFullName] = useState('')
+  const [displayName, setDisplayName] = useState('')
+  const [role, setRole] = useState<TeamMember['role']>('seller')
+  const [busy, setBusy] = useState(false)
+  const [problem, setProblem] = useState<string | null>(null)
+  const [added, setAdded] = useState<string | null>(null)
+
+  const submit = useCallback(async (): Promise<void> => {
+    setBusy(true)
+    setProblem(null)
+    try {
+      const response = await fetch('/api/user-create', {
+        method: 'POST',
+        headers: { accept: 'application/json' },
+        body: new URLSearchParams({ email, fullName, displayName, role }),
+      })
+      const result = (await response.json()) as CreateUserResult
+
+      if (result.status === 'created') {
+        setAdded(fullName.trim())
+        setEmail('')
+        setFullName('')
+        setDisplayName('')
+        setRole('seller')
+        onAdded()
+      } else if (result.status === 'invalid') {
+        setProblem(result.reason)
+      } else {
+        setProblem('Only admins can add somebody to the team.')
+      }
+    } catch {
+      // The server disagreeing must be visible: a silent failure here reads as
+      // "they were added" and the person is discovered missing much later.
+      setProblem('We couldn’t reach the server. Nobody was added.')
+    } finally {
+      setBusy(false)
+    }
+  }, [displayName, email, fullName, onAdded, role])
+
+  if (!open) {
+    return (
+      <div style={{ marginBottom: 'var(--space-4)' }}>
+        {added !== null && (
+          <p role="status" style={{ marginBottom: 'var(--space-3)' }}>
+            {added} is on the team. They won&rsquo;t be able to sign in until Google sign-in is set
+            up.
+          </p>
+        )}
+        <button type="button" onClick={() => setOpen(true)}>
+          Add somebody
+        </button>
+      </div>
+    )
+  }
+
+  const ready = email.trim() !== '' && fullName.trim() !== ''
+
+  return (
+    <section aria-labelledby="add-heading" style={{ ...CARD, marginBottom: 'var(--space-4)' }}>
+      <h2
+        id="add-heading"
+        style={{ fontSize: 'var(--type-lg)', fontWeight: 'var(--font-weight-semibold)' }}
+      >
+        Add somebody
+      </h2>
+
+      {problem !== null && (
+        <p role="alert" style={{ marginTop: 'var(--space-3)', color: 'var(--color-danger-text)' }}>
+          {problem}
+        </p>
+      )}
+
+      <label htmlFor="new-email" style={{ display: 'block', marginTop: 'var(--space-4)' }}>
+        Email
+      </label>
+      <p
+        style={{
+          marginTop: 'var(--space-1)',
+          fontSize: 'var(--type-sm)',
+          color: 'var(--color-text-tertiary)',
+        }}
+      >
+        Use the address they&rsquo;ll sign in with. It has to match exactly.
+      </p>
+      <input
+        id="new-email"
+        type="email"
+        value={email}
+        disabled={busy}
+        onChange={(e) => setEmail(e.target.value)}
+        style={FIELD}
+      />
+
+      <label htmlFor="new-full" style={{ display: 'block', marginTop: 'var(--space-4)' }}>
+        Full name
+      </label>
+      <input
+        id="new-full"
+        value={fullName}
+        disabled={busy}
+        onChange={(e) => setFullName(e.target.value)}
+        style={FIELD}
+      />
+
+      <label htmlFor="new-display" style={{ display: 'block', marginTop: 'var(--space-4)' }}>
+        Name on the board
+      </label>
+      <p
+        style={{
+          marginTop: 'var(--space-1)',
+          fontSize: 'var(--type-sm)',
+          color: 'var(--color-text-tertiary)',
+        }}
+      >
+        What the whole floor sees on the leaderboard. Leave it empty to use their full name.
+      </p>
+      <input
+        id="new-display"
+        value={displayName}
+        disabled={busy}
+        placeholder={fullName.trim() === '' ? 'Renata O.' : fullName}
+        onChange={(e) => setDisplayName(e.target.value)}
+        style={FIELD}
+      />
+
+      <label htmlFor="new-role" style={{ display: 'block', marginTop: 'var(--space-4)' }}>
+        Role
+      </label>
+      <select
+        id="new-role"
+        value={role}
+        disabled={busy}
+        onChange={(e) => setRole(e.target.value as TeamMember['role'])}
+        style={FIELD}
+      >
+        {(['seller', 'supervisor', 'admin'] as const).map((r) => (
+          <option key={r} value={r}>
+            {ROLE_LABEL[r]}
+          </option>
+        ))}
+      </select>
+      {role === 'admin' && (
+        <p
+          style={{
+            marginTop: 'var(--space-2)',
+            fontSize: 'var(--type-sm)',
+            color: 'var(--color-caution-text)',
+          }}
+        >
+          Admins can correct the earnings board and change who has access.
+        </p>
+      )}
+
+      <div style={{ marginTop: 'var(--space-5)' }}>
+        <button type="button" disabled={!ready || busy} onClick={() => void submit()}>
+          {busy ? 'Adding…' : 'Add to the team'}
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => setOpen(false)}
+          style={{ marginLeft: 'var(--space-2)' }}
+        >
+          Cancel
+        </button>
+      </div>
+    </section>
   )
 }
 

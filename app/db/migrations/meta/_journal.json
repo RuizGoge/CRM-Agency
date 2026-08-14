@@ -512,6 +512,13 @@
       "when": 1786467061588,
       "tag": "0072_user_role_writer",
       "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1786470661588,
+      "tag": "0073_app_user_create",
+      "breakpoints": true
     }
   ]
 }
