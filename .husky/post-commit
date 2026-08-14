@@ -1,0 +1,51 @@
+# Push what was just committed.
+#
+# WHY THIS IS SAFE HERE AND WOULD NOT BE EVERYWHERE: the pre-commit hook runs
+# `npm run verify` — typecheck, lint, format, the full test suite and the
+# performance budgets — so a commit that exists has already passed every gate
+# this project has. There is no window in which a red commit could be pushed,
+# because a red commit cannot be made. Add to that the constitution's own shape:
+# no reviewer, no pull request, master is the branch, and rollback is the
+# previous image. A local-only commit therefore buys nothing except a chance to
+# amend, and costs the thing Jorge actually wanted — not typing `git push`.
+#
+# It is deliberately quiet on success and loud on failure: a push that did not
+# happen must not look like one that did.
+
+set -u
+
+# ── Guards. Each one is a case where pushing would be wrong, not merely noisy.
+
+# Mid-rebase or mid-merge: post-commit fires once PER replayed commit, so
+# pushing here would publish intermediate states and, on a rebase, states that
+# are about to be rewritten.
+if [ -d "$(git rev-parse --git-path rebase-merge 2>/dev/null)" ] ||
+   [ -d "$(git rev-parse --git-path rebase-apply 2>/dev/null)" ] ||
+   [ -f "$(git rev-parse --git-path MERGE_HEAD 2>/dev/null)" ] ||
+   [ -f "$(git rev-parse --git-path CHERRY_PICK_HEAD 2>/dev/null)" ]; then
+  exit 0
+fi
+
+# Detached HEAD: there is no branch to push, and guessing one is how somebody
+# else's work gets overwritten.
+branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null) || exit 0
+[ -n "$branch" ] || exit 0
+
+# No upstream: a new local branch is not automatically something to publish.
+# `--set-upstream` here would decide that for you, silently, the first time.
+if ! git rev-parse --abbrev-ref --symbolic-full-name "@{upstream}" >/dev/null 2>&1; then
+  echo "[post-commit] '$branch' has no upstream — not pushing. Use: git push -u origin $branch"
+  exit 0
+fi
+
+# ── The push. Never forced: a rejected push means the remote moved, and the
+# answer to that is a person looking, not a flag that overwrites them.
+if git push --quiet; then
+  echo "[post-commit] pushed $branch"
+else
+  echo "[post-commit] 🔴 PUSH FAILED — the commit is local only. Run 'git push' and read the error."
+fi
+
+# Always succeed: the commit already happened, and a non-zero exit here would
+# report a failure that did not occur.
+exit 0
