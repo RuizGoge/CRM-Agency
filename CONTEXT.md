@@ -7,6 +7,42 @@
 ## Current State
 <!-- qué fase va, qué está hecho, qué sigue -->
 
+### 🔐 EL TENANT DEJA DE SER UN RECLAMO PELADO — R1 CERRADO (2026-08-13)
+Migración **0074** · `app.tenant_seal` · `app.current_tenant` reescrita · seis aserciones nuevas en `identity-seal.test.ts`. **796 → 802 tests.** `verify` verde.
+
+🔴 **REPRODUCIDO ANTES DE CERRARLO, como `crm_app`, en una transacción real:**
+
+```
+SELECT app.begin_request(<demo>, <una vendedora real>);
+SELECT count(*) FROM app.app_user;                    -->  6
+SELECT set_config('app.tenant_id', <otro tenant>, true);
+SELECT count(*) FROM app.app_user;                    -->  1
+SELECT email, full_name FROM app.app_user;
+  --> perf500@perf.test / Perf Fivehundred
+```
+
+**El roster de otra agencia, leído por el rol de aplicación, seteando UN GUC.**
+
+🎯 **Y LA 0067 ES POR QUÉ ESTABA SÓLO A MEDIAS ABIERTO.** La misma corrida reportó `current_user_id is NULL`: el sello de identidad hizo su trabajo, así que **toda política owner-scoped cerró** — un tenant forjado rompe el sello de (tenant, usuario) y un dueño NULL no matchea ninguna fila. Lo que quedaba abierto es **toda clase que scopea sólo por `current_tenant()`, y son diez tablas**: `app_user`, `tenant`, `lost_reason`, `break_glass_override` · `aloware_number_mapping`, `inbound_webhook_event`, `leaderboard_projection`, `raw_payload_vault` · `admin_alert` y `dead_letter` (estas dos ya cerradas, porque además exigen `scope_is_admin()`, que descansa en el `current_user_id` sellado).
+
+**El daño alcanzable era:** el roster de otra agencia, sus totales de earnings, los teléfonos de sus vendedores, y `raw_payload_vault` — los cuerpos crudos del proveedor, que E9 describe cargando URLs de grabación que redirigen a audio pre-firmado.
+
+⚠️ **EL COSTO ERA TODO EL RIESGO, Y LA LECCIÓN DE LA 0067 SE APLICÓ EN VEZ DE REPETIRSE.** `current_tenant()` la llama **cada política RLS**; volverla definer la vuelve no-inlineable, y la 0067 midió que **anidar** definers llevó N13 de 84 a **121,7 ms contra 120**. Acá el md5 se **recalcula en línea** en vez de llamar a `app.tenant_seal`:
+
+| | p95 |
+|---|---|
+| Antes de la 0074 | **85,4 ms** |
+| Después (tres corridas) | **79,9 · 82,0 · 89,6 ms** |
+
+**Sin regresión medible** — dentro del ruido, con presupuesto 120. ⚠️ Pero **la cola se puso más ruidosa**: `worst` llegó a **125,3 ms** en una de las tres, sobre los 120. El gate es sobre p95, no sobre worst, así que no rompe nada — pero queda anotado en vez de tapado.
+
+- **`:T:` como separador de dominio, no decoración.** El sello de identidad es `secret : tenant : user`; éste es `secret :T: tenant`. Sin dominio distinto los dos hashes viven en el mismo espacio.
+- **`begin_system_work` TIENE que acuñar el sello de tenant** aunque no acuñe el de identidad. Sin eso cada job leería `current_tenant()` como NULL y **el worker entero quedaría ciego reportando salud** — fallo cerrado y catastrófico en silencio. Hay test.
+- **Dos gates lo atraparon al entrar, los dos con razón:** `definer-tenancy` exigió exención para `current_tenant` (que **es** el tenant, así que pedirle que lo establezca es circular) y para `tenant_seal`; y la lista fijada exigió que ampliarla fuera un acto deliberado con razón escrita.
+- **Control positivo en el test**, porque una suite que sólo lee cero filas no distingue un agujero cerrado de una consulta rota.
+
+📌 **Y OTRA FILA PODRIDA, LA OCTAVA.** El ladder del Sprint 0 dice que a la Puerta 4 le falta *"el contexto heredado entre job y request en la misma conexión pooleada"*, mientras una entrada más nueva dice que eso **se cerró el 2026-08-09** con `folded-handoff.test.ts`. Corregido abajo.
+
 ### 🪑 EL PRODUCTO POR FIN PUEDE PONER A ALGUIEN EN EL PISO (2026-08-13)
 Migración **0073** · `app.app_user_create` · `POST /api/user-create` · formulario en `/admin/users` · `user-create.test.ts`. **784 → 796 tests.** `verify` verde. **Verificado en pantalla y contra la base.**
 
@@ -4094,7 +4130,7 @@ El proceso del `PROMPT-MAESTRO` terminó. Lo que sigue es construcción.
 | 1 | Sonda de plataforma | 🟡 **G1e cerrado** (`btree_gin`/uuid existe, probado con planner). Faltan `max_connections` real, PgBouncer en modo transacción, y si concede `CREATE EVENT TRIGGER` — **todo requiere la instancia de Render** |
 | 2 | Aloware contra la cuenta real | ✅ **CONTESTADA (2026-08-05)** — evidencia en [`docs/sprint-0/g2-aloware.md`](docs/sprint-0/g2-aloware.md), 22 entregas capturadas y 8 probes en `ref.capability_probe`. Lo medido contradice Fase 2 en cuatro puntos: **no firma · no manda id de entrega ni de evento · NO REINTENTA NUNCA · tolera ≥110 s sin respuesta.** ⚠️ Queda sin cerrar el vocabulario de disposiciones, si `Call-Disposed` siempre acompaña, y si hay anuncio saliente configurable (D9) — **todo eso necesita la cuenta, que se suspende el 15/08/2026** |
 | 3 | Camino del dinero | ✅ mayormente — append-only por trigger de sentencia (incluye TRUNCATE), exactly-once, transacción del gate atómica. **Y desde el 2026-08-11 la atomicidad se assertea sobre la cadena COMPLETA** —gate → transición → escritura de etapa → ledger → proyección → `event_emit` + filas de outbox—, que es la primera vez: los dos últimos eslabones no existían hasta la 0054. **Falta:** proceso muerto a mitad del gate sin dejar lock (2026-08-11) |
-| 4 | Silo de punta a punta | 🟡 **(a) cerrado** (se niega a arrancar si el usuario puede saltear RLS). El resto lo cubre la suite de silo salvo el contexto heredado entre job y request en la misma conexión pooleada |
+| 4 | Silo de punta a punta | 🟢 **CERRADA (2026-08-13).** ⚠️ Esta fila decía que faltaba el contexto heredado entre job y request en la misma conexión pooleada; **eso se cerró el 2026-08-09** con `folded-handoff.test.ts` — las dos direcciones, el job que revienta y el claim cross-tenant, todas exigiendo el mismo `pg_backend_pid()`, probadas por mutación. La fila quedó nueve días desactualizada. **(a)** cerrado (se niega a arrancar si el usuario puede saltear RLS) · **identidad sellada** (0067) · **tenant sellado** (0074, R1) · el resto lo cubre la suite de silo. **Lo que NO cierra: la propiedad (b)** — un ancla fuera del árbol de trabajo — que este proyecto sigue sin tener |
 | 5 | Equivalencia plegado/separado | 🟡 **el pliegue EXISTE y corrió.** El worker arranca dentro del proceso web (`app/jobs/boot.ts`) y produjo **las mismas dos filas terminales** que el proceso separado — `skipped: sms_disabled` y `dropped: 40m late`. Falta lo que da nombre a la puerta: equivalencia **bajo carga y en los bordes**, no en un caso feliz |
 | 6 | Tormenta de 20.000 webhooks | 🟢 **CORRIDA (2026-08-10), NO cerrada.** ⚠️ **Esta fila decía "no empezado ⬜" y era falsa** — la reconciliación del 2026-08-12 arregló las Puertas 3, 5 y 8 y se saltó ésta. Medido: **20.000 entregas a 333/s, 20.000 respondidas, CERO perdidas**, p95 de ingesta 12,41 ms, piso de polling 12,25 ms durante la tormenta, verificado contra la base (10.000 filas, 10.000 jobs, 0 dead letters). **No cierra**, y desde el 2026-08-12 por una razón más angosta. Las cuatro aserciones sin sujeto ya lo tienen: semáforo, monitor de event loop y `folded_topology_saturated` (2026-08-10), y **G6/P24 a medias con la 0069** — un STOP ahora suprime y el discado siguiente se rechaza, verificado. **Lo que falta es el RELOJ:** la fila dentro de 5 s detrás de 20.000 mensajes, que necesita `ref.job_registry.priority` (`05c` §11.7) y no existe. Correción sí, latencia no |
 | 7 | SSE detrás del proxy | ⬜ no empezado |

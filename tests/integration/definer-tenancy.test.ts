@@ -53,6 +53,14 @@ const EXEMPT: ReadonlyMap<string, string> = new Map([
     'It ANSWERS the question every other definer scopes by, and it is the hottest read path in the schema — every RLS policy calls it. It became a definer in 0067 so it could verify the session seal against security.identity_secret; that table has one row and no tenant dimension, and the function touches nothing else. Requiring it to establish a tenant would be requiring the answer to depend on itself.',
   ],
   [
+    'app.current_tenant',
+    'It IS the tenant. Requiring it to establish one would be requiring the answer to depend on itself, exactly as for current_user_id. It became a definer in 0074 so it could verify the tenant seal against security.identity_secret — until then app.tenant_id was a bare GUC and crm_app could read another agency by setting it, reproduced as 6 rows becoming 1. That table has one row and no tenant dimension, and the function touches nothing else.',
+  ],
+  [
+    'app.tenant_seal',
+    'It MINTS the proof current_tenant is made of, so requiring it to read that context would be circular in the same way identity_seal and begin_request are — it takes the tenant as a parameter. Its only read is security.identity_secret, which has one row and no tenant dimension, and it is granted to nobody: the only callers are the two doors that open a unit of work.',
+  ],
+  [
     'app.resolve_identity',
     'Runs BEFORE a tenant exists. It maps a better-auth user id to its tenant and app_user row, which is the answer begin_request then needs — there is nothing to scope by yet, and that is the login path.',
   ],
@@ -171,6 +179,12 @@ describe('a definer function cannot forget the tenant', () => {
       // every other definer scopes by; `identity_seal` mints the proof that
       // answer is genuine. Both read one row of `security.identity_secret`,
       // which has no tenant dimension, and nothing else.
+      // Added by 0074, and it is the SAME reason one step further out.
+      // `current_tenant` IS the tenant, so requiring it to establish one is
+      // circular; `tenant_seal` mints the proof that answer is genuine. Until
+      // 0074 `app.tenant_id` was a bare GUC and `crm_app` could read another
+      // agency's roster by setting it — reproduced as six rows becoming one.
+      'app.current_tenant',
       'app.current_user_id',
       // The ingest path, added when it merged. All three run BEFORE a tenant
       // exists, which is the one justification this list accepts: a provider
@@ -193,6 +207,10 @@ describe('a definer function cannot forget the tenant', () => {
       'app.process_alert_raise',
       'app.resolve_identity',
       'app.scheduled_job_claim',
+      // 0074's minting half. Same shape as `identity_seal` above: it takes the
+      // tenant as a parameter, reads one row of `security.identity_secret`, and
+      // is granted to nobody.
+      'app.tenant_seal',
       'app.webhook_ingest',
     ])
     for (const [name, reason] of EXEMPT) {

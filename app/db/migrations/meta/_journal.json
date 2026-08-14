@@ -519,6 +519,13 @@
       "when": 1786470661588,
       "tag": "0073_app_user_create",
       "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1786474261588,
+      "tag": "0074_tenant_is_sealed",
+      "breakpoints": true
     }
   ]
 }
